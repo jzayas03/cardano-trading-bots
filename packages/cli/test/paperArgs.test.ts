@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { paramsMismatch, parsePaperArgs } from '../src/commands/paper.js';
+import { paramsMismatch, parsePaperArgs, resumeStatusError } from '../src/commands/paper.js';
 
 describe('parsePaperArgs', () => {
   it('defaults cashAda, intervalSec, graceSec, maxGapMin, rehearsal, and resume', () => {
@@ -63,5 +63,27 @@ describe('paramsMismatch', () => {
 
   it('compares numerically: a jsonb string value equal in number to current is not a mismatch', () => {
     expect(paramsMismatch({ fast: '6' }, { fast: 6 })).toBeNull();
+  });
+});
+
+/**
+ * Task 6 rehearsal defect: the Step-3 stop/resume cycle (`kill -INT`, then `--resume <run-id>`)
+ * failed for real against a live database with `run 6 is finished; start a new run` — the ONLY
+ * status a signal-stopped paper run ever has, since `liveCandleFeed` never returns on its own. No
+ * test caught this before because nothing exercised `paperCommand`'s resume branch end to end; this
+ * pins the corrected rule at the unit level so a regression back to blocking `'finished'` fails fast
+ * without needing a live rehearsal to notice.
+ */
+describe('resumeStatusError', () => {
+  it('allows resuming a finished run (the normal outcome of a clean SIGINT stop)', () => {
+    expect(resumeStatusError('finished')).toBeNull();
+  });
+
+  it('allows resuming an aborted run (recovering after a crash)', () => {
+    expect(resumeStatusError('aborted')).toBeNull();
+  });
+
+  it('refuses to resume a run that is currently running, to avoid two writers on one run_id', () => {
+    expect(resumeStatusError('running')).toMatch(/already running/);
   });
 });

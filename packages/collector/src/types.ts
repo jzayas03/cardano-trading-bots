@@ -17,7 +17,15 @@ export interface PoolLike {
 
 export interface SnapshotRow {
   tickTs: Date;
-  dex: DexName;
+  /**
+   * `DexName` for every real snapshot the collector writes (`poolToSnapshot` only ever produces a
+   * `DexName`, since it throws on `!isDexName(pool.dex)` before it gets here). `'Fake'` is not a
+   * Dexter venue — `isDexName('Fake')` stays false — and is written ONLY by `dev:fake-collector`
+   * (Plan 3 Task 6), which builds this row directly instead of going through `poolToSnapshot`.
+   * Synthetic data can never be mistaken for real (global constraint): a `'Fake'` row is what lets
+   * `paper.ts` detect rehearsal data left behind in the database and refuse a non-`--rehearsal` run.
+   */
+  dex: DexName | 'Fake';
   poolId: string;
   poolAddress: string;
   baseUnit: string;

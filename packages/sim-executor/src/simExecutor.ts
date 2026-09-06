@@ -25,6 +25,16 @@ export interface SimExecutorOptions {
    */
   maxGapMs: number;
   costOverrides?: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>;
+  /**
+   * Set only by `paper --rehearsal` (Plan 3 Task 6), to exactly `'Fake'`. `Fake` is not a Dexter
+   * venue — `isDexName('Fake')` stays false by design (`packages/collector/src/venues.ts`) — so
+   * without this option every fill against a `dev:fake-collector` pool would hit the unknown-venue
+   * rejection below and the rehearsal loop could never fill a single order. When a pool's venue
+   * equals this string, its costs come from `DEFAULT_COSTS` (assumed) instead of the per-venue
+   * table; a real (non-rehearsal) run leaves this unset, so a `Fake` pool is rejected exactly as it
+   * always was.
+   */
+  rehearsalVenue?: string;
 }
 
 const SCALE = 10n ** BigInt(PRICE_SCALE);
@@ -66,9 +76,7 @@ export class SimExecutor implements Executor {
     // same t+1 quote twice (reserve depletion within a candle).
     const pool = working ?? this.resolvePool(next, isBuy);
     if ('reason' in pool) return { status: 'rejected', reason: pool.reason };
-    const costs = pool.poolId === 'synthetic'
-      ? { ...DEFAULT_COSTS, ...this.o.costOverrides }
-      : tryCostsForPoolId(pool.poolId, this.o.costOverrides);
+    const costs = this.costsFor(pool.poolId);
     if (!costs) return { status: 'rejected', reason: `unknown venue ${venueOf(pool.poolId)}` };
     // Spec §4.5: slippage is measured against the mid at t — the price the strategy actually saw
     // when it decided. Measuring it against the t+1 pool instead (what this used to do) hides the
@@ -119,9 +127,7 @@ export class SimExecutor implements Executor {
     try {
       const pool = this.poolAtCandle(candle);
       if (!pool) return null;
-      const costs = pool.poolId === 'synthetic'
-        ? { ...DEFAULT_COSTS, ...this.o.costOverrides }
-        : tryCostsForPoolId(pool.poolId, this.o.costOverrides);
+      const costs = this.costsFor(pool.poolId);
       if (!costs) return null;
       const proceeds = cpmmAmountOut(portfolio.positionBase, pool.reserveBase, pool.reserveQuote, pool.feeBps);
       return portfolio.cashLovelace + proceeds - costs.batcherFeeLovelace - costs.networkFeeLovelace;
@@ -129,6 +135,19 @@ export class SimExecutor implements Executor {
       // intentional: markToMarket must never throw a live paper loop out of its equity tick
       return null;
     }
+  }
+
+  /**
+   * `'synthetic'` (the `cpmm_synthetic_depth` fill model's own pool id) and `rehearsalVenue` (set
+   * only for `paper --rehearsal`, always `'Fake'` today) both cost `DEFAULT_COSTS` — the run has no
+   * real venue to look fees up for, so it charges the same assumed default either way. Any other
+   * pool id costs whatever `tryCostsForPoolId` returns, `null` (unknown venue) included.
+   */
+  private costsFor(poolId: string): VenueCosts | null {
+    if (poolId === 'synthetic' || (this.o.rehearsalVenue !== undefined && venueOf(poolId) === this.o.rehearsalVenue)) {
+      return { ...DEFAULT_COSTS, ...this.o.costOverrides };
+    }
+    return tryCostsForPoolId(poolId, this.o.costOverrides);
   }
 
   /** Reserves as this fill model sees THIS candle, for a mark (not a fill against the next one). */

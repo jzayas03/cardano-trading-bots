@@ -52,13 +52,20 @@ export function costsForPoolId(poolId: string, overrides?: Partial<Pick<VenueCos
   return c;
 }
 
-/** Distinct venues with `basis: 'assumed'` among FILLED orders, sorted; the report names them. */
+/**
+ * Distinct venues with assumed (never documented) costs among FILLED orders, sorted; the report
+ * names them. A `DexName` venue is assumed when its `VENUE_COSTS` entry says so. Any OTHER venue —
+ * `synthetic` (the `cpmm_synthetic_depth` fill model's own pool id) or `Fake` (`dev:fake-collector`,
+ * Plan 3 Task 6) — has no venue-specific documentation to look up at all; `SimExecutor.costsFor`
+ * charges it `DEFAULT_COSTS` (`basis: 'assumed'`), so the report treats it the same way here rather
+ * than silently skipping it for not being a name in the venue table.
+ */
 export function assumedVenuesTouched(orders: Array<{ result: FillResult }>): string[] {
   const out = new Set<string>();
   for (const o of orders) {
     if (o.result.status !== 'filled') continue;
     const v = venueOf(o.result.poolId);
-    if (isDexName(v) && VENUE_COSTS[v].basis === 'assumed') out.add(v);
+    if (!isDexName(v) || VENUE_COSTS[v].basis === 'assumed') out.add(v);
   }
   return [...out].sort();
 }

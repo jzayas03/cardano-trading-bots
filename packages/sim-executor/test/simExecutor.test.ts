@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decimalToScaled, priceAdaPerToken } from '@ctb/candles';
 import type { Candle, FillResult } from '@ctb/engine';
-import { costsForPoolId, cpmmAmountOut, SimExecutor } from '../src/index.js';
+import { costsForPoolId, cpmmAmountOut, DEFAULT_COSTS, SimExecutor } from '../src/index.js';
 
 const RQ = 52_331_970_594n;
 const RB = 23_779_491n;
@@ -115,6 +115,42 @@ describe('SimExecutor cpmm_observed', () => {
   it('rejects an unknown venue instead of throwing', () => {
     expect(ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, { ...next, poolId: 'FutureSwap:abc' }, rich))
       .toEqual({ status: 'rejected', reason: 'unknown venue FutureSwap' });
+  });
+});
+
+/**
+ * Plan 3 Task 6: `Fake` (`dev:fake-collector`'s synthetic venue) is deliberately not a Dexter venue —
+ * `isDexName('Fake')` is false — so `tryCostsForPoolId` returns null for it and the executor's
+ * unknown-venue rejection blocks it by default, exactly like `FutureSwap` above. `rehearsalVenue`
+ * is the one escape hatch, and only for the venue it names.
+ */
+describe('SimExecutor rehearsalVenue', () => {
+  const fakeNext: Candle = { ...next, poolId: 'Fake:SNEK' };
+
+  it('rejects a Fake pool as an unknown venue when rehearsalVenue is not set', () => {
+    const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN });
+    expect(ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, fakeNext, rich))
+      .toEqual({ status: 'rejected', reason: 'unknown venue Fake' });
+  });
+
+  it('fills a Fake pool at DEFAULT_COSTS when rehearsalVenue is set to Fake', () => {
+    const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN, rehearsalVenue: 'Fake' });
+    const r = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, fakeNext, rich);
+    expect(r).toMatchObject({ status: 'filled', poolId: 'Fake:SNEK', batcherFeeLovelace: DEFAULT_COSTS.batcherFeeLovelace, networkFeeLovelace: DEFAULT_COSTS.networkFeeLovelace });
+  });
+
+  it('does not open the door for every other unknown venue — only the one named by rehearsalVenue', () => {
+    const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN, rehearsalVenue: 'Fake' });
+    expect(ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, { ...next, poolId: 'FutureSwap:abc' }, rich))
+      .toEqual({ status: 'rejected', reason: 'unknown venue FutureSwap' });
+  });
+
+  it('marks a Fake position to market when rehearsalVenue is set, and rejects it otherwise', () => {
+    const atFake: Candle = { ...at, poolId: 'Fake:SNEK' };
+    const withRehearsal = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN, rehearsalVenue: 'Fake' });
+    const withoutRehearsal = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN });
+    expect(withRehearsal.markToMarket({ cashLovelace: 0n, positionBase: 1_000_000n }, atFake)).not.toBeNull();
+    expect(withoutRehearsal.markToMarket({ cashLovelace: 0n, positionBase: 1_000_000n }, atFake)).toBeNull();
   });
 });
 
