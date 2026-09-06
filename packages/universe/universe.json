@@ -1,0 +1,26 @@
+{
+  "seededAt": "2026-09-05",
+  "seedSource": "konnektr.net /api/getMarketTokens?currency=ada&page=1, top 20 by marketcap, fetched once by hand",
+  "tokens": [
+    { "ticker": "NIGHT",  "policyId": "0691b2fecca1ac4f53cb6dfb00b7013e561d1f34403b957cbb5af1fa", "assetNameHex": "4e49474854", "decimals": 6, "category": "Privacy" },
+    { "ticker": "USDCx",  "policyId": "1f3aec8bfe7ea4fe14c5f121e2a92e301afe414147860d557cac7e34", "assetNameHex": "5553444378", "decimals": 6, "category": "Stable" },
+    { "ticker": "SNEK",   "policyId": "279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f", "assetNameHex": "534e454b", "decimals": 0, "category": "Meme" },
+    { "ticker": "WMTX",   "policyId": "e5a42a1a1d3d1da71b0449663c32798725888d2eb0843c4dabeca05a", "assetNameHex": "576f726c644d6f62696c65546f6b656e58", "decimals": 6, "category": "DePin" },
+    { "ticker": "STRIKE", "policyId": "f13ac4d66b3ee19a6aa0f2a22298737bd907cc95121662fc971b5275", "assetNameHex": "535452494b45", "decimals": 6, "category": "Perpetuals" },
+    { "ticker": "AGIX",   "policyId": "f43a62fdc3965df486de8a0d32fe800963589c41b38946602a0dc535", "assetNameHex": "41474958", "decimals": 8, "category": "AI" },
+    { "ticker": "USDM",   "policyId": "c48cbb3d5e57ed56e276bc45f99ab39abe94e6cd7ac39fb402da47ad", "assetNameHex": "0014df105553444d", "decimals": 6, "category": "Stable" },
+    { "ticker": "IAG",    "policyId": "5d16cc1a177b5d9ba9cfa9793b07e60f1fb70fea1f8aef064415d114", "assetNameHex": "494147", "decimals": 6, "category": "Storage" },
+    { "ticker": "HOSKY",  "policyId": "a0028f350aaabe0545fdcb56b039bfb08e4bb4d8c4d7c3c7d481c235", "assetNameHex": "484f534b59", "decimals": 0, "category": "Meme" },
+    { "ticker": "MIN",    "policyId": "29d222ce763455e3d7a09a665ce554f00ac89d2e99a1a83d267170c6", "assetNameHex": "4d494e", "decimals": 6, "category": "Dex" },
+    { "ticker": "SONG",   "policyId": "f71b4cf652d8edb33a57928b8b8a546a3c954b7ba24db5583ac79b34", "assetNameHex": "534f4e474d41524b4554434150", "decimals": 0, "category": "Music" },
+    { "ticker": "LQ",     "policyId": "da8c30857834c6ae7203935b89278c532b3995245295456f993e1d24", "assetNameHex": "4c51", "decimals": 6, "category": "DeFi" },
+    { "ticker": "USDA",   "policyId": "fe7c786ab321f41c654ef6c1af7b3250a613c24e4213e0425a7ae456", "assetNameHex": "55534441", "decimals": 6, "category": "Stable" },
+    { "ticker": "ASCEND", "policyId": "eb7a93ebc321647673490810f618b548d7c24aa64d30ae342dba7076", "assetNameHex": "0014df10415343454e44", "decimals": 6, "category": "Perpetuals" },
+    { "ticker": "NVL",    "policyId": "5b26e685cc5c9ad630bde3e3cd48c694436671f3d25df53777ca60ef", "assetNameHex": "4e564c", "decimals": 6, "category": "DePin" },
+    { "ticker": "STUFF",  "policyId": "51a5e236c4de3af2b8020442e2a26f454fda3b04cb621c1294a0ef34", "assetNameHex": "424f4f4b", "decimals": 6, "category": "Books" },
+    { "ticker": "SHEN",   "policyId": "8db269c3ec630e06ae29f74bc39edd1f87c819f1056206e879a1cd61", "assetNameHex": "5368656e4d6963726f555344", "decimals": 6, "category": "Reserve" },
+    { "ticker": "INDY",   "policyId": "533bb94a8850ee3ccbe483106489399112b74c905342cb1792a797a0", "assetNameHex": "494e4459", "decimals": 6, "category": "Synthetics" },
+    { "ticker": "FLDT",   "policyId": "577f0b1342f8f8f4aed3388b80a8535812950c7a892495c0ecdf0f1e", "assetNameHex": "0014df10464c4454", "decimals": 6, "category": "Lending" },
+    { "ticker": "COPI",   "policyId": "b6a7467ea1deb012808ef4e87b5ff371e85f7142d7b356a40d9b42a0", "assetNameHex": "436f726e75636f70696173205b76696120436861696e506f72742e696f5d", "decimals": 6, "category": "Gaming" }
+  ]
+}
