@@ -71,6 +71,27 @@ describe('GeckoTerminalClient', () => {
     await expect(c.ohlcv5m('nope')).rejects.toThrow(/404/);
     expect(calls).toHaveLength(1);
   });
+
+  it('retries a rejected fetch (DNS/reset/timeout) and succeeds once the network recovers', async () => {
+    const slept: number[] = [];
+    let n = 0;
+    const f = (async () => {
+      n++;
+      if (n <= 2) throw new Error('getaddrinfo ENOTFOUND api.geckoterminal.com');
+      return json(poolsBody);
+    }) as typeof fetch;
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async (ms) => { slept.push(ms); }, minSpacingMs: 0, log });
+    const pools = await c.listAdaPools('u');
+    expect(pools).toHaveLength(2);
+    expect(slept.length).toBe(2);
+    expect(c.calls()).toBe(3);
+  });
+
+  it('gives up after 5 attempts on a fetch that always rejects', async () => {
+    const f = (async () => { throw new Error('ECONNRESET'); }) as typeof fetch;
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, minSpacingMs: 0, log });
+    await expect(c.listAdaPools('u')).rejects.toThrow(/network error.*5 attempts/);
+  });
 });
 
 describe('chooseExternalPool', () => {

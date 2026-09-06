@@ -63,23 +63,36 @@ export class GeckoTerminalClient {
   }
 
   private async get(path: string): Promise<unknown> {
-    let lastStatus = 0;
+    let lastMessage = '';
     for (let attempt = 1; attempt <= RETRY_ATTEMPTS; attempt++) {
       const wait = this.lastCallAt + this.spacing - Date.now();
       if (wait > 0) await this.sleep(wait);
       this.lastCallAt = Date.now();
       this.count++;
-      const res = await this.fetchImpl(`${this.base}${path}`, { headers: { Accept: 'application/json;version=20230302' } });
+      let res: Response;
+      try {
+        res = await this.fetchImpl(`${this.base}${path}`, { headers: { Accept: 'application/json;version=20230302' } });
+      } catch (err) {
+        // A rejected fetch (DNS failure, connection reset, timeout) never produces a Response, so
+        // it can't be read as a status code — but it is exactly as transient as a 429/5xx and
+        // must not be allowed to abort the whole backfill on one flaky network blip.
+        lastMessage = `geckoterminal ${path} network error: ${(err as Error).message}`;
+        if (attempt === RETRY_ATTEMPTS) break;
+        const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1)) + Math.floor(this.random() * 1_000);
+        this.log.warn({ path, err: (err as Error).message, attempt, backoffMs: backoff }, 'geckoterminal network error, backing off');
+        await this.sleep(backoff);
+        continue;
+      }
       if (res.ok) return res.json();
-      lastStatus = res.status;
+      lastMessage = `geckoterminal ${path} returned ${res.status}`;
       const transient = res.status === 429 || res.status >= 500;
-      if (!transient) throw new Error(`geckoterminal ${path} returned ${res.status}`);
+      if (!transient) throw new Error(lastMessage);
       if (attempt === RETRY_ATTEMPTS) break;
       const backoff = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** (attempt - 1)) + Math.floor(this.random() * 1_000);
       this.log.warn({ path, status: res.status, attempt, backoffMs: backoff }, 'geckoterminal transient error, backing off');
       await this.sleep(backoff);
     }
-    throw new Error(`geckoterminal ${path} returned ${lastStatus} after ${RETRY_ATTEMPTS} attempts`);
+    throw new Error(`${lastMessage} after ${RETRY_ATTEMPTS} attempts`);
   }
 }
 
