@@ -55,3 +55,23 @@ export function collectPoolShapes<T extends LiquidityPoolShape>(
   }
   return { kept, failures };
 }
+
+export interface RefreshedShapeResult {
+  kept?: { pool: PoolLike; shape: LiquidityPoolShape };
+  failure?: RunError;
+}
+
+/**
+ * Maps one refreshed pool's shape through `toPoolLike`, isolating its own failure so one malformed
+ * pool state (e.g. an unexpected empty `address`) can't reject the whole `Promise.allSettled` forEach
+ * in `DexterPoolSource.refresh()` — a throw there previously escaped uncaught and failed the entire
+ * refresh, writing zero snapshots for the tick (reviewer finding F2). Pure — no network, no logging.
+ */
+export function collectRefreshedShape(poolId: string, shape: LiquidityPoolShape): RefreshedShapeResult {
+  try {
+    const pool = toPoolLike(shape);
+    return { kept: { pool, shape } };
+  } catch (err) {
+    return { failure: { scope: `refresh:${poolId}`, message: (err as Error).message ?? String(err) } };
+  }
+}

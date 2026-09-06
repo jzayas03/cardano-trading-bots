@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { collectPoolShapes, toPoolLike, type LiquidityPoolShape } from '../src/poolShape.js';
+import { collectPoolShapes, collectRefreshedShape, toPoolLike, type LiquidityPoolShape } from '../src/poolShape.js';
 
 describe('toPoolLike', () => {
   it('maps a Dexter pool with an Asset side', () => {
@@ -56,5 +56,28 @@ describe('collectPoolShapes', () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]?.scope).toBe('discover:Splash:bad-no-address');
     expect(failures[0]?.message).toMatch(/no address/);
+  });
+});
+
+describe('collectRefreshedShape', () => {
+  it('keeps a well-formed refreshed pool', () => {
+    const shape: LiquidityPoolShape = {
+      dex: 'Splash', identifier: 'p1', address: 'addr1_p1', assetA: 'lovelace',
+      assetB: { policyId: 'a'.repeat(56), nameHex: '00', decimals: 0 }, reserveA: 5n, reserveB: 5n, poolFeePercent: 0.3,
+    };
+    const result = collectRefreshedShape('Splash:p1', shape);
+    expect(result.failure).toBeUndefined();
+    expect(result.kept?.pool.address).toBe('addr1_p1');
+    expect(result.kept?.shape).toBe(shape);
+  });
+
+  it('isolates a malformed refreshed pool as a per-pool failure instead of throwing', () => {
+    const shape: LiquidityPoolShape = {
+      dex: 'Splash', identifier: 'p2', address: '', assetA: 'lovelace',
+      assetB: { policyId: 'a'.repeat(56), nameHex: '00', decimals: 0 }, reserveA: 5n, reserveB: 5n, poolFeePercent: 0.3,
+    };
+    const result = collectRefreshedShape('Splash:p2', shape);
+    expect(result.kept).toBeUndefined();
+    expect(result.failure).toEqual({ scope: 'refresh:Splash:p2', message: expect.stringContaining('no address') });
   });
 });
