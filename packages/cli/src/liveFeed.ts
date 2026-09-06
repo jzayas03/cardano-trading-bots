@@ -1,4 +1,4 @@
-import { buildCandlesForToken, type CandleRepo } from '@ctb/candles';
+import { buildCandlesForToken, type CandleRepo, type CandleRow } from '@ctb/candles';
 import { bucketTick, type Logger } from '@ctb/collector';
 import type { Candle } from '@ctb/engine';
 import type { TokenSpec } from '@ctb/universe';
@@ -47,11 +47,7 @@ export async function* liveCandleFeed(d: LiveFeedDeps): AsyncIterable<Candle> {
         }
         lastYielded = r.tickTs;
         yielded++;
-        yield {
-          tickTs: r.tickTs, open: r.open, high: r.high, low: r.low, close: r.close, volumeQuote: null,
-          poolId: r.poolId, poolType: r.poolType, feeBps: r.feeBps, closeReserveBase: r.closeReserveBase,
-          closeReserveQuote: r.closeReserveQuote, tvlLovelace: r.tvlLovelace,
-        };
+        yield candleFromRow(r);
       }
       if (yielded === 0 && skippedStale === 0) d.log.warn({ boundary }, 'no candle at boundary');
     } catch (err) {
@@ -59,4 +55,19 @@ export async function* liveCandleFeed(d: LiveFeedDeps): AsyncIterable<Candle> {
     }
     if (d.onTick) await d.onTick({ boundary, built, yielded, skippedStale });
   }
+}
+
+/**
+ * A persisted `CandleRow` as the engine's `Candle`. One definition, shared by the live feed and by
+ * the resume path's `primeHistory` read (finding I6), so a candle the strategy sees after a restart
+ * is byte-for-byte the shape it saw before one. `volumeQuote` is null by construction: the candle
+ * builder does not compute a quote volume (`candles` has no `volume` column, pinned by
+ * `noVolumeColumn.guard.test.ts`).
+ */
+export function candleFromRow(r: CandleRow): Candle {
+  return {
+    tickTs: r.tickTs, open: r.open, high: r.high, low: r.low, close: r.close, volumeQuote: null,
+    poolId: r.poolId, poolType: r.poolType, feeBps: r.feeBps, closeReserveBase: r.closeReserveBase,
+    closeReserveQuote: r.closeReserveQuote, tvlLovelace: r.tvlLovelace,
+  };
 }

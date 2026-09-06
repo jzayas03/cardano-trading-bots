@@ -50,6 +50,18 @@ export interface RunEngineDeps {
    * resumed run's "intents pending at the previous stop were lost" notice). Given in order.
    */
   initialWarnings?: string[];
+  /**
+   * Candles this run already lived through, handed back so a RESUMED run's indicators start warm
+   * instead of blind (finding I6): without them a strategy needing N candles of warmup could not
+   * emit an intent for the first N boundaries after every restart, which on a 5-minute interval
+   * with `slow=48` is four hours of a process that looks live and structurally cannot trade.
+   *
+   * They are context, never observations. They fill `history`/`closes` and nothing else: no equity
+   * point, no `onCandle`/commit sink, no decision, and no coverage — coverage must keep describing
+   * the candles this segment actually consumed from the feed, or a resumed run would double-count
+   * its own history. Given oldest first; trimmed to `historyLimit` like any other candle.
+   */
+  primeHistory?: Candle[];
 }
 
 const DEFAULT_INTERVAL_SEC = 300;
@@ -139,6 +151,14 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
   let widestGapMs = 0;
   let gapsOverBound = 0;
   let aborted = false;
+
+  // Finding I6: seed the indicator window BEFORE the feed starts. Deliberately not touching
+  // `candles`/`firstTs`/`lastTs`/`summarizer` — see `primeHistory`'s doc comment.
+  for (const primed of d.primeHistory ?? []) {
+    history.push(primed);
+    closes.push(decimalToNumber(primed.close));
+    if (history.length > historyLimit) { history.shift(); closes.shift(); }
+  }
 
   const recordOrder = async (order: OrderRecord): Promise<void> => {
     if (retain) orders.push(order);

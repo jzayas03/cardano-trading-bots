@@ -1,12 +1,13 @@
-import { PgCandleRepo } from '@ctb/candles';
+import { PgCandleRepo, type CandleRepo } from '@ctb/candles';
 import { createPool } from '@ctb/db';
-import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Portfolio, type RunRow } from '@ctb/engine';
+import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Candle, type Portfolio, type RunRow } from '@ctb/engine';
 import { SimExecutor } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
-import { liveCandleFeed } from '../liveFeed.js';
+import { candleFromRow, liveCandleFeed } from '../liveFeed.js';
+import { isHeartbeatStale } from './status.js';
 import { sleep } from '../schedule.js';
 import { buildRunParams } from './backtest.js';
 import { printReport } from './report.js';
@@ -81,8 +82,27 @@ export function parsePaperArgs(args: string[]): PaperArgs {
  * `run_id` would race `paper_orders.seq` (both read the same `lastOrderSeq` and insert the same next
  * seq) and `run_equity` inserts — so this now blocks `'running'` instead of `'finished'`.
  */
-export function resumeStatusError(status: RunRow['status']): string | null {
-  return status === 'running' ? 'is already running; stop it (SIGINT) first, then resume' : null;
+/**
+ * Final-review finding C2: a paper process that dies WITHOUT reaching its catch block — `kill -9`, an
+ * OOM kill, a lost machine — never runs `setStatus`, so the row stays `'running'` forever and a flat
+ * "refuse every running run" rule made that run permanently unresumable; the operator's only
+ * recovery was hand-editing `runs.status`, which no runbook documented. The hazard the rule exists
+ * for is a SECOND writer joining a run a FIRST process is still actively writing (both would read
+ * the same `lastOrderSeq` and race `paper_orders`), and that hazard requires the first process to be
+ * ALIVE. Liveness is exactly what the heartbeat measures, so the refusal now asks
+ * `isHeartbeatStale` — the same bound `status` prints — instead of the status alone. A dead-but-
+ * `running` row resumes; a live one is still refused.
+ */
+export function resumeStatusError(run: Pick<RunRow, 'status' | 'heartbeatAt' | 'params'>, now: Date): string | null {
+  if (run.status !== 'running') return null;
+  if (isHeartbeatStale(run.heartbeatAt, run.params, now)) return null;
+  return 'is already running; stop it (SIGINT) first, then resume';
+}
+
+/** Seconds since the last heartbeat, or null when the run never wrote one. Used only for the
+ * operator-facing message on the stale-resume path. */
+export function heartbeatAgeSec(heartbeatAt: Date | null, now: Date): number | null {
+  return heartbeatAt ? Math.round((now.getTime() - heartbeatAt.getTime()) / 1000) : null;
 }
 
 export function paramsMismatch(prior: Record<string, unknown>, current: Record<string, number>): string | null {
@@ -93,6 +113,23 @@ export function paramsMismatch(prior: Record<string, unknown>, current: Record<s
     }
   }
   return null;
+}
+
+/**
+ * The last `warmup` candles at or before `afterTick`, as the engine's `Candle` — a resumed run's
+ * indicator seed (finding I6). The read window reaches back `warmup * intervalSec * 2` so a sparse
+ * stretch (missed collector ticks, a gap) still has a chance of yielding `warmup` rows rather than
+ * silently priming with fewer; whatever comes back is sliced to the last `warmup`, so an over-wide
+ * window costs one bounded query and never over-primes. Fewer than `warmup` rows is not an error —
+ * the run simply warms up the rest of the way live, exactly as it would have without this.
+ */
+export async function readPrimeHistory(
+  repo: CandleRepo, baseUnit: string, afterTick: Date, warmup: number, intervalSec: number,
+): Promise<Candle[]> {
+  if (warmup <= 0) return [];
+  const from = new Date(afterTick.getTime() - warmup * intervalSec * 1000 * 2);
+  const rows = await repo.readCandles(baseUnit, from, afterTick);
+  return rows.slice(-warmup).map(candleFromRow);
 }
 
 export async function paperCommand(log: Logger, args: string[]): Promise<void> {
@@ -134,14 +171,24 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     let startSeq = 0;
     let afterTick: Date | null = null;
     let resumeWarning: string | undefined;
+    let staleResumeWarning: string | undefined;
     if (a.resume !== null) {
       const prior = await runs.getRun(a.resume);
       if (!prior || prior.mode !== 'paper') throw new Error(`run ${a.resume} is not a paper run`);
       if (prior.strategyId !== strategy.id || prior.baseUnit !== token.unit) {
         throw new Error(`run ${a.resume} is ${prior.strategyId}/${prior.baseUnit}, not ${strategy.id}/${token.unit}`);
       }
-      const statusError = resumeStatusError(prior.status);
+      const resumeCheckedAt = new Date();
+      const statusError = resumeStatusError(prior, resumeCheckedAt);
       if (statusError) throw new Error(`run ${a.resume} ${statusError}`);
+      // Finding C2: resuming a row still marked `running` is the recovery path for a process that
+      // died without its catch block. It is legitimate but it is not routine, so it goes on the
+      // record — a log line AND a run warning — rather than passing silently as a normal resume.
+      if (prior.status === 'running') {
+        const ageS = heartbeatAgeSec(prior.heartbeatAt, resumeCheckedAt);
+        staleResumeWarning = `resuming a run whose heartbeat is stale (age ${ageS === null ? 'never' : `${ageS}s`}); the previous process died without recording a stop`;
+        log.warn({ runId: a.resume, heartbeatAt: prior.heartbeatAt, ageS }, `resuming a run whose heartbeat is stale (age ${ageS === null ? 'never' : `${ageS}s`})`);
+      }
       // Finding F2: refuse to resume under strategy params that differ from the ones this run was
       // started with — a resumed equity curve that quietly switches `slow`/`fast` etc. mid-stream is
       // not comparable to itself before the resume.
@@ -171,6 +218,12 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     console.log(`run id: ${runId}${a.rehearsal ? ' (REHEARSAL)' : ''}`);
     const id = runId;
     const candleRepo = new PgCandleRepo(db);
+    // Finding I6: a resumed run starts its indicators warm, from candles it already lived through,
+    // instead of spending its first `warmup` boundaries structurally unable to emit an intent.
+    const primeHistory = afterTick
+      ? await readPrimeHistory(candleRepo, token.unit, afterTick, strategy.warmupFor({ ...strategy.defaultParams, ...a.params }), a.intervalSec)
+      : undefined;
+    if (primeHistory) log.info({ runId: id, primed: primeHistory.length, afterTick }, 'primed strategy history from persisted candles');
     // Plan 3 Task 6: `Fake` (dev:fake-collector's synthetic venue) is not a Dexter venue and would
     // otherwise be rejected as unknown; `rehearsalVenue` is only set here, so it costs DEFAULT_COSTS
     // ONLY for a --rehearsal run — a real paper run still refuses to fill against a Fake pool.
@@ -181,7 +234,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     });
     const result = await runEngine({
       feed, strategy, params: a.params, executor, initial, decimals: token.decimals, log, retain: false, startSeq, signal: ac.signal,
-      intervalSec: a.intervalSec, maxGapMs, initialWarnings: resumeWarning ? [resumeWarning] : undefined,
+      intervalSec: a.intervalSec, maxGapMs, primeHistory, initialWarnings: [staleResumeWarning, resumeWarning].filter((w): w is string => w !== undefined),
       sinks: {
         onOrder: async (o) => { await runs.insertOrders(id, token.unit, [o]); },
         onEquity: async (e) => { await runs.insertEquity(id, [e]); },

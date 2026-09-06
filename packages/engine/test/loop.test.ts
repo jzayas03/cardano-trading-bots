@@ -223,3 +223,54 @@ describe('runEngine warmup and zero-intent warning', () => {
     expect(r.summary.warnings).toEqual(['x']); // this run traded, so no zero-intent warning is added after it
   });
 });
+
+/**
+ * Finding I6: a resumed paper run restarted with an EMPTY history, so a strategy needing N candles
+ * of warmup was blind for the first N boundaries after every resume — on a 5-minute interval with
+ * `slow=48` that is four hours of a "running" process that structurally cannot emit an intent, and
+ * nothing in the report distinguished it from a strategy that found no signal. `primeHistory` seeds
+ * the loop's history and closes from candles already persisted BEFORE the resume point. They are
+ * context only: they produce no equity point, no decision, and no coverage — they are candles this
+ * run already lived through, being handed back so the indicators are warm.
+ */
+describe('runEngine primeHistory (finding I6)', () => {
+  const sawHistory: number[] = [];
+  const recordingWarmup2: Strategy = {
+    id: 'w2', warmup: 2, defaultParams: {}, warmupFor: () => 2,
+    onCandle: (ctx) => { sawHistory.push(ctx.history.length); return []; },
+  };
+
+  it('lets the FIRST live candle decide when primed with warmup-1 candles', async () => {
+    sawHistory.length = 0;
+    const r = await runEngine({
+      feed: [c(5, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log,
+      primeHistory: [c(4, '1.0')], // warmupFor is 2, so one primed candle is warmup - 1
+    });
+    expect(sawHistory, 'the single live candle already had a full window').toEqual([2]);
+    // Primed candles are context, not observations: one candle was fed, so one equity point exists.
+    expect(r.equity).toHaveLength(1);
+    expect(r.summary.candles).toBe(1);
+    expect(r.summary.coverage.candles).toBe(1);
+    expect(r.summary.coverage.first).toBe(c(5, '1.0').tickTs.toISOString());
+  });
+
+  it('without priming, the same single live candle cannot decide at all', async () => {
+    sawHistory.length = 0;
+    await runEngine({
+      feed: [c(5, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log,
+    });
+    expect(sawHistory).toEqual([]);
+  });
+
+  it('trims primed candles to historyLimit rather than overflowing it', async () => {
+    sawHistory.length = 0;
+    await runEngine({
+      feed: [c(20, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log, historyLimit: 3,
+      primeHistory: Array.from({ length: 10 }, (_, i) => c(i, '1.0')),
+    });
+    expect(sawHistory).toEqual([3]);
+  });
+});
