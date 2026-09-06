@@ -8,13 +8,19 @@ export async function withTestSchema(fn: (db: pg.Pool) => Promise<void>): Promis
   const url = process.env.DATABASE_URL ?? 'postgres://ctb:ctb_local_only@localhost:5433/ctb';
   const schema = `t_${randomBytes(4).toString('hex')}`;
   const admin = new pg.Pool({ connectionString: url, max: 1 });
-  await admin.query(`CREATE SCHEMA ${schema}`);
-  const db = new pg.Pool({ connectionString: url, max: 2, options: `-c search_path=${schema}` });
+  // Everything that can fail after `admin` exists lives in this try, and the finally below only
+  // ends/drops what actually got created — a CREATE SCHEMA failure must still release `admin`,
+  // not leak it (reviewer finding F8).
+  let schemaCreated = false;
+  let db: pg.Pool | undefined;
   try {
+    await admin.query(`CREATE SCHEMA ${schema}`);
+    schemaCreated = true;
+    db = new pg.Pool({ connectionString: url, max: 2, options: `-c search_path=${schema}` });
     await fn(db);
   } finally {
-    await db.end();
-    await admin.query(`DROP SCHEMA ${schema} CASCADE`);
+    if (db) await db.end();
+    if (schemaCreated) await admin.query(`DROP SCHEMA ${schema} CASCADE`);
     await admin.end();
   }
 }
