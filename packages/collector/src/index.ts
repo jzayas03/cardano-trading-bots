@@ -8,3 +8,4 @@ export {
   type DexterPoolSourceOptions, type FetcherAsset, type LiquidityPoolShape, type PoolFetcher,
 } from './dexterSource.js';
 export { isPoolFailure, runTick, type CollectorState, type TickDeps } from './tick.js';
+export { isTransientHttpError, retryWithBackoff, type RetryOptions } from './retry.js';

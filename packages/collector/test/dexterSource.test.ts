@@ -174,4 +174,25 @@ describe('DexterPoolSource.tip', () => {
     expect(tip.height).toBe(123);
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
   });
+
+  it('retries a transient 503 once and succeeds, without waiting on a real timer', async () => {
+    const { log } = makeLog();
+    let calls = 0;
+    const flakyFetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response('', { status: 503 });
+      return new Response(JSON.stringify({ height: 456, time: 2000 }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const slept: number[] = [];
+    const source = new DexterPoolSource({
+      blockfrostProjectId: 'unit-test', log, fetch: flakyFetch, fetcher: new FakeFetcher(),
+      sleep: async (ms) => { slept.push(ms); },
+    });
+
+    const tip = await source.tip();
+
+    expect(tip.height).toBe(456);
+    expect(calls).toBe(2);
+    expect(slept.length).toBe(1);
+  });
 });

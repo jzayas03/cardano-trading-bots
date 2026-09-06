@@ -6,6 +6,7 @@ import type { Logger, PoolLike } from './types.js';
 import { VENUE_NAMES, type DexName } from './venues.js';
 import { collectPoolShapes, collectRefreshedShape, type LiquidityPoolShape } from './poolShape.js';
 import type { PoolFetcher } from './poolFetcher.js';
+import { isTransientHttpError, retryWithBackoff } from './retry.js';
 
 export type { LiquidityPoolShape } from './poolShape.js';
 export { toPoolLike } from './poolShape.js';
@@ -27,12 +28,16 @@ class CountingBlockfrostProvider extends BlockfrostProvider {
 class DefaultPoolFetcher implements PoolFetcher {
   private readonly dexter: Dexter;
   private readonly provider: CountingBlockfrostProvider;
+  private readonly log: Logger;
+  private readonly retryBudgetMs: number;
 
-  constructor(url: string, projectId: string) {
+  constructor(url: string, projectId: string, log: Logger, retryBudgetMs: number) {
     this.provider = new CountingBlockfrostProvider({ url, projectId }, { timeout: 20_000, retries: 2 });
     // shouldFallbackToApi false: an on-chain failure must surface as a failure, not as a quietly different data source.
     this.dexter = new Dexter({ shouldFetchMetadata: false, shouldFallbackToApi: false }, { timeout: 20_000, retries: 2 });
     this.dexter.withDataProvider(this.provider);
+    this.log = log;
+    this.retryBudgetMs = retryBudgetMs;
   }
 
   providerCalls(): number { return this.provider.calls; }
@@ -43,9 +48,23 @@ class DefaultPoolFetcher implements PoolFetcher {
     return pools as unknown as LiquidityPoolShape[];
   }
 
+  // Dexter's `retries` option is inert for BlockfrostProvider (its constructor reads only
+  // timeout/proxyUrl) and Dexter's global axiosRetry does not apply to the provider's own axios
+  // instance, so a transient Blockfrost failure here would otherwise surface as a single-shot
+  // refresh failure. Wrapped, not `discoverVenue`: Dexter swallows discovery errors internally
+  // (see the venue-failure comment in `discover` below), so a retry there would never fire.
   async poolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined> {
-    const state = await this.dexter.newFetchRequest().getLiquidityPoolState(pool as unknown as LiquidityPool);
-    return state as unknown as LiquidityPoolShape | undefined;
+    return retryWithBackoff(
+      async () => {
+        const state = await this.dexter.newFetchRequest().getLiquidityPoolState(pool as unknown as LiquidityPool);
+        return state as unknown as LiquidityPoolShape | undefined;
+      },
+      {
+        attempts: 4, baseMs: 500, maxMs: 8_000, budgetMs: this.retryBudgetMs,
+        isTransient: isTransientHttpError,
+        onRetry: (info) => this.log.warn(info, 'blockfrost retry'),
+      },
+    );
   }
 }
 
@@ -57,6 +76,10 @@ export interface DexterPoolSourceOptions {
   fetch?: typeof fetch;
   /** Injectable seam for tests. Omit to use the real Dexter-backed fetcher. */
   fetcher?: PoolFetcher;
+  /** Wall-clock ceiling for the retry-with-backoff wrapping `tip()` and pool-state refresh calls. Default 60_000. */
+  retryBudgetMs?: number;
+  /** Injectable seam for the retry backoff's sleep, so a unit test proving retry behavior does not wait on a real timer. Omit for a real timer. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const TIP_TIMEOUT_MS = 10_000;
@@ -70,6 +93,8 @@ export class DexterPoolSource implements PoolSource {
   private readonly projectId: string;
   private readonly log: Logger;
   private readonly fetchImpl: typeof fetch;
+  private readonly retryBudgetMs: number;
+  private readonly sleep?: (ms: number) => Promise<void>;
 
   constructor(opts: DexterPoolSourceOptions) {
     this.url = opts.blockfrostUrl ?? 'https://cardano-mainnet.blockfrost.io/api/v0';
@@ -77,11 +102,13 @@ export class DexterPoolSource implements PoolSource {
     this.log = opts.log;
     this.venues = opts.venues ?? VENUE_NAMES;
     this.fetchImpl = opts.fetch ?? fetch;
+    this.retryBudgetMs = opts.retryBudgetMs ?? 60_000;
+    this.sleep = opts.sleep;
     if (opts.fetcher) {
       this.fetcher = opts.fetcher;
       this.defaultFetcher = null;
     } else {
-      this.defaultFetcher = new DefaultPoolFetcher(this.url, this.projectId);
+      this.defaultFetcher = new DefaultPoolFetcher(this.url, this.projectId, this.log, this.retryBudgetMs);
       this.fetcher = this.defaultFetcher;
     }
   }
@@ -161,21 +188,31 @@ export class DexterPoolSource implements PoolSource {
   }
 
   async tip(): Promise<{ height: number; time: Date }> {
-    let res: Response;
-    try {
-      res = await this.fetchImpl(`${this.url}/blocks/latest`, {
-        headers: { project_id: this.projectId },
-        signal: AbortSignal.timeout(TIP_TIMEOUT_MS),
-      });
-    } catch (err) {
-      if (err instanceof Error && err.name === 'TimeoutError') {
-        throw new Error(`blockfrost /blocks/latest timed out after ${TIP_TIMEOUT_MS} ms`);
-      }
-      throw err;
-    }
-    if (!res.ok) throw new Error(`blockfrost /blocks/latest returned ${res.status}`);
-    const body = (await res.json()) as { height?: number; time?: number };
-    if (typeof body.height !== 'number' || typeof body.time !== 'number') throw new Error('blockfrost /blocks/latest: missing height/time');
-    return { height: body.height, time: new Date(body.time * 1000) };
+    return retryWithBackoff(
+      async () => {
+        let res: Response;
+        try {
+          res = await this.fetchImpl(`${this.url}/blocks/latest`, {
+            headers: { project_id: this.projectId },
+            signal: AbortSignal.timeout(TIP_TIMEOUT_MS),
+          });
+        } catch (err) {
+          if (err instanceof Error && err.name === 'TimeoutError') {
+            throw new Error(`blockfrost /blocks/latest timed out after ${TIP_TIMEOUT_MS} ms`);
+          }
+          throw err;
+        }
+        if (!res.ok) throw new Error(`blockfrost /blocks/latest returned ${res.status}`);
+        const body = (await res.json()) as { height?: number; time?: number };
+        if (typeof body.height !== 'number' || typeof body.time !== 'number') throw new Error('blockfrost /blocks/latest: missing height/time');
+        return { height: body.height, time: new Date(body.time * 1000) };
+      },
+      {
+        attempts: 4, baseMs: 500, maxMs: 8_000, budgetMs: this.retryBudgetMs,
+        isTransient: isTransientHttpError,
+        sleep: this.sleep,
+        onRetry: (info) => this.log.warn(info, 'blockfrost retry'),
+      },
+    );
   }
 }
