@@ -3,18 +3,23 @@ import { migrate } from '../src/migrate.js';
 import { PG_ENABLED, withTestSchema } from './helpers.js';
 
 describe.skipIf(!PG_ENABLED)('migrate (postgres)', () => {
-  it('applies 0001_core once and is idempotent', async () => {
+  it('applies pending migrations once and is idempotent', async () => {
     await withTestSchema(async (db) => {
       const first = await migrate(db);
-      expect(first).toEqual(['0001_core.sql']);
+      expect(first).toEqual(['0001_core.sql', '0002_candles_engine.sql']);
       const second = await migrate(db);
       expect(second).toEqual([]);
       const tables = await db.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1`,
       );
       expect(tables.rows.map((r) => r.table_name)).toEqual([
+        'candles',
+        'candles_external',
         'collector_runs',
+        'external_pool_map',
+        'paper_orders',
         'pool_snapshots',
+        'runs',
         'schema_migrations',
         'tokens',
       ]);
