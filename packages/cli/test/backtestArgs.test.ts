@@ -18,4 +18,8 @@ describe('parseBacktestArgs', () => {
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast=quick'])).toThrow(/numeric/);
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--bogus'])).toThrow(/unknown flag --bogus/);
   });
+  it('rejects --param with an empty value or an empty key (Number(\'\') is 0, not a valid numeric value)', () => {
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast='])).toThrow(/numeric/);
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', '=5'])).toThrow(/numeric/);
+  });
 });

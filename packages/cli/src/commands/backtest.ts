@@ -2,7 +2,7 @@ import { PgCandleRepo, PgExternalRepo } from '@ctb/candles';
 import { PgSnapshotRepo } from '@ctb/collector';
 import { createPool } from '@ctb/db';
 import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES } from '@ctb/engine';
-import { SimExecutor, type FillModel } from '@ctb/sim-executor';
+import { DEFAULT_COSTS, SimExecutor, type FillModel, type VenueCosts } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
@@ -44,7 +44,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
       case '--param': {
         const [k, v] = (val ?? '').split('=');
         const n = Number(v);
-        if (!k || v === undefined || !Number.isFinite(n)) throw new Error(`--param needs key=numeric value, got ${val ?? '(missing)'}\n${USAGE}`);
+        if (!k || v === undefined || v.trim() === '' || !Number.isFinite(n)) throw new Error(`--param needs key=numeric value, got ${val ?? '(missing)'}\n${USAGE}`);
         out.params[k] = n; i++; break;
       }
       default: throw new Error(`unknown flag ${flag}\n${USAGE}`);
@@ -56,6 +56,31 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
 }
 
 const ada = (n: number): bigint => BigInt(Math.round(n * 1_000_000));
+
+/**
+ * Pure builder for the `runs.params` JSON blob, extracted so cost provenance (review finding,
+ * fix round 1) can be unit-tested without a database: default costs come from
+ * `@ctb/sim-executor`'s `DEFAULT_COSTS`, not re-hardcoded literals, so a change to the shared
+ * default is reflected here automatically instead of drifting.
+ */
+export function buildRunParams(
+  strategyDefaults: Record<string, number>,
+  argParams: Record<string, number>,
+  cashAda: number,
+  depthAda: number | null,
+  costOverrides: Partial<VenueCosts>,
+): Record<string, unknown> {
+  const params = { ...strategyDefaults, ...argParams };
+  return {
+    ...params,
+    cashAda,
+    depthAda,
+    costs: {
+      batcherFeeLovelace: (costOverrides.batcherFeeLovelace ?? DEFAULT_COSTS.batcherFeeLovelace).toString(),
+      networkFeeLovelace: (costOverrides.networkFeeLovelace ?? DEFAULT_COSTS.networkFeeLovelace).toString(),
+    },
+  };
+}
 
 export async function backtestCommand(log: Logger, args: string[]): Promise<void> {
   const a = parseBacktestArgs(args);
@@ -74,11 +99,10 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     const gitSha = gitShaOrUnknown(process.cwd());
     if (gitSha === 'unknown') log.warn({}, 'git sha unknown: run provenance is incomplete');
     const fillModel: FillModel = a.source === 'candles' ? { kind: 'cpmm_observed' } : { kind: 'cpmm_synthetic_depth', depthLovelace: ada(a.depthAda ?? 0) };
-    const costOverrides = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
-    const params = { ...strategy.defaultParams, ...a.params };
+    const costOverrides: Partial<VenueCosts> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
     const runId = await runs.createRun({
       mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
-      params: { ...params, cashAda: a.cashAda, depthAda: a.depthAda, costs: { batcherFeeLovelace: (costOverrides.batcherFeeLovelace ?? 2_000_000n).toString(), networkFeeLovelace: (costOverrides.networkFeeLovelace ?? 200_000n).toString() } },
+      params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides),
     });
     console.log(`run id: ${runId}`);
     const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(new PgExternalRepo(db), token.unit, a.from, a.to);
