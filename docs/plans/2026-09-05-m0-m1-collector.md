@@ -20,6 +20,7 @@
 - `FetchRequest.getLiquidityPools()` with a data provider = full discovery: paginated scan of every pool of every venue (expensive, run daily). `FetchRequest.getLiquidityPoolState(pool)` = one `/addresses/{addr}/utxos/{asset}` call per pool (cheap, run per tick). Dexter's `BlockfrostProvider` has a built-in Bottleneck limiter.
 - `LiquidityPool` fields used: `dex`, `identifier`, `address`, `assetA`, `assetB` (`'lovelace' | Asset{policyId,nameHex,decimals}`), `reserveA`, `reserveB` (bigint), `poolFeePercent` (number, e.g. `1` = 1%). No pool-type field exists; Minswap v2 pools are discovered by the CPMM validity NFT, so stable pools never appear. Pool type is therefore asserted per venue by our own table and enforced by a DB CHECK.
 - Live SundaeSwapV3 SNEK/ADA pool captured for fixtures: `identifier` starts `cacb7fd5f5b84bf8`, `reserveA` (lovelace) `52331970594`, `reserveB` (SNEK) `23779491`, `poolFeePercent` `1`.
+  - **Correction 2026-09-06:** that pool came from Dexter's DEX-API path, which is stale relative to the chain; on-chain discovery through Blockfrost finds no SNEK/ADA pool on SundaeSwapV3 (its only SNEK pool is NIGHT/SNEK). The numbers above remain valid as arithmetic fixtures; the live test uses NIGHT/ADA on SundaeSwapV3 instead and asserts SNEK there yields one counted venue failure.
 - Universe seed (konnektr `/api/getMarketTokens` page 1, sorted by market cap desc, fetched once 2026-09-05): 20 tokens listed verbatim in Task 3. `policy_name` there is `policyId(56 hex) || assetNameHex`.
 
 ## Global Constraints
