@@ -99,6 +99,29 @@ describe('runEngine persistence, resume, and mark-to-market', () => {
     expect(r.summary.candles).toBe(3);
     expect(r.orders.at(-1)?.result).toEqual({ status: 'rejected', reason: 'stopped' });
   });
+  it('marks a leftover pending intent stopped when the abort happens BETWEEN candles, not inside the loop body (finding F1)', async () => {
+    // Simulates SIGINT landing during liveCandleFeed's inter-boundary sleep: sleep() resolves because
+    // it aborted, and the feed's async iterator returns `{ done: true }` on its NEXT pull without ever
+    // yielding another candle — so the `for await` loop ends via a normal completion, never re-entering
+    // the body where the in-loop `d.signal?.aborted` check lives.
+    const ac = new AbortController();
+    const s: Strategy = { id: 'once', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: (ctx) => (ctx.history.length === 1 ? [{ side: 'buy', amountIn: 1_000_000n, reason: 'x' }] : []) };
+    const feed = {
+      [Symbol.asyncIterator]() {
+        let n = 0;
+        return {
+          next: () => {
+            if (n === 0) { n++; return Promise.resolve({ done: false as const, value: c(0, '1.0') }); }
+            ac.abort();
+            return Promise.resolve({ done: true as const, value: undefined });
+          },
+        };
+      },
+    };
+    const r = await runEngine({ feed, strategy: s, executor: passthrough, initial: { cashLovelace: 10_000_000n, positionBase: 0n }, decimals: 0, log, signal: ac.signal });
+    expect(r.orders).toHaveLength(1);
+    expect(r.orders[0]?.result).toEqual({ status: 'rejected', reason: 'stopped' });
+  });
   it('threads poolAfter into the next intent of the same candle', async () => {
     const seenWorking: Array<WorkingPool | undefined> = [];
     const recording: Executor = {
@@ -191,5 +214,12 @@ describe('runEngine warmup and zero-intent warning', () => {
     const feed = [c(0, '1.0'), c(1, '1.0'), c(2, '2.0'), c(3, '2.0'), c(4, '4.0'), c(5, '4.0')];
     const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
     expect(r.summary.warnings).toEqual([]);
+  });
+
+  it('seeds summary.warnings with initialWarnings, ahead of anything the loop itself adds (finding F5)', async () => {
+    const feed = [c(0, '1.0'), c(1, '1.0'), c(2, '2.0'), c(3, '2.0'), c(4, '4.0'), c(5, '4.0')];
+    const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log, initialWarnings: ['x'] });
+    expect(r.summary.warnings[0]).toBe('x');
+    expect(r.summary.warnings).toEqual(['x']); // this run traded, so no zero-intent warning is added after it
   });
 });

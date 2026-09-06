@@ -56,8 +56,23 @@ describe('CLI commands sync the universe into tokens before writing FK-scoped ro
     expect(indexOfFirst(src, 'ensureTokens(db')).toBeLessThan(indexOfFirst(src, 'new DexterPoolSource('));
   });
 
+  // Review finding (Task 4, fix round 1) F4: paper.ts constructed `new PgRunRepo(db)` OUTSIDE (and
+  // textually before) the try block that calls `ensureTokens`, breaking the convention every other
+  // FK-writing command follows. Harmless only because the PgRunRepo constructor does no I/O itself —
+  // its first actual query (createRun/getRun) already ran after ensureTokens at runtime — but the next
+  // person copying this file as a template would copy the wrong shape. Pin the same textual ordering
+  // paper.ts's own PgCandleRepo construction already has.
+  it('paper.ts calls ensureTokens before constructing PgRunRepo or PgCandleRepo', async () => {
+    const src = await readCommandSource('paper.ts');
+    const syncAt = indexOfFirst(src, 'ensureTokens(db');
+    const runRepoAt = indexOfFirst(src, 'new PgRunRepo(');
+    const candleRepoAt = indexOfFirst(src, 'new PgCandleRepo(');
+    expect(syncAt).toBeLessThan(runRepoAt);
+    expect(syncAt).toBeLessThan(candleRepoAt);
+  });
+
   it('every command that writes FK-scoped rows imports the shared helper rather than its own copy', async () => {
-    for (const file of ['backfill.ts', 'candles.ts', 'backtest.ts', 'collect.ts']) {
+    for (const file of ['backfill.ts', 'candles.ts', 'backtest.ts', 'collect.ts', 'paper.ts']) {
       const src = await readCommandSource(file);
       expect(src, `${file} should call the shared helper`).toContain("from '../ensureTokens.js'");
       expect(src, `${file} should not carry its own syncTokens call`).not.toMatch(/\.syncTokens\(/);

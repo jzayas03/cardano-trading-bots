@@ -28,8 +28,15 @@ export function coverageLine(c: RunCoverage | undefined): string {
   return `coverage: ${c.candles} of ${c.expectedBuckets} expected buckets (${pct}%) | ${range} | max gap ${Math.round(c.maxGapMs / 60_000)}m | ${c.gapsOverBound} gaps over the stale-fill bound`;
 }
 
-/** Operator output. Every number here comes from the runs row and its orders; the header is the provenance. */
+/**
+ * Operator output. Every number here comes from the runs row and its orders; the header is the
+ * provenance. Synthetic data can never be mistaken for real (global constraint): the REHEARSAL
+ * warning comes from `run.rehearsal`, the persisted row, so it prints on every path that reads this
+ * run back — the process that created it AND a later `report <run-id>` — not just the one that
+ * happened to set an ad-hoc console line at the end of its own process (finding F3).
+ */
 export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit: string }>, ticker: string): void {
+  if (run.rehearsal) console.log('REHEARSAL — synthetic data — not evidence');
   console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | git ${run.gitSha}`);
   console.log(`data: ${run.dataSource} ${run.dataFrom.toISOString()} -> ${run.dataTo.toISOString()} | fill model: ${run.fillModel}`);
   console.log(`params: ${JSON.stringify(run.params)}`);

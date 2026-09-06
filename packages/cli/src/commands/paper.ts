@@ -56,6 +56,27 @@ export function parsePaperArgs(args: string[]): PaperArgs {
   return out;
 }
 
+/**
+ * Finding F2: a resumed run must not silently trade under different strategy params than the run it
+ * is continuing — an equity curve that starts under `slow=10` and, after a resume, keeps going under
+ * `slow=20` is not one comparable series, and nothing before this said so. `current` is the same merge
+ * `runEngine` performs (`{ ...strategy.defaultParams, ...a.params }`); `prior` is the persisted
+ * `runs.params` jsonb blob, which flattens strategy params at the top level next to `cashAda` etc.
+ * (see `buildRunParams`) — so only `current`'s own keys are checked, and a key `prior` never recorded
+ * (an older run predating a new param, or one of the non-strategy keys like `cashAda`) is ignored
+ * rather than treated as a mismatch. Compared with `Number(...)` because jsonb round-trips a number
+ * that was written as a numeric literal back out the same way node-postgres always does — as text.
+ */
+export function paramsMismatch(prior: Record<string, unknown>, current: Record<string, number>): string | null {
+  for (const key of Object.keys(current)) {
+    const p = prior[key];
+    if (p !== undefined && Number(p) !== current[key]) {
+      return `was started with ${key}=${p}, not ${current[key]}; start a new run`;
+    }
+  }
+  return null;
+}
+
 export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   const a = parsePaperArgs(args);
   const strategy = STRATEGIES[a.strategyId];
@@ -71,9 +92,16 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   process.once('SIGINT', () => onSignal('SIGINT'));
   process.once('SIGTERM', () => onSignal('SIGTERM'));
   let runId: number | null = null;
-  const runs = new PgRunRepo(db);
+  // Only used by the catch block below to record an abort against whatever run was in flight; the try
+  // block itself uses the non-optional `runs` const declared just after `ensureTokens`, so every
+  // read/write inside it is FK-safe without re-checking for undefined on every call.
+  let runsForCatch: PgRunRepo | undefined;
   try {
+    // ensureTokens MUST run before the first FK-writing repo is constructed (finding F4): `runs.base_unit`
+    // is FK'd to tokens(unit), the same as every other command that touches this table.
     await ensureTokens(db, universe);
+    const runs = new PgRunRepo(db);
+    runsForCatch = runs;
     if (!a.rehearsal) {
       // Synthetic data can never be mistaken for real: a Fake-dex snapshot in the last 24h for this
       // token means a rehearsal run touched this database and never cleaned up after itself.
@@ -87,6 +115,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     let initial: Portfolio = { cashLovelace: ada(a.cashAda), positionBase: 0n };
     let startSeq = 0;
     let afterTick: Date | null = null;
+    let resumeWarning: string | undefined;
     if (a.resume !== null) {
       const prior = await runs.getRun(a.resume);
       if (!prior || prior.mode !== 'paper') throw new Error(`run ${a.resume} is not a paper run`);
@@ -94,12 +123,22 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
         throw new Error(`run ${a.resume} is ${prior.strategyId}/${prior.baseUnit}, not ${strategy.id}/${token.unit}`);
       }
       if (prior.status === 'finished') throw new Error(`run ${a.resume} is finished; start a new run`);
+      // Finding F2: refuse to resume under strategy params that differ from the ones this run was
+      // started with — a resumed equity curve that quietly switches `slow`/`fast` etc. mid-stream is
+      // not comparable to itself before the resume.
+      const current = { ...strategy.defaultParams, ...a.params };
+      const mismatch = paramsMismatch(prior.params, current);
+      if (mismatch) throw new Error(`run ${a.resume} ${mismatch}`);
       const last = await runs.lastEquity(a.resume);
       if (last) { initial = { cashLovelace: last.cashLovelace, positionBase: last.positionBase }; afterTick = last.tickTs; }
       startSeq = await runs.lastOrderSeq(a.resume);
       runId = a.resume;
-      await runs.appendResume(runId, new Date());
+      const resumedAt = new Date();
+      await runs.appendResume(runId, resumedAt);
       await runs.setStatus(runId, 'running', null);
+      // Finding F5: the intents pending at the previous stop were rejected `stopped` and never
+      // re-decided — that loss belongs on the record, not just in a log line nobody re-reads.
+      resumeWarning = `resumed at ${resumedAt.toISOString()} from ${afterTick?.toISOString() ?? 'start'}; intents pending at the previous stop were lost`;
       log.info({ runId, afterTick, startSeq }, 'resumed run; intents pending at the previous stop were lost');
     } else {
       const gitSha = gitShaOrUnknown(process.cwd());
@@ -120,7 +159,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     });
     const result = await runEngine({
       feed, strategy, params: a.params, executor, initial, decimals: token.decimals, log, retain: false, startSeq, signal: ac.signal,
-      intervalSec: a.intervalSec, maxGapMs,
+      intervalSec: a.intervalSec, maxGapMs, initialWarnings: resumeWarning ? [resumeWarning] : undefined,
       sinks: {
         onOrder: async (o) => { await runs.insertOrders(id, token.unit, [o]); },
         onEquity: async (e) => { await runs.insertEquity(id, [e]); },
@@ -130,13 +169,13 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     await runs.finishRun(id, new Date(), result.summary);
     await runs.setStatus(id, 'finished', ac.signal.aborted ? 'signal' : 'feed ended');
     const run = await runs.getRun(id);
-    if (run) {
-      if (a.rehearsal) console.log('REHEARSAL');
-      printReport(run, await runs.listOrders(id), token.ticker);
-    }
+    // The REHEARSAL header now comes from `run.rehearsal` inside printReport itself (finding F3), so
+    // every path that reads this run back — including a later `report <run-id>` in a different process
+    // — prints it, not just this process's own exit.
+    if (run) printReport(run, await runs.listOrders(id), token.ticker);
   } catch (err) {
     if (runId !== null) {
-      await runs.setStatus(runId, 'aborted', (err as Error).message ?? String(err)).catch(() => {
+      await runsForCatch?.setStatus(runId, 'aborted', (err as Error).message ?? String(err)).catch(() => {
         // intentional: original error wins; a failure recording the abort must not replace the real one
       });
     }
