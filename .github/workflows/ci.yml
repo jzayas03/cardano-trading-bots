@@ -1,0 +1,70 @@
+# CI for cardano-trading-bots.
+# Runs lint, unit tests, and the Postgres-backed tests against a real postgres:16 service,
+# on every pull request to main and every push to main.
+# Note: the pg tests use RUN_PG_TESTS=1 and DATABASE_URL; without them they are skipped, so
+# both steps are needed for the suite to count as run.
+
+name: ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint, unit, postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ctb
+          POSTGRES_PASSWORD: ctb_ci_only
+          POSTGRES_DB: ctb
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U ctb -d ctb"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+
+    env:
+      # Matches docker-compose.yml's host port so the same DATABASE_URL works locally and here.
+      DATABASE_URL: postgres://ctb:ctb_ci_only@localhost:5433/ctb
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install (clean, from lockfile)
+        run: npm ci
+
+      - name: Lint and typecheck
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Postgres-backed tests
+        run: npm run test:pg
+
+      - name: Dependency audit (report only)
+        # Known: two high advisories in axios <1 pinned by @indigo-labs/dexter with no upstream fix.
+        # Visible on every run; becomes a blocking gate before any transaction-signing work.
+        run: npm audit --omit=dev --audit-level=high || echo "::warning::npm audit reported vulnerabilities (see log); non-blocking by decision 2026-09-06"
