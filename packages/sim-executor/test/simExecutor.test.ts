@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { decimalToScaled, priceAdaPerToken } from '@ctb/candles';
-import type { Candle } from '@ctb/engine';
+import type { Candle, FillResult } from '@ctb/engine';
 import { costsForPoolId, cpmmAmountOut, SimExecutor } from '../src/index.js';
 
 const RQ = 52_331_970_594n;
@@ -168,5 +168,42 @@ describe('costsForPoolId', () => {
     expect(costsForPoolId('Splash:abc', { batcherFeeLovelace: 1_500_000n }))
       .toMatchObject({ batcherFeeLovelace: 1_500_000n, networkFeeLovelace: 200_000n, basis: 'assumed', source: 'cli override' });
     expect(() => costsForPoolId('FutureSwap:abc')).toThrow(/unknown venue/);
+  });
+});
+
+describe('markToMarket', () => {
+  const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: 900_000 });
+  const atEq: Candle = { ...at, closeReserveQuote: RQ }; // equal-reserves fixture
+  it('values the position as a full sell net of fees on observed reserves (SundaeSwapV3: 1.0 ADA batcher + 0.2 ADA network)', () => {
+    expect(ex.markToMarket({ cashLovelace: 0n, positionBase: 1_000_000n }, atEq)).toBe(2_091_631_632n - 1_000_000n - 200_000n);
+  });
+  it('is cash when flat and null without reserves', () => {
+    expect(ex.markToMarket({ cashLovelace: 5n, positionBase: 0n }, atEq)).toBe(5n);
+    expect(ex.markToMarket({ cashLovelace: 5n, positionBase: 1n }, { ...atEq, closeReserveBase: null })).toBeNull();
+  });
+});
+describe('reserve depletion', () => {
+  const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: 900_000 });
+  const nextEq: Candle = { ...next, closeReserveQuote: RQ };
+  it('a second buy in the same candle fills against poolAfter of the first', () => {
+    const first = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 'a' }, at, nextEq, rich);
+    expect(first).toMatchObject({ status: 'filled', amountOut: 441500n, poolAfter: { poolId: 'SundaeSwapV3:x', reserveQuote: 53331970594n, reserveBase: 23337991n, feeBps: 100 } });
+    const working = (first as Extract<FillResult, { status: 'filled' }>).poolAfter!;
+    const second = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 'b' }, at, nextEq, rich, working);
+    expect(second).toMatchObject({ status: 'filled', amountOut: 425327n });
+  });
+});
+describe('synthetic worst-of pricing', () => {
+  const depth = RQ;
+  const ext = (open: string, close: string): Candle => ({ ...next, open, high: close, low: open, close, poolId: null, poolType: null, feeBps: null, closeReserveBase: null, closeReserveQuote: null, tvlLovelace: null, volumeQuote: '1' });
+  const buy = (price: 'close' | 'worst') => new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_synthetic_depth', depthLovelace: depth, price }, maxGapMs: 900_000 })
+    .fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, ext('0.002300000000000000', '0.002100000000000000'), rich) as Extract<FillResult, { status: 'filled' }>;
+  const sell = (price: 'close' | 'worst') => new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_synthetic_depth', depthLovelace: depth, price }, maxGapMs: 900_000 })
+    .fill({ side: 'sell', amountIn: 1_000_000n, reason: 't' }, at, ext('0.002100000000000000', '0.002300000000000000'), rich) as Extract<FillResult, { status: 'filled' }>;
+  it('buys at max(open, close) and sells at min(open, close) under worst; close otherwise', () => {
+    // buy fixture: open 0.0023, close 0.0021 -> worst prices at the open (0.0023), fewer tokens than the close-priced fill
+    expect(buy('worst').amountOut).toBeLessThan(buy('close').amountOut);
+    // sell fixture: open 0.0021, close 0.0023 -> worst prices at the open (0.0021), less lovelace than the close-priced fill
+    expect(sell('worst').amountOut).toBeLessThan(sell('close').amountOut);
   });
 });

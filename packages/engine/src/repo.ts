@@ -210,7 +210,9 @@ function mapOrderRow(r: OrderRow): OrderRecord & { baseUnit: string } {
       ? { status: 'filled', poolId: r.pool_id ?? '', unitIn: r.unit_in, amountIn: BigInt(r.amount_in), unitOut: r.unit_out ?? '', amountOut: BigInt(r.amount_out ?? '0'),
           midPrice: r.mid_price ?? '0', fillPrice: r.fill_price ?? '0', poolFeeIn: BigInt(r.pool_fee_in ?? '0'), batcherFeeLovelace: BigInt(r.batcher_fee_lovelace ?? '0'),
           networkFeeLovelace: BigInt(r.network_fee_lovelace ?? '0'), slippageBps: r.slippage_bps ?? 0, priceImpactBps: r.price_impact_bps ?? 0,
-          tsFill: r.ts_fill ?? r.ts_intent }
+          // poolAfter is intra-run working state, not a persisted column: a fill read back from
+          // paper_orders has no reserves-after-this-fill to report.
+          poolAfter: null, tsFill: r.ts_fill ?? r.ts_intent }
       : { status: 'rejected', reason: r.reject_reason ?? 'unknown' },
   };
 }

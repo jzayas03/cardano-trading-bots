@@ -51,4 +51,13 @@ describe('buildRunParams', () => {
     const params = buildRunParams({ fast: 12, slow: 48 }, { fast: 6 }, 500, 800_000, {}, 900_000);
     expect(params).toMatchObject({ fast: 6, slow: 48, cashAda: 500, depthAda: 800_000 });
   });
+
+  // Plan 3 Task 3: the CLI passes fillModelDetail (e.g. the synthetic-price choice) only for an
+  // external-source run; buildRunParams keeps its 6-arg call sites working (Task 4's paper run
+  // included) while still recording whatever the 7th arg carries when it is given.
+  it('leaves params unchanged when extra is omitted, and merges it in at the top level otherwise', () => {
+    expect(buildRunParams({ fast: 12 }, {}, 1000, null, {}, 900_000)).not.toHaveProperty('fillModelDetail');
+    const params = buildRunParams({ fast: 12 }, {}, 1000, 800_000, {}, 900_000, { fillModelDetail: { syntheticPrice: 'worst' } });
+    expect(params.fillModelDetail).toEqual({ syntheticPrice: 'worst' });
+  });
 });

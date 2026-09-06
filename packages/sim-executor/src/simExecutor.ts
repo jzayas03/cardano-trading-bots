@@ -1,9 +1,17 @@
 import { decimalToScaled, formatScaled, PRICE_SCALE, priceAdaPerToken, type Decimal } from '@ctb/candles';
-import type { Candle, Executor, FillResult, Intent, Portfolio } from '@ctb/engine';
+import type { Candle, Executor, FillResult, Intent, Portfolio, WorkingPool } from '@ctb/engine';
 import { DEFAULT_COSTS, tryCostsForPoolId, venueOf, type VenueCosts } from './costs.js';
 import { cpmmAmountOut, poolFeeTaken } from './cpmm.js';
 
-export type FillModel = { kind: 'cpmm_observed' } | { kind: 'cpmm_synthetic_depth'; depthLovelace: bigint };
+export type FillModel =
+  | { kind: 'cpmm_observed' }
+  /**
+   * `price` picks which candle price the synthetic pool is built at (default `'close'`, matching every
+   * existing backtest). `'worst'` is Plan 3's recommendation: a buy is priced at `max(open, close)` and
+   * a sell at `min(open, close)`, so the synthetic fill assumes the least favorable side of the candle
+   * instead of the close the strategy could not actually have traded at mid-candle.
+   */
+  | { kind: 'cpmm_synthetic_depth'; depthLovelace: bigint; price?: 'close' | 'worst' };
 
 export interface SimExecutorOptions {
   decimals: number;
@@ -39,13 +47,24 @@ function deviationBps(fillScaled: bigint, referenceScaled: bigint, isBuy: boolea
   return Math.round(Number((diff * 10_000n * BPS_SUBUNITS) / referenceScaled) / Number(BPS_SUBUNITS));
 }
 
+/** The worse of the two prices for the given side: max(open, close) for a buy, min(open, close) for a sell. */
+function worstOf(open: Decimal, close: Decimal, isBuy: boolean): Decimal {
+  const o = decimalToScaled(open);
+  const cl = decimalToScaled(close);
+  return (isBuy ? o >= cl : o <= cl) ? open : close;
+}
+
 export class SimExecutor implements Executor {
   constructor(private readonly o: SimExecutorOptions) {}
 
-  fill(intent: Intent, at: Candle, next: Candle, portfolio: Readonly<Portfolio>): FillResult {
+  fill(intent: Intent, at: Candle, next: Candle, portfolio: Readonly<Portfolio>, working?: WorkingPool): FillResult {
     const gapMs = next.tickTs.getTime() - at.tickTs.getTime();
     if (gapMs > this.o.maxGapMs) return { status: 'rejected', reason: `stale t+1 (gap ${Math.round(gapMs / 60_000)}m)` };
-    const pool = this.resolvePool(next);
+    const isBuy = intent.side === 'buy';
+    // `working`, when given, is the poolAfter of an earlier fill decided on this same candle: the
+    // second intent in a batch trades against the reserves the first one left behind, not against the
+    // same t+1 quote twice (reserve depletion within a candle).
+    const pool = working ?? this.resolvePool(next, isBuy);
     if ('reason' in pool) return { status: 'rejected', reason: pool.reason };
     const costs = pool.poolId === 'synthetic'
       ? { ...DEFAULT_COSTS, ...this.o.costOverrides }
@@ -57,7 +76,6 @@ export class SimExecutor implements Executor {
     const midScaled = decimalToScaled(at.close);
     if (midScaled <= 0n) return { status: 'rejected', reason: 'no mid price at t' };
     const lovelaceFees = costs.batcherFeeLovelace + costs.networkFeeLovelace;
-    const isBuy = intent.side === 'buy';
     if (isBuy && portfolio.cashLovelace < intent.amountIn + lovelaceFees) return { status: 'rejected', reason: 'insufficient cash' };
     if (!isBuy && portfolio.positionBase < intent.amountIn) return { status: 'rejected', reason: 'insufficient position' };
     const reserveIn = isBuy ? pool.reserveQuote : pool.reserveBase;
@@ -70,6 +88,12 @@ export class SimExecutor implements Executor {
     // The t+1 pool's own mid: how much of the fill was this trade moving THIS pool, as opposed to
     // the market moving between t and t+1. Reported separately, never folded into slippage.
     const poolMidScaled = decimalToScaled(priceAdaPerToken(pool.reserveQuote, pool.reserveBase, this.o.decimals));
+    // The whole input enters the pool: a buy adds amountIn to the quote side and removes amountOut
+    // from the base side; a sell mirrors that. This is what the NEXT intent in the same candle (if
+    // any) trades against, via `working` above — the loop threads it through.
+    const poolAfter: WorkingPool = isBuy
+      ? { poolId: pool.poolId, reserveQuote: pool.reserveQuote + intent.amountIn, reserveBase: pool.reserveBase - amountOut, feeBps: pool.feeBps }
+      : { poolId: pool.poolId, reserveQuote: pool.reserveQuote - amountOut, reserveBase: pool.reserveBase + intent.amountIn, feeBps: pool.feeBps };
     return {
       status: 'filled', poolId: pool.poolId,
       unitIn: isBuy ? 'lovelace' : this.o.baseUnit, amountIn: intent.amountIn,
@@ -79,11 +103,53 @@ export class SimExecutor implements Executor {
       batcherFeeLovelace: costs.batcherFeeLovelace, networkFeeLovelace: costs.networkFeeLovelace,
       slippageBps: deviationBps(fillScaled, midScaled, isBuy),
       priceImpactBps: deviationBps(fillScaled, poolMidScaled, isBuy),
+      poolAfter,
       tsFill: next.tickTs,
     };
   }
 
-  private resolvePool(next: Candle): { poolId: string; reserveBase: bigint; reserveQuote: bigint; feeBps: number } | { reason: string } {
+  /**
+   * Value the position as a full sell against the candle's OWN reserves (not `next` — there is no
+   * fill happening, just a mark), net of the venue's fees. 0 position marks as cash with no pricing
+   * needed at all. Never throws: any pricing failure (bad reserves, an unknown venue) is a null point,
+   * not a crashed run.
+   */
+  markToMarket(portfolio: Readonly<Portfolio>, candle: Candle): bigint | null {
+    if (portfolio.positionBase <= 0n) return portfolio.cashLovelace;
+    try {
+      const pool = this.poolAtCandle(candle);
+      if (!pool) return null;
+      const costs = pool.poolId === 'synthetic'
+        ? { ...DEFAULT_COSTS, ...this.o.costOverrides }
+        : tryCostsForPoolId(pool.poolId, this.o.costOverrides);
+      if (!costs) return null;
+      const proceeds = cpmmAmountOut(portfolio.positionBase, pool.reserveBase, pool.reserveQuote, pool.feeBps);
+      return portfolio.cashLovelace + proceeds - costs.batcherFeeLovelace - costs.networkFeeLovelace;
+    } catch {
+      // intentional: markToMarket must never throw a live paper loop out of its equity tick
+      return null;
+    }
+  }
+
+  /** Reserves as this fill model sees THIS candle, for a mark (not a fill against the next one). */
+  private poolAtCandle(candle: Candle): WorkingPool | null {
+    if (this.o.fillModel.kind === 'cpmm_observed') {
+      if (candle.poolType !== 'cpmm' || !candle.poolId) return null;
+      if (candle.closeReserveBase === null || candle.closeReserveQuote === null || candle.closeReserveBase <= 0n || candle.closeReserveQuote <= 0n || candle.feeBps === null) {
+        return null;
+      }
+      return { poolId: candle.poolId, reserveBase: candle.closeReserveBase, reserveQuote: candle.closeReserveQuote, feeBps: candle.feeBps };
+    }
+    const depth = this.o.fillModel.depthLovelace;
+    if (depth <= 0n) return null;
+    const p = decimalToScaled(candle.close);
+    if (p <= 0n) return null;
+    const reserveBase = (depth * 10n ** BigInt(this.o.decimals) * SCALE) / (p * 1_000_000n);
+    if (reserveBase <= 0n) return null;
+    return { poolId: candle.poolId ?? 'synthetic', reserveBase, reserveQuote: depth, feeBps: candle.feeBps ?? SYNTHETIC_FEE_BPS };
+  }
+
+  private resolvePool(next: Candle, isBuy: boolean): WorkingPool | { reason: string } {
     if (this.o.fillModel.kind === 'cpmm_observed') {
       // One pool-type check, not two: a null pool_type used to fall past the first and be reported
       // as "no reserves at t+1", naming the wrong thing (finding M2).
@@ -94,9 +160,10 @@ export class SimExecutor implements Executor {
       }
       return { poolId: next.poolId, reserveBase: next.closeReserveBase, reserveQuote: next.closeReserveQuote, feeBps: next.feeBps };
     }
-    const depth = this.o.fillModel.depthLovelace;
+    const { depthLovelace: depth, price: priceMode = 'close' } = this.o.fillModel;
     if (depth <= 0n) return { reason: 'synthetic depth must be positive' };
-    const p = decimalToScaled(next.close);
+    const priceDecimal = priceMode === 'worst' ? worstOf(next.open, next.close, isBuy) : next.close;
+    const p = decimalToScaled(priceDecimal);
     if (p <= 0n) return { reason: 'no price at t+1' };
     const reserveBase = (depth * 10n ** BigInt(this.o.decimals) * SCALE) / (p * 1_000_000n);
     if (reserveBase <= 0n) return { reason: 'synthetic depth too small for price' };

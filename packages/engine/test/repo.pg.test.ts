@@ -18,7 +18,7 @@ describe.skipIf(!PG_ENABLED)('PgRunRepo', () => {
       const orders: OrderRecord[] = [
         { seq: 1, tsIntent: t(0), intent: { side: 'buy', amountIn: 1_000_000_000n, reason: 'x' }, result: { status: 'filled', poolId: 'SundaeSwapV3:p', unitIn: 'lovelace', amountIn: 1_000_000_000n,
           unitOut: SNEK, amountOut: 441_500n, midPrice: '0.002200718703104284', fillPrice: '0.002265005662514156', poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n,
-          networkFeeLovelace: 200_000n, slippageBps: 292, priceImpactBps: 289, tsFill: t(5) } },
+          networkFeeLovelace: 200_000n, slippageBps: 292, priceImpactBps: 289, poolAfter: null, tsFill: t(5) } },
         { seq: 2, tsIntent: t(5), intent: { side: 'sell', amountIn: 1n, reason: 'y' }, result: { status: 'rejected', reason: 'dust' } },
       ];
       expect(await repo.insertOrders(id, SNEK, orders)).toBe(2);
@@ -75,7 +75,7 @@ describe.skipIf(!PG_ENABLED)('PgRunRepo', () => {
       const orders: OrderRecord[] = [
         { seq: 1, tsIntent: t(0), intent: { side: 'buy', amountIn: 1_000_000_000n, reason: 'x' }, result: { status: 'filled', poolId: 'SundaeSwapV3:p', unitIn: 'lovelace', amountIn: 1_000_000_000n,
           unitOut: SNEK, amountOut: 441_500n, midPrice: '0.5', fillPrice: '0.5', poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n,
-          networkFeeLovelace: 200_000n, slippageBps: 0, priceImpactBps: 0, tsFill: t(5) } },
+          networkFeeLovelace: 200_000n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: t(5) } },
         { seq: 2, tsIntent: t(10), intent: { side: 'sell', amountIn: 1n, reason: 'y' }, result: { status: 'rejected', reason: 'dust' } },
       ];
       expect(await repo.insertOrders(id, SNEK, orders)).toBe(2);
