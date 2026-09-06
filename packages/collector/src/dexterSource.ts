@@ -246,6 +246,45 @@ export interface DexterPoolSourceOptions {
   retryBudgetMs?: number;
   /** Injectable seam for the retry backoff's sleep, so a unit test proving retry behavior does not wait on a real timer. Omit for a real timer. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Which pools `refresh()` spends Blockfrost calls on after a successful `discover()`.
+   * - `'all'` (default): refresh every discovered pool, unchanged from this class's original
+   *   behavior — kept as the default so every existing caller/test keeps its current meaning.
+   * - `'deepest'`: prune the known set to one pool per base token — the pool with the largest ADA
+   *   reserve, ties broken by smallest identifier — before `refresh()` ever runs. Candles already
+   *   only use the deepest pool per token per tick (`buildCandles` in `@ctb/candles`), so refreshing
+   *   every shallow duplicate spends Blockfrost quota on data nothing reads. Run 50 (2026-09-06,
+   *   real key, mainnet): 102 discovered pools x ~10 calls each to refresh x 288 ticks/day (5-minute
+   *   interval) is ~290k calls/day against a 50k/day free quota; pruning to ~20 deepest pools brings
+   *   that down to the arithmetic in `.env.example`. Discovery itself is unaffected by this option —
+   *   `discover()` still returns every pool it found so `pool_snapshots` keeps the full picture on a
+   *   discovery tick; only the internal known set used by subsequent `refresh()` calls is pruned. The
+   *   CLI's `collect` command passes `cfg.refreshPolicy` (default `'deepest'` there — see
+   *   `packages/cli/src/config.ts`).
+   */
+  refreshPolicy?: 'deepest' | 'all';
+}
+
+/** `shape`'s non-ADA-side token identifier (`policyId + nameHex`), used to group pools by base token
+ *  for `'deepest'` pruning. Every pool `DexterPoolSource` ever discovers is an ADA pair (`discover`
+ *  only ever requests `['lovelace', asset]` token pairs), but a pool with no ADA side — or with ADA
+ *  on both sides — can't be compared against others by "largest ADA reserve", so it falls back to
+ *  `poolId` (unique per pool) and stands in a group of its own rather than being silently dropped or
+ *  merged with an unrelated group. */
+function groupKeyOf(poolId: string, shape: LiquidityPoolShape): string {
+  const aIsAda = shape.assetA === 'lovelace';
+  const bIsAda = shape.assetB === 'lovelace';
+  if (aIsAda === bIsAda) return poolId;
+  const nonAda = aIsAda ? shape.assetB : shape.assetA;
+  return typeof nonAda === 'string' ? poolId : `${nonAda.policyId}${nonAda.nameHex}`;
+}
+
+/** The lovelace-side reserve of `shape` (the "ADA depth" `'deepest'` pruning ranks pools by), or
+ *  `undefined` for a pool with no ADA side (see `groupKeyOf`). */
+function adaReserveOf(shape: LiquidityPoolShape): bigint | undefined {
+  if (shape.assetA === 'lovelace') return shape.reserveA;
+  if (shape.assetB === 'lovelace') return shape.reserveB;
+  return undefined;
 }
 
 const TIP_TIMEOUT_MS = 10_000;
@@ -261,6 +300,8 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
   private readonly fetchImpl: typeof fetch;
   private readonly retryBudgetMs: number;
   private readonly sleep?: (ms: number) => Promise<void>;
+  /** See `DexterPoolSourceOptions.refreshPolicy`. Default `'all'`. */
+  private readonly refreshPolicy: 'deepest' | 'all';
   /** Blockfrost provider calls spent per venue on the most recent `discover()`. Read by `lastDiscoveryCalls`. */
   private callsByVenue: Record<string, number> = {};
 
@@ -272,6 +313,7 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
     this.fetchImpl = opts.fetch ?? fetch;
     this.retryBudgetMs = opts.retryBudgetMs ?? 60_000;
     this.sleep = opts.sleep;
+    this.refreshPolicy = opts.refreshPolicy ?? 'all';
     if (opts.fetcher) {
       this.fetcher = opts.fetcher;
       this.defaultFetcher = null;
@@ -352,7 +394,31 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
       }
     }
     this.callsByVenue = callsByVenue;
+    if (this.refreshPolicy === 'deepest') this.pruneToDeepestPerToken();
     return { pools: found, failures };
+  }
+
+  /**
+   * Prunes `this.known` to one pool per base token — the pool with the largest ADA reserve, ties
+   * broken by smallest identifier (see `DexterPoolSourceOptions.refreshPolicy`). `found` (the array
+   * `discover()` returns to the caller) is built before this runs and is never touched by it, so a
+   * discovery tick's `pool_snapshots` still get every pool this tick found; only the pools `refresh()`
+   * spends calls on afterward are pruned.
+   */
+  private pruneToDeepestPerToken(): void {
+    const discovered = this.known.size;
+    const bestByToken = new Map<string, { poolId: string; shape: LiquidityPoolShape }>();
+    for (const [poolId, shape] of this.known) {
+      const key = groupKeyOf(poolId, shape);
+      const ada = adaReserveOf(shape) ?? -1n;
+      const current = bestByToken.get(key);
+      const currentAda = current ? (adaReserveOf(current.shape) ?? -1n) : -1n;
+      const isBetter = !current || ada > currentAda || (ada === currentAda && shape.identifier < current.shape.identifier);
+      if (isBetter) bestByToken.set(key, { poolId, shape });
+    }
+    this.known.clear();
+    for (const { poolId, shape } of bestByToken.values()) this.known.set(poolId, shape);
+    this.log.info({ policy: this.refreshPolicy, discovered, kept: this.known.size }, 'pruned known pools to deepest per token');
   }
 
   async refresh(): Promise<SourceResult> {

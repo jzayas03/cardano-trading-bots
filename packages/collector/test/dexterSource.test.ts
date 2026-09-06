@@ -48,9 +48,10 @@ class FakeFetcher implements PoolFetcher {
   }
 }
 
-function makeLog(): { log: Logger; warns: unknown[] } {
+function makeLog(): { log: Logger; warns: unknown[]; infos: unknown[] } {
   const warns: unknown[] = [];
-  return { log: { info: () => {}, warn: (obj) => { warns.push(obj); }, error: () => {} }, warns };
+  const infos: unknown[] = [];
+  return { log: { info: (obj) => { infos.push(obj); }, warn: (obj) => { warns.push(obj); }, error: () => {} }, warns, infos };
 }
 
 describe('DexterPoolSource.discover', () => {
@@ -147,6 +148,89 @@ describe('DexterPoolSource.refresh', () => {
 
     expect(result.pools[0]?.address).toBe('addr_good_updated');
     expect(source.knownPoolCount()).toBe(1);
+  });
+});
+
+describe('DexterPoolSource refreshPolicy', () => {
+  const TOKEN2 = { policyId: 'dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444dddd4444', nameHex: '544f4b454e34' };
+  const PAIR2: Pair = {
+    base: {
+      ticker: 'TOK2', policyId: TOKEN2.policyId, assetNameHex: TOKEN2.nameHex,
+      decimals: 0, category: 'Meme', unit: `${TOKEN2.policyId}${TOKEN2.nameHex}`,
+    },
+    quote: 'lovelace',
+  };
+
+  it('deepest keeps only the largest-ADA pool per base token and logs the prune, so refresh spends one call', async () => {
+    const { log, infos } = makeLog();
+    const shallow = shape('MinswapV2', 'shallow', 'addr-shallow', 100n);
+    const mid = shape('MinswapV2', 'mid', 'addr-mid', 200n);
+    const deep = shape('SundaeSwapV1', 'deep', 'addr-deep', 300n);
+    const fetcher = new FakeFetcher({ MinswapV2: [shallow, mid], SundaeSwapV1: [deep] });
+    const source = new DexterPoolSource({
+      blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher, refreshPolicy: 'deepest',
+    });
+
+    await source.discover([PAIR]);
+
+    expect(source.knownPoolCount()).toBe(1);
+    expect(infos).toContainEqual({ policy: 'deepest', discovered: 3, kept: 1 });
+
+    fetcher.stateFor.set('SundaeSwapV1:deep', deep);
+    const result = await source.refresh();
+
+    expect(fetcher.poolStateCalls.map((p) => p.identifier)).toEqual(['deep']);
+    expect(result.pools.map((p) => p.identifier)).toEqual(['deep']);
+  });
+
+  it('all (the class default) keeps every discovered pool and refreshes each one', async () => {
+    const { log } = makeLog();
+    const shallow = shape('MinswapV2', 'shallow', 'addr-shallow', 100n);
+    const mid = shape('MinswapV2', 'mid', 'addr-mid', 200n);
+    const deep = shape('SundaeSwapV1', 'deep', 'addr-deep', 300n);
+    const fetcher = new FakeFetcher({ MinswapV2: [shallow, mid], SundaeSwapV1: [deep] });
+    // No refreshPolicy given: proves the class default ('all') keeps existing behavior unchanged.
+    const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher });
+
+    await source.discover([PAIR]);
+
+    expect(source.knownPoolCount()).toBe(3);
+
+    await source.refresh();
+
+    expect(fetcher.poolStateCalls.length).toBe(3);
+  });
+
+  it('breaks an ADA-reserve tie deterministically by smallest identifier, regardless of discovery order', async () => {
+    const { log } = makeLog();
+    const bPool = shape('MinswapV2', 'b-pool', 'addr-b', 500n);
+    const aPool = shape('SundaeSwapV1', 'a-pool', 'addr-a', 500n);
+    // b-pool is discovered before a-pool: a naive "first (or last) wins" tie-break would be
+    // order-dependent instead of deterministic.
+    const fetcher = new FakeFetcher({ MinswapV2: [bPool], SundaeSwapV1: [aPool] });
+    const source = new DexterPoolSource({
+      blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher, refreshPolicy: 'deepest',
+    });
+
+    await source.discover([PAIR]);
+    fetcher.stateFor.set('SundaeSwapV1:a-pool', aPool);
+    const result = await source.refresh();
+
+    expect(result.pools.map((p) => p.identifier)).toEqual(['a-pool']);
+  });
+
+  it('a token with no discovered pool is simply absent from the pruned set, not an error', async () => {
+    const { log } = makeLog();
+    const only = shape('MinswapV2', 'only', 'addr-only', 100n);
+    const fetcher = new FakeFetcher({ MinswapV2: [only], SundaeSwapV1: [] });
+    const source = new DexterPoolSource({
+      blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher, refreshPolicy: 'deepest',
+    });
+
+    const result = await source.discover([PAIR, PAIR2]);
+
+    expect(source.knownPoolCount()).toBe(1);
+    expect(result.pools.map((p) => p.identifier)).toEqual(['only']);
   });
 });
 

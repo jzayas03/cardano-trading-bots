@@ -28,16 +28,29 @@
  *       the first real collector tick (run 50, 2026-09-06, mainnet): Splash alone burned roughly 24k
  *       of the tick's 39,781 Blockfrost calls and still contributed zero pools. */
 export const VENUES = {
-  Minswap: { poolType: 'cpmm', discovery: 'dexter' },
-  MinswapV2: { poolType: 'cpmm', discovery: 'dexter' },
-  SundaeSwapV1: { poolType: 'cpmm', discovery: 'dexter' },
-  SundaeSwapV3: { poolType: 'cpmm', discovery: 'dexter' },
-  MuesliSwap: { poolType: 'cpmm', discovery: 'dexter' },
-  WingRiders: { poolType: 'cpmm', discovery: 'dexter' },
-  WingRidersV2: { poolType: 'cpmm', discovery: 'dexter' },
-  VyFinance: { poolType: 'cpmm', discovery: 'unsupported' },
-  Splash: { poolType: 'cpmm', discovery: 'unsupported' },
-} as const satisfies Record<string, { poolType: 'cpmm'; discovery: 'dexter' | 'per-token-address' | 'unsupported' }>;
+  // Minswap v1 is `enabledByDefault: false`: run 50 (2026-09-06, real key, mainnet) shows it costs
+  // ~9,600 discovery calls/day for 14 shallow pools that are, for every token but AGIX, never the
+  // deepest pool for their token — the deepest pool per token is on Minswap v2 for 19/20 tokens, and
+  // candles already only read the deepest pool per token per tick (`buildCandles` in `@ctb/candles`),
+  // so discovering and refreshing those 14 pools spends quota the candle pipeline never uses. Still
+  // requestable explicitly via `COLLECT_VENUES=Minswap,...`.
+  Minswap: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: false },
+  MinswapV2: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  SundaeSwapV1: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  SundaeSwapV3: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  MuesliSwap: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  WingRiders: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  WingRidersV2: { poolType: 'cpmm', discovery: 'dexter', enabledByDefault: true },
+  // Unsupported venues are excluded from DEFAULT_VENUES regardless of enabledByDefault (see the
+  // filter below); the flag is still `false` here so the two facts — "can this be discovered at all"
+  // and "should a working venue be on by default" — don't silently diverge for either of these two.
+  VyFinance: { poolType: 'cpmm', discovery: 'unsupported', enabledByDefault: false },
+  Splash: { poolType: 'cpmm', discovery: 'unsupported', enabledByDefault: false },
+} as const satisfies Record<string, {
+  poolType: 'cpmm';
+  discovery: 'dexter' | 'per-token-address' | 'unsupported';
+  enabledByDefault: boolean;
+}>;
 
 export type DexName = keyof typeof VENUES;
 export const VENUE_NAMES = Object.keys(VENUES) as DexName[];
@@ -58,8 +71,12 @@ export function isDexName(name: string): name is DexName {
   return Object.prototype.hasOwnProperty.call(VENUES, name);
 }
 
-/** Every venue whose on-chain discovery actually works (excludes `discovery: 'unsupported'`, i.e.
- *  VyFinance and Splash — see the header comment above for why Splash is unsupported too despite
- *  having a bounded discovery strategy). This is `Config.venues`' default so a fresh checkout
- *  doesn't fail every tick on a venue Dexter itself can't discover. */
-export const DEFAULT_VENUES: DexName[] = VENUE_NAMES.filter((name) => VENUES[name].discovery !== 'unsupported');
+/** Every venue whose on-chain discovery actually works AND is `enabledByDefault` (excludes
+ *  `discovery: 'unsupported'` — VyFinance and Splash, see the header comment above for why Splash is
+ *  unsupported too despite having a bounded discovery strategy — and excludes Minswap v1, whose
+ *  `enabledByDefault: false` is explained on that entry above). This is `Config.venues`' default so a
+ *  fresh checkout doesn't fail every tick on a venue Dexter can't discover, and doesn't spend quota
+ *  discovering/refreshing pools the candle pipeline never reads. */
+export const DEFAULT_VENUES: DexName[] = VENUE_NAMES.filter(
+  (name) => VENUES[name].discovery !== 'unsupported' && VENUES[name].enabledByDefault,
+);
