@@ -30,4 +30,14 @@ describe('parseBacktestArgs', () => {
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast='])).toThrow(/numeric/);
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', '=5'])).toThrow(/numeric/);
   });
+
+  // Finding M7: `'fast=1=2'.split('=')` destructures to ['fast', '1'], so a typo silently changed
+  // the run to fast=1 instead of stopping it. Split on the first '=' only; the rest is the value,
+  // and a value containing '=' is not numeric, so it is rejected.
+  it('splits --param on the first = only and rejects a value containing another one', () => {
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast=1=2'])).toThrow(/numeric/);
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast'])).toThrow(/numeric/);
+    // A negative value still parses: the '=' split must not swallow the sign.
+    expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'drift=-1.5']).params.drift).toBe(-1.5);
+  });
 });

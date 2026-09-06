@@ -4,7 +4,16 @@ import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 
-const adaStr = (lovelace: string | bigint): string => (Number(BigInt(lovelace)) / 1_000_000).toFixed(6);
+/**
+ * Lovelace to ADA with six decimals, in bigint. `Number(BigInt(x)) / 1e6` loses precision above
+ * 2^53 lovelace (~9.007 billion ADA) and, more to the point, prints an approximation of a number the
+ * whole report exists to make exact (finding M10).
+ */
+export const adaStr = (lovelace: string | bigint): string => {
+  const v = BigInt(lovelace);
+  const abs = v < 0n ? -v : v;
+  return `${v < 0n ? '-' : ''}${abs / 1_000_000n}.${(abs % 1_000_000n).toString().padStart(6, '0')}`;
+};
 
 /**
  * Coverage belongs in the header, next to the provenance: a return figure computed over 4400 sparse

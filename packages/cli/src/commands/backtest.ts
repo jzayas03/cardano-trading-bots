@@ -1,11 +1,11 @@
 import { PgCandleRepo, PgExternalRepo } from '@ctb/candles';
-import { PgSnapshotRepo } from '@ctb/collector';
 import { createPool } from '@ctb/db';
 import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES } from '@ctb/engine';
-import { DEFAULT_COSTS, SimExecutor, type FillModel, type VenueCosts } from '@ctb/sim-executor';
+import { SimExecutor, VENUE_COSTS, type FillModel, type VenueCosts } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
+import { ensureTokens } from '../ensureTokens.js';
 import { externalCandleFeed, localCandleFeed } from '../feeds.js';
 import { printReport } from './report.js';
 import { parseIsoDate } from './backfill.js';
@@ -24,6 +24,18 @@ function num(flag: string, v: string | undefined): number {
   const n = Number(v);
   if (v === undefined || v === '' || !Number.isFinite(n) || n < 0) throw new Error(`${flag} needs a non-negative number, got ${v ?? '(missing)'}\n${USAGE}`);
   return n;
+}
+
+/**
+ * Splits `key=value` on the FIRST '=' only. `'a=1=2'.split('=')` destructured to ['a', '1'], so
+ * `--param a=1=2` was quietly accepted as a=1 — a typo silently changed the run rather than stopping
+ * it. Anything left in the value is then rejected by the numeric check, '=' included (finding M7).
+ */
+function splitParam(raw: string | undefined): [string, string | undefined] {
+  const s = raw ?? '';
+  const i = s.indexOf('=');
+  if (i <= 0) return ['', undefined];
+  return [s.slice(0, i), s.slice(i + 1)];
 }
 
 export function parseBacktestArgs(args: string[]): BacktestArgs {
@@ -50,7 +62,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
         out.maxGapMin = n; i++; break;
       }
       case '--param': {
-        const [k, v] = (val ?? '').split('=');
+        const [k, v] = splitParam(val);
         const n = Number(v);
         if (!k || v === undefined || v.trim() === '' || !Number.isFinite(n)) throw new Error(`--param needs key=numeric value, got ${val ?? '(missing)'}\n${USAGE}`);
         out.params[k] = n; i++; break;
@@ -66,10 +78,9 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
 const ada = (n: number): bigint => BigInt(Math.round(n * 1_000_000));
 
 /**
- * Pure builder for the `runs.params` JSON blob, extracted so cost provenance (review finding,
- * fix round 1) can be unit-tested without a database: default costs come from
- * `@ctb/sim-executor`'s `DEFAULT_COSTS`, not re-hardcoded literals, so a change to the shared
- * default is reflected here automatically instead of drifting.
+ * Pure builder for the `runs.params` JSON blob, extracted so cost provenance can be unit-tested
+ * without a database. Costs come from `@ctb/sim-executor`'s own tables, never re-hardcoded here, so
+ * a change to what the executor charges is reflected in run provenance instead of drifting from it.
  */
 export function buildRunParams(
   strategyDefaults: Record<string, number>,
@@ -87,9 +98,19 @@ export function buildRunParams(
     // The stale-fill bound is part of the fill model, so it belongs in the run's provenance: two runs
     // over the same window with different bounds are not comparable (finding C3).
     maxGapMs,
+    // Finding I1: this used to record ONE flat batcher/network pair, which is not what the executor
+    // charges — it charges per venue, from VENUE_COSTS, with the run's overrides applied on top.
+    // Both halves are recorded: `venues` is the table as it stood for this run, `overrides` is what
+    // the operator changed, and an override wins over the table for every venue.
     costs: {
-      batcherFeeLovelace: (costOverrides.batcherFeeLovelace ?? DEFAULT_COSTS.batcherFeeLovelace).toString(),
-      networkFeeLovelace: (costOverrides.networkFeeLovelace ?? DEFAULT_COSTS.networkFeeLovelace).toString(),
+      overrides: {
+        ...(costOverrides.batcherFeeLovelace !== undefined ? { batcherFeeLovelace: costOverrides.batcherFeeLovelace.toString() } : {}),
+        ...(costOverrides.networkFeeLovelace !== undefined ? { networkFeeLovelace: costOverrides.networkFeeLovelace.toString() } : {}),
+      },
+      venues: Object.fromEntries(Object.entries(VENUE_COSTS).map(([venue, c]) => [venue, {
+        batcherFeeLovelace: c.batcherFeeLovelace.toString(),
+        networkFeeLovelace: c.networkFeeLovelace.toString(),
+      }])),
     },
   };
 }
@@ -104,9 +125,7 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
   if (!token) throw new Error(`unknown ticker ${a.ticker}; not in universe.json`);
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   try {
-    // runs.base_unit is FK'd to tokens(unit); sync the universe in first, exactly as
-    // backfill.ts/candles.ts do before their own FK'd writes.
-    await new PgSnapshotRepo(db).syncTokens(universe.tokens, { seededAt: universe.seededAt, seedSource: universe.seedSource });
+    await ensureTokens(db, universe);
     const runs = new PgRunRepo(db);
     const gitSha = gitShaOrUnknown(process.cwd());
     if (gitSha === 'unknown') log.warn({}, 'git sha unknown: run provenance is incomplete');

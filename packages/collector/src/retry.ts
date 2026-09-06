@@ -35,7 +35,10 @@ export async function retryWithBackoff<T>(fn: () => Promise<T>, o: RetryOptions)
       if (attempt === o.attempts) break;
       const cap = Math.min(o.maxMs, o.baseMs * 2 ** (attempt - 1));
       const delay = Math.floor(cap * random());
-      if (spent + cap > o.budgetMs) {
+      // Compare like for like (finding I7): `spent` only ever accumulates the jittered DELAY, so
+      // testing the un-jittered CAP against it abandoned a budget that had not been spent — under
+      // full jitter the delay averages half the cap, so roughly half the budget went unused.
+      if (spent + delay > o.budgetMs) {
         throw new Error(`${(err as Error).message ?? String(err)} (retry budget ${o.budgetMs} ms exhausted after ${attempt} attempts)`);
       }
       o.onRetry?.({ attempt, delayMs: delay, message: (err as Error).message ?? String(err) });
