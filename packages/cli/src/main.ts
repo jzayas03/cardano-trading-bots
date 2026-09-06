@@ -5,6 +5,7 @@ import { backtestCommand } from './commands/backtest.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
 import { migrateCommand } from './commands/migrate.js';
+import { paperCommand } from './commands/paper.js';
 import { reportCommand } from './commands/report.js';
 import { statusCommand } from './commands/status.js';
 
@@ -31,11 +32,14 @@ async function main(): Promise<void> {
       return backtestCommand(log, rest);
     case 'report':
       return reportCommand(log, rest);
+    case 'paper':
+      return paperCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
         'backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
-        'report <run-id>>',
+        'report <run-id>|' +
+        'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec 300] [--grace-sec 60] [--max-gap-min 15] [--rehearsal] [--param k=v]...>',
       );
       process.exitCode = 2;
   }
