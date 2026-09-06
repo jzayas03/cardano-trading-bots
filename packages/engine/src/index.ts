@@ -3,3 +3,4 @@ export type { Candle, EquityPoint, Executor, FillResult, Intent, OrderRecord, Po
 export { applyFill, equityLovelace } from './portfolio.js';
 export { runEngine, summarize, type RunEngineDeps } from './loop.js';
 export { maCrossover, STRATEGIES } from './strategies/index.js';
+export { gitShaOrUnknown, PgRunRepo, type NewRun, type RunRepo, type RunRow } from './repo.js';
