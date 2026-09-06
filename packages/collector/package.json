@@ -1,0 +1,13 @@
+{
+  "name": "@ctb/collector",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@ctb/db": "*",
+    "@ctb/universe": "*",
+    "@indigo-labs/dexter": "5.4.10",
+    "pg": "^8.13.0"
+  },
+  "devDependencies": { "@types/pg": "^8.11.0" }
+}
