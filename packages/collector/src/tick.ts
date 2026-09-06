@@ -26,6 +26,14 @@ export interface TickDeps {
   intervalSec: number;
   rediscoverAfterMs: number;
   state: CollectorState;
+  /**
+   * The tick bucket to write, pinned by the caller. The `collect` loop computes the boundary it is
+   * about to sleep toward BEFORE sleeping and passes it back in here; if the tick were instead
+   * bucketed from `now()` after an early wake, it could land one bucket EARLIER than the boundary
+   * actually slept for. Omitted for the immediate (non-boundary) first tick, which still derives
+   * from `now()`.
+   */
+  tickTs?: Date;
 }
 
 /**
@@ -34,7 +42,7 @@ export interface TickDeps {
  */
 export async function runTick(d: TickDeps): Promise<RunSummary> {
   const startedAt = d.now();
-  const tickTs = bucketTick(startedAt, d.intervalSec);
+  const tickTs = d.tickTs ?? bucketTick(startedAt, d.intervalSec);
   const runId = await d.repo.startRun(tickTs, startedAt);
   d.source.resetProviderCalls();
   const errors: RunError[] = [];

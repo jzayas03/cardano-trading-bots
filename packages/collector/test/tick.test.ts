@@ -50,9 +50,14 @@ class FakeRepo implements SnapshotRepo {
   rows: SnapshotRow[] = [];
   summaries: RunSummary[] = [];
   nextId = 1;
+  constructor(private readonly throwOnInsert = false) {}
   async syncTokens() {}
   async startRun() { return this.nextId++; }
-  async insertSnapshots(_runId: number, rows: SnapshotRow[]) { this.rows.push(...rows); return rows.length; }
+  async insertSnapshots(_runId: number, rows: SnapshotRow[]) {
+    if (this.throwOnInsert) throw new Error('db down');
+    this.rows.push(...rows);
+    return rows.length;
+  }
   async finishRun(_runId: number, _at: Date, s: RunSummary) { this.summaries.push(s); }
   async lastRuns() { return []; }
 }
@@ -145,6 +150,26 @@ describe('runTick', () => {
     expect(repo.rows.length).toBe(rowsBefore);
     expect(repo.summaries.at(-1)?.errors[0]).toEqual({ scope: 'refresh', message: 'boom' });
     expect(repo.summaries.at(-1)?.discovered).toBe(false);
+  });
+
+  // F7: an early wake from sleep() would otherwise re-derive the tick bucket from now() at write
+  // time, which can land one bucket EARLIER than the boundary the caller actually slept toward.
+  it('uses the caller-provided tickTs instead of deriving one from now(), so an early wake cannot bucket backwards', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a')]);
+    const repo = new FakeRepo();
+    // fixedNow() buckets to 15:05:00Z; the caller pins the tick it was actually sleeping toward.
+    const pinnedTickTs = new Date('2026-09-05T15:10:00Z');
+    const s = await runTick({ ...deps(source, repo), tickTs: pinnedTickTs });
+    expect(s.poolsWritten).toBe(1);
+    expect(repo.rows[0]?.tickTs).toEqual(pinnedTickTs);
+  });
+
+  // F16: insertSnapshots is the one thing runTick must NOT swallow — a write failure there means
+  // the tick's data never landed, which is worse than a recorded source failure.
+  it('propagates a repository failure from insertSnapshots instead of swallowing it', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a')]);
+    const repo = new FakeRepo(true);
+    await expect(runTick(deps(source, repo))).rejects.toThrow('db down');
   });
 });
 
