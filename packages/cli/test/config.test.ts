@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_VENUES, VENUE_NAMES } from '@ctb/collector';
 import { loadConfig } from '../src/config.js';
 
 const base = { DATABASE_URL: 'postgres://ctb:x@localhost:5433/ctb' };
@@ -6,7 +7,9 @@ const base = { DATABASE_URL: 'postgres://ctb:x@localhost:5433/ctb' };
 describe('loadConfig', () => {
   it('applies defaults', () => {
     const c = loadConfig(base, { blockfrost: false });
-    expect(c).toEqual({ databaseUrl: base.DATABASE_URL, blockfrostProjectId: null, intervalSec: 300, logLevel: 'info' });
+    expect(c).toEqual({
+      databaseUrl: base.DATABASE_URL, blockfrostProjectId: null, intervalSec: 300, logLevel: 'info', venues: DEFAULT_VENUES,
+    });
   });
 
   it('requires BLOCKFROST_PROJECT_ID only when asked', () => {
@@ -32,9 +35,36 @@ describe('loadConfig', () => {
       blockfrostProjectId: null,
       intervalSec: 300,
       logLevel: 'info',
+      venues: DEFAULT_VENUES,
     });
     expect(() => loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: true })).toThrow(
       /BLOCKFROST_PROJECT_ID/,
     );
+  });
+
+  it('defaults venues to every Dexter venue except VyFinance', () => {
+    expect(DEFAULT_VENUES).not.toContain('VyFinance');
+    expect(loadConfig(base, { blockfrost: false }).venues).toEqual(DEFAULT_VENUES);
+  });
+
+  it('parses an explicit COLLECT_VENUES list', () => {
+    const c = loadConfig({ ...base, COLLECT_VENUES: 'Minswap,SundaeSwapV3' }, { blockfrost: false });
+    expect(c.venues).toEqual(['Minswap', 'SundaeSwapV3']);
+  });
+
+  it('rejects an unknown venue in COLLECT_VENUES, naming it', () => {
+    expect(() => loadConfig({ ...base, COLLECT_VENUES: 'Minswap,NotARealVenue' }, { blockfrost: false })).toThrow(
+      /COLLECT_VENUES.*NotARealVenue/,
+    );
+  });
+
+  it('treats an empty COLLECT_VENUES as unset (default), same as a bare `.env.example` line', () => {
+    expect(loadConfig({ ...base, COLLECT_VENUES: '' }, { blockfrost: false }).venues).toEqual(DEFAULT_VENUES);
+  });
+
+  it('can include VyFinance explicitly even though it is excluded by default', () => {
+    expect(VENUE_NAMES).toContain('VyFinance');
+    const c = loadConfig({ ...base, COLLECT_VENUES: 'VyFinance' }, { blockfrost: false });
+    expect(c.venues).toEqual(['VyFinance']);
   });
 });

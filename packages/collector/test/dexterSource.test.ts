@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
+import { Asset } from '@indigo-labs/dexter';
 import type { Pair } from '@ctb/universe';
 import {
   DefaultPoolFetcher, DexterPoolSource,
-  type DexName, type Logger, type LiquidityPoolShape, type PoolFetcher, type PoolStateClient,
+  type DexName, type FetcherAsset, type Logger, type LiquidityPoolShape, type PoolFetcher, type PoolStateClient,
+  type SplashDiscoveryClient,
 } from '../src/index.js';
 
 const PAIR: Pair = {
@@ -261,5 +263,106 @@ describe('DefaultPoolFetcher.poolState', () => {
     await expect(fetcher.poolState(pool)).rejects.toThrow(/after 4 attempts/);
     expect(calls).toBe(4);
     expect(slept.length).toBe(3);
+  });
+});
+
+describe('DefaultPoolFetcher bounded Splash discovery', () => {
+  const TOKEN1 = { policyId: 'aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111aaaa1111', nameHex: '544f4b454e31' };
+  const TOKEN2 = { policyId: 'bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222bbbb2222', nameHex: '544f4b454e32' };
+  const OTHER_TOKEN = { policyId: 'cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333cccc3333', nameHex: '544f4b454e33' };
+  const tokenPairs: Array<['lovelace', Asset]> = [
+    ['lovelace', new Asset(TOKEN1.policyId, TOKEN1.nameHex, 0)],
+    ['lovelace', new Asset(TOKEN2.policyId, TOKEN2.nameHex, 0)],
+  ];
+  const PAIR1: Pair = {
+    base: { ticker: 'T1', policyId: TOKEN1.policyId, assetNameHex: TOKEN1.nameHex, decimals: 0, category: 'Meme', unit: `${TOKEN1.policyId}${TOKEN1.nameHex}` },
+    quote: 'lovelace',
+  };
+
+  function splashPool(id: string, address: string, token: { policyId: string; nameHex: string }): LiquidityPoolShape {
+    return {
+      dex: 'Splash', identifier: id, address,
+      assetA: 'lovelace', assetB: { policyId: token.policyId, nameHex: token.nameHex, decimals: 0 },
+      reserveA: 100n, reserveB: 50n, poolFeePercent: 0.3,
+    };
+  }
+
+  /** Fake seam so these tests never touch Dexter or the network. Keys utxo results by
+   *  `address:policyId+nameHex`, matching how `discoverBounded` queries one address/token at a time. */
+  class FakeSplashClient implements SplashDiscoveryClient {
+    utxoCalls: Array<{ address: string; asset: FetcherAsset }> = [];
+    constructor(
+      private readonly addressList: string[],
+      private readonly utxosFor: Map<string, unknown[] | Error>,
+      private readonly poolForUtxo: Map<unknown, LiquidityPoolShape | undefined>,
+    ) {}
+
+    async addresses(): Promise<string[]> { return this.addressList; }
+
+    async utxos(address: string, asset: FetcherAsset): Promise<unknown[]> {
+      this.utxoCalls.push({ address, asset });
+      const result = this.utxosFor.get(`${address}:${asset.policyId}${asset.nameHex}`);
+      if (result instanceof Error) throw result;
+      return result ?? [];
+    }
+
+    async poolFromUtxo(utxo: unknown): Promise<LiquidityPoolShape | undefined> { return this.poolForUtxo.get(utxo); }
+  }
+
+  it('queries every address x token, dedupes by identifier, and drops non-matching pools', async () => {
+    const { log } = makeLog();
+    const utxoA1 = { id: 'addr1-token1' };
+    const utxoA2 = { id: 'addr1-token2' };
+    const utxoB1 = { id: 'addr2-token1-dup' }; // resolves to the same pool identifier as utxoA1
+    const utxoB2 = { id: 'addr2-token2-mismatch' }; // resolves to a pool for a token not in tokenPairs
+
+    const poolForUtxo = new Map<unknown, LiquidityPoolShape | undefined>([
+      [utxoA1, splashPool('pool-1', 'addr1', TOKEN1)],
+      [utxoA2, splashPool('pool-2', 'addr1', TOKEN2)],
+      [utxoB1, splashPool('pool-1', 'addr2', TOKEN1)],
+      [utxoB2, splashPool('pool-mismatch', 'addr2', OTHER_TOKEN)],
+    ]);
+    const utxosFor = new Map<string, unknown[]>([
+      [`addr1:${TOKEN1.policyId}${TOKEN1.nameHex}`, [utxoA1]],
+      [`addr1:${TOKEN2.policyId}${TOKEN2.nameHex}`, [utxoA2]],
+      [`addr2:${TOKEN1.policyId}${TOKEN1.nameHex}`, [utxoB1]],
+      [`addr2:${TOKEN2.policyId}${TOKEN2.nameHex}`, [utxoB2]],
+    ]);
+    const splashClient = new FakeSplashClient(['addr1', 'addr2'], utxosFor, poolForUtxo);
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000, splashClient,
+    });
+
+    const pools = await fetcher.discoverVenue('Splash', tokenPairs);
+
+    // 2 addresses x 2 tokens = 4 asset-filtered utxos calls, never one unfiltered scan.
+    expect(splashClient.utxoCalls.length).toBe(4);
+    expect(pools.map((p) => p.identifier).sort()).toEqual(['pool-1', 'pool-2']);
+  });
+
+  it('surfaces a failed address/token query as one discover:Splash RunError while keeping pools found elsewhere', async () => {
+    const { log } = makeLog();
+    const goodUtxo = { id: 'good-utxo' };
+    const goodPool = splashPool('good-pool', 'addr1', TOKEN1);
+    const splashClient: SplashDiscoveryClient = {
+      addresses: async () => ['addr1', 'addr2'],
+      utxos: async (address) => {
+        if (address === 'addr1') return [goodUtxo];
+        throw new Error('blockfrost 502');
+      },
+      poolFromUtxo: async (utxo) => (utxo === goodUtxo ? goodPool : undefined),
+    };
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000, splashClient,
+    });
+    const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['Splash'], fetcher });
+
+    const result = await source.discover([PAIR1]);
+
+    expect(result.pools.map((p) => p.identifier)).toEqual(['good-pool']);
+    // 2 addresses x 1 token = 1 succeeding + 1 failing query; the failure is reported once, by scope,
+    // not once per failed call, and does not also trip the "returned no pools" failure since a pool
+    // was found.
+    expect(result.failures).toEqual([{ scope: 'discover:Splash', message: '1 address/token queries failed' }]);
   });
 });

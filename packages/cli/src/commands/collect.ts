@@ -18,14 +18,16 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   // deployment silently ran the built-in 60 s — longer than a 60 s collector interval would allow,
   // and unrelated to whatever interval is configured. Half the tick is the bound that makes sense:
   // retries that outlive their own tick only delay the next one.
-  const source = new DexterPoolSource({ blockfrostProjectId: cfg.blockfrostProjectId as string, log, retryBudgetMs: cfg.intervalSec * 500 });
+  const source = new DexterPoolSource({
+    blockfrostProjectId: cfg.blockfrostProjectId as string, log, retryBudgetMs: cfg.intervalSec * 500, venues: cfg.venues,
+  });
   const state: CollectorState = { lastDiscoveryAt: null };
   const stop = new AbortController();
   const onSignal = (sig: string) => { log.info({ sig }, 'stopping after current tick'); stop.abort(); };
   process.once('SIGINT', () => onSignal('SIGINT'));
   process.once('SIGTERM', () => onSignal('SIGTERM'));
 
-  log.info({ pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once }, 'collector starting');
+  log.info({ pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues }, 'collector starting');
   // The immediate first tick has no boundary to pin to, so it still derives tickTs from now().
   // Every tick after that writes the exact boundary the loop slept toward (computed below, BEFORE
   // sleeping) instead of re-deriving one from now() on wake — an early wake re-derived from now()

@@ -3,14 +3,58 @@ import type { Pair } from '@ctb/universe';
 import type { RunError } from './repo.js';
 import type { PoolSource, SourceResult } from './source.js';
 import type { Logger, PoolLike } from './types.js';
-import { VENUE_NAMES, type DexName } from './venues.js';
+import { VENUE_NAMES, VENUES, type DexName } from './venues.js';
 import { collectPoolShapes, collectRefreshedShape, type LiquidityPoolShape } from './poolShape.js';
-import type { PoolFetcher } from './poolFetcher.js';
+import type { FetcherAsset, PoolFetcher } from './poolFetcher.js';
 import { isTransientHttpError, retryWithBackoff } from './retry.js';
 
 export type { LiquidityPoolShape } from './poolShape.js';
 export { toPoolLike } from './poolShape.js';
 export type { FetcherAsset, PoolFetcher } from './poolFetcher.js';
+
+/**
+ * Venues whose Dexter-native discovery is unusable and are instead discovered per address/token via
+ * `DefaultPoolFetcher`'s bounded path (see the file header comment on `discoverBounded` below).
+ * Derived from `VENUES[*].discovery` in `venues.ts` so the fact lives in one place — flipping a
+ * venue's `discovery` to `'per-token-address'` there is enough to opt it into this path, though the
+ * default `splashClient` wiring below is still Splash-specific until another venue needs it too.
+ */
+const BOUNDED_DISCOVERY: Partial<Record<DexName, 'per-token-address'>> = Object.fromEntries(
+  VENUE_NAMES
+    .filter((name) => VENUES[name].discovery === 'per-token-address')
+    .map((name) => [name, 'per-token-address' as const]),
+);
+
+/**
+ * Seam for the bounded per-address/token Splash discovery (`DefaultPoolFetcher.discoverBounded`).
+ * `addresses()`/`utxos()`/`poolFromUtxo()` mirror the three Dexter/Blockfrost calls the default
+ * (production) implementation makes; a unit test injects a fake here via
+ * `DefaultPoolFetcherOptions.splashClient` instead of touching Dexter or the network.
+ */
+export interface SplashDiscoveryClient {
+  /** The venue's fixed pool addresses (Dexter's own `BaseDex.liquidityPoolAddresses`). */
+  addresses(): Promise<string[]>;
+  /** UTxOs at one address holding the given asset (Blockfrost's asset-filtered UTxO endpoint). */
+  utxos(address: string, asset: FetcherAsset): Promise<unknown[]>;
+  /** Parses one UTxO into pool state, or `undefined` if it isn't a pool UTxO for this asset. */
+  poolFromUtxo(utxo: unknown): Promise<LiquidityPoolShape | undefined>;
+}
+
+/** `pool`'s two sides as Dexter's own `Asset.identifier()` format: `'lovelace'` or `policyId + nameHex`. */
+function poolSideIdentifiers(pool: LiquidityPoolShape): [string, string] {
+  const idOf = (side: LiquidityPoolShape['assetA']) => (side === 'lovelace' ? 'lovelace' : `${side.policyId}${side.nameHex}`);
+  return [idOf(pool.assetA), idOf(pool.assetB)];
+}
+
+/** True if `pool` is an ADA pair for one of the requested `tokenPairs`, compared the way Dexter's own
+ *  `tokensMatch` does: by identifier (`policyId + nameHex`), not object identity. */
+function poolMatchesRequestedPair(pool: LiquidityPoolShape, tokenPairs: ReadonlyArray<['lovelace', Asset]>): boolean {
+  const [idA, idB] = poolSideIdentifiers(pool);
+  return tokenPairs.some(([, asset]) => {
+    const tokenId = asset.identifier();
+    return (idA === 'lovelace' && idB === tokenId) || (idB === 'lovelace' && idA === tokenId);
+  });
+}
 
 /** Counts provider method calls so each tick can report its Blockfrost cost. Paginated calls count once per method call. */
 class CountingBlockfrostProvider extends BlockfrostProvider {
@@ -42,6 +86,9 @@ export interface DefaultPoolFetcherOptions {
   poolStateClient?: PoolStateClient;
   /** Injectable seam for the retry backoff's sleep, so a unit test proving retry behavior does not wait on a real timer. Omit for a real timer. */
   sleep?: (ms: number) => Promise<void>;
+  /** Injectable seam for tests covering the bounded Splash discovery path. Omit to use the real
+   *  Dexter/Blockfrost-backed client (`this.dexter.dexByName('Splash')` + `this.provider.utxos`). */
+  splashClient?: SplashDiscoveryClient;
 }
 
 /** The real `PoolFetcher`: wraps Dexter exactly as `DexterPoolSource` always has. Constructing it is
@@ -54,6 +101,10 @@ class DefaultPoolFetcher implements PoolFetcher {
   private readonly retryBudgetMs: number;
   private readonly poolStateClient: PoolStateClient;
   private readonly sleep?: (ms: number) => Promise<void>;
+  private readonly splashClient: SplashDiscoveryClient;
+  /** Address/token queries that failed on the most recent `discoverBounded` call, per venue. Read by
+   *  `DexterPoolSource.discover` right after `discoverVenue` returns, via `partialFailures(venue)`. */
+  private readonly partialFailuresByVenue = new Map<DexName, number>();
 
   constructor(opts: DefaultPoolFetcherOptions) {
     this.provider = new CountingBlockfrostProvider({ url: opts.url, projectId: opts.projectId }, { timeout: 20_000, retries: 2 });
@@ -71,14 +122,76 @@ class DefaultPoolFetcher implements PoolFetcher {
         return state as unknown as LiquidityPoolShape | undefined;
       },
     };
+    // Production wiring for the bounded Splash path: the same Dexter DEX object and provider used
+    // above, just called directly instead of through Dexter's own unbounded FetchRequest.
+    this.splashClient = opts.splashClient ?? {
+      addresses: async () => {
+        const dex = this.dexter.dexByName('Splash') as unknown as
+          { liquidityPoolAddresses(provider: unknown): Promise<string[]> } | undefined;
+        if (!dex) throw new Error("Dexter has no 'Splash' venue registered");
+        return dex.liquidityPoolAddresses(this.provider);
+      },
+      utxos: async (address, asset) => this.provider.utxos(address, new Asset(asset.policyId, asset.nameHex, asset.decimals)),
+      poolFromUtxo: async (utxo) => {
+        const dex = this.dexter.dexByName('Splash') as unknown as
+          { liquidityPoolFromUtxo(provider: unknown, utxo: unknown): Promise<LiquidityPoolShape | undefined> } | undefined;
+        if (!dex) throw new Error("Dexter has no 'Splash' venue registered");
+        const pool = await dex.liquidityPoolFromUtxo(this.provider, utxo);
+        return pool as unknown as LiquidityPoolShape | undefined;
+      },
+    };
   }
 
   providerCalls(): number { return this.provider.calls; }
   resetProviderCalls(): void { this.provider.calls = 0; }
+  partialFailures(venue: DexName): number { return this.partialFailuresByVenue.get(venue) ?? 0; }
 
   async discoverVenue(venue: DexName, tokenPairs: Array<['lovelace', Asset]>): Promise<LiquidityPoolShape[]> {
+    if (BOUNDED_DISCOVERY[venue] === 'per-token-address') {
+      return this.discoverBounded(venue, tokenPairs);
+    }
     const pools = await this.dexter.newFetchRequest().onDexs(venue).forTokenPairs(tokenPairs).getLiquidityPools();
     return pools as unknown as LiquidityPoolShape[];
+  }
+
+  /**
+   * Bounded alternative to Dexter's `FetchRequest` for venues like Splash, whose own on-chain
+   * discovery (`liquidityPools()`) scans every UTxO at a fixed set of pool addresses unfiltered —
+   * for Splash that's thousands of tiny pools per tick (measured: a single tick ran 50+ minutes
+   * without finishing). Blockfrost's `/addresses/{address}/utxos/{asset}` filters by asset, so this
+   * queries only the requested token(s) at each of the venue's addresses instead: about
+   * `addresses.length * tokenPairs.length` calls instead of one call per UTxO at those addresses.
+   *
+   * One address/token query failing must not drop pools a different query already found — each is
+   * its own try/catch, counted into `partialFailuresByVenue` and logged at warn, and surfaced by
+   * `DexterPoolSource.discover` as one `discover:${venue}` RunError once discovery otherwise succeeds.
+   * A failure listing the venue's addresses at all (`this.splashClient.addresses()`) is not caught
+   * here and instead propagates to `DexterPoolSource.discover`'s own catch, which already reports a
+   * total venue failure — the same as any other on-chain discovery error.
+   */
+  private async discoverBounded(venue: DexName, tokenPairs: Array<['lovelace', Asset]>): Promise<LiquidityPoolShape[]> {
+    const addresses = await this.splashClient.addresses();
+    const found = new Map<string, LiquidityPoolShape>();
+    let failures = 0;
+    for (const address of addresses) {
+      for (const [, asset] of tokenPairs) {
+        try {
+          const utxos = await this.splashClient.utxos(address, { policyId: asset.policyId, nameHex: asset.nameHex, decimals: asset.decimals });
+          for (const utxo of utxos) {
+            const pool = await this.splashClient.poolFromUtxo(utxo);
+            if (pool && poolMatchesRequestedPair(pool, tokenPairs)) {
+              found.set(pool.identifier, pool);
+            }
+          }
+        } catch (err) {
+          failures++;
+          const message = (err as Error).message ?? String(err);
+          this.log.warn({ venue, address, asset: asset.identifier(), err: message }, 'bounded discovery query failed');
+        }
+      }
+    }
+    this.partialFailuresByVenue.set(venue, failures);
+    return [...found.values()];
   }
 
   // Dexter's `retries` option is inert for BlockfrostProvider (its constructor reads only
@@ -184,6 +297,15 @@ export class DexterPoolSource implements PoolSource {
           };
           failures.push(failure);
           this.log.warn({ venue }, failure.message);
+        }
+        // Bounded-discovery venues (Splash) query one address/token pair at a time; a query failing
+        // must not drop the pools other queries already found, but it also must not vanish silently —
+        // report it as one venue-scoped RunError, same shape as any other discovery failure.
+        const partialFailures = this.fetcher.partialFailures?.(venue) ?? 0;
+        if (partialFailures > 0) {
+          const failure: RunError = { scope: `discover:${venue}`, message: `${partialFailures} address/token queries failed` };
+          failures.push(failure);
+          this.log.warn({ venue, partialFailures }, failure.message);
         }
         this.log.info({ venue, pools: kept.length, skipped: poolFailures.length }, 'discovered pools');
       } catch (err) {
