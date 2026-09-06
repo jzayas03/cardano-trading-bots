@@ -2,10 +2,9 @@ import { Asset, BlockfrostProvider, Dexter, type LiquidityPool } from '@indigo-l
 import type { Pair } from '@ctb/universe';
 import type { RunError } from './repo.js';
 import type { PoolSource, SourceResult } from './source.js';
-import { poolIdOf } from './snapshot.js';
 import type { Logger, PoolLike } from './types.js';
 import { VENUE_NAMES, type DexName } from './venues.js';
-import { toPoolLike, type LiquidityPoolShape } from './poolShape.js';
+import { collectPoolShapes, toPoolLike, type LiquidityPoolShape } from './poolShape.js';
 
 export type { LiquidityPoolShape } from './poolShape.js';
 export { toPoolLike } from './poolShape.js';
@@ -63,12 +62,19 @@ export class DexterPoolSource implements PoolSource {
     for (const venue of this.venues) {
       try {
         const pools = await this.dexter.newFetchRequest().onDexs(venue).forTokenPairs(tokenPairs).getLiquidityPools();
-        for (const pool of pools) {
-          const like = toPoolLike(pool as unknown as LiquidityPoolShape);
-          this.known.set(poolIdOf(like), pool);
+        // Per-pool isolation: one malformed pool (e.g. an unexpected empty `address`) must not drop
+        // the rest of this venue's list — each pool's mapping is its own try/catch inside collectPoolShapes.
+        const { kept, failures: poolFailures } = collectPoolShapes(venue, pools as unknown as LiquidityPoolShape[]);
+        for (const { id, pool: like, shape } of kept) {
+          this.known.set(id, shape as unknown as LiquidityPool);
           found.push(like);
         }
-        this.log.info({ venue, pools: pools.length }, 'discovered pools');
+        for (const failure of poolFailures) {
+          failures.push(failure);
+          const identifier = failure.scope.slice(`discover:${venue}:`.length);
+          this.log.warn({ venue, identifier, err: failure.message }, 'skipping malformed pool');
+        }
+        this.log.info({ venue, pools: kept.length, skipped: poolFailures.length }, 'discovered pools');
       } catch (err) {
         failures.push({ scope: `discover:${venue}`, message: (err as Error).message ?? String(err) });
         this.log.warn({ venue, err: (err as Error).message }, 'discovery failed for venue');
