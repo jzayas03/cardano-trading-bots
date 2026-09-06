@@ -296,3 +296,67 @@ describe('liveCandleFeed tick reporting, counters, and failure streaks', () => {
     expect(onTick.mock.calls[0]?.[0]).toMatchObject({ failed: true, consecutiveFailures: 1, lastError: 'read candles failed' });
   });
 });
+
+/**
+ * Finding M6: two branches of the feed that Task 4 shipped without a test. Both are the quiet kind —
+ * they produce no error and no exception, so nothing but an assertion can tell you they are wrong.
+ */
+describe('liveCandleFeed quiet branches (finding M6)', () => {
+  it('warns and reports yielded 0 on a boundary with no candle at all', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 2);
+    const repo = new FakeCandleRepo(); // seeded with nothing
+    const log = makeLog();
+    const onTick = vi.fn(async (_info: FeedTickInfo) => undefined);
+    const out = await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 20 * 60_000,
+      now: clock.now, sleep, signal: ac.signal, log, onTick,
+    }));
+    expect(out).toEqual([]);
+    expect(log.warn).toHaveBeenCalledWith({ boundary: new Date('2026-09-05T12:10:00.000Z') }, 'no candle at boundary');
+    expect(onTick).toHaveBeenCalledWith(expect.objectContaining({ yielded: 0, emptyBoundary: true, failed: false }));
+    // An empty boundary is not a failure: it must not count toward the failure streak, or a token
+    // that simply trades rarely would abort a healthy run.
+    expect(onTick.mock.calls[0]?.[0].consecutiveFailures).toBe(0);
+  });
+
+  it('does not warn "no candle at boundary" when the only candle was skipped as stale', async () => {
+    // A stale candle IS data arriving late, which is a different diagnosis from no data at all.
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 2);
+    const repo = new FakeCandleRepo();
+    repo.candles.push(mkCandleRow(new Date('2026-09-05T12:07:00.000Z'))); // age at 12:11 = 240s > 120s
+    const log = makeLog();
+    const onTick = vi.fn(async (_info: FeedTickInfo) => undefined);
+    await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 120_000,
+      now: clock.now, sleep, signal: ac.signal, log, onTick,
+    }));
+    expect(log.warn.mock.calls.map((c) => c[1])).toEqual(['stale candle skipped']);
+    expect(onTick).toHaveBeenCalledWith(expect.objectContaining({ yielded: 0, skippedStale: 1, emptyBoundary: false }));
+  });
+
+  it('advances lastYielded past a skipped stale candle: the next boundary does not re-read it', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 3); // two boundaries, then stop
+    const repo = new FakeCandleRepo();
+    const stale = mkCandleRow(new Date('2026-09-05T12:07:00.000Z')); // skipped at boundary 1 (age 240s > 120s)
+    const fresh = mkCandleRow(new Date('2026-09-05T12:15:00.000Z')); // yielded at boundary 2 (age 60s)
+    repo.candles.push(stale, fresh);
+    const out = await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 120_000,
+      now: clock.now, sleep, signal: ac.signal, log: makeLog(),
+    }));
+    expect(out.map((c) => c.tickTs.toISOString())).toEqual(['2026-09-05T12:15:00.000Z']);
+    // Boundary 2's window starts one millisecond after the STALE candle, not after the last one
+    // actually yielded — otherwise every later boundary re-reads, re-ages and re-warns about the
+    // same stale row forever, and the warning count grows without a new problem behind it.
+    expect(repo.readCandlesCalls.map((c) => c.from.toISOString())).toEqual([
+      new Date(0).toISOString(),
+      '2026-09-05T12:07:00.001Z',
+    ]);
+  });
+});

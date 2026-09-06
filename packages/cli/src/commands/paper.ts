@@ -1,14 +1,17 @@
 import { PgCandleRepo, type CandleRepo } from '@ctb/candles';
-import { createPool, withTransaction, type Queryable } from '@ctb/db';
-import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Candle, type EquityPoint, type FeedCounters, type OrderRecord, type Portfolio, type RunRow } from '@ctb/engine';
+import { createPool, withTransaction, type Db, type Queryable } from '@ctb/db';
+import {
+  gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES,
+  type Candle, type EquityPoint, type FeedCounters, type OrderRecord, type Portfolio, type RunRepo, type RunRow, type RunSummaryStats, type Strategy,
+} from '@ctb/engine';
 import { SimExecutor } from '@ctb/sim-executor';
 import { retryWithBackoff } from '@ctb/collector';
-import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
 import { assertFakeAllowed } from '../fakeWalk.js';
-import { candleFromRow, liveCandleFeed, type FeedTickInfo } from '../liveFeed.js';
+import { loadUniverse, type TokenSpec } from '@ctb/universe';
+import { candleFromRow, liveCandleFeed, type FeedTickInfo, type LiveFeedDeps } from '../liveFeed.js';
 import { isHeartbeatStale } from './status.js';
 import { sleep } from '../schedule.js';
 import { buildRunParams } from './backtest.js';
@@ -271,6 +274,13 @@ export async function readPrimeHistory(
   return rows.slice(-warmup).map(candleFromRow);
 }
 
+/**
+ * Thin process shell (finding M7): argument parsing, the config gates, the pool, the signal
+ * handlers, and the repos — everything that needs a real process — with the run itself delegated to
+ * `runPaper` below. `paperCommand` was a single function that did all of this inline, which is why
+ * every defect this review found in the paper loop (C1, C2, I1, I5, I6) had to be found by
+ * hand-running a rehearsal instead of by a test.
+ */
 export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   const a = parsePaperArgs(args);
   const strategy = STRATEGIES[a.strategyId];
@@ -279,9 +289,6 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   // Finding I7: the consumer of synthetic data gets the same two-part gate as the producer — the
   // explicit opt-in AND a localhost database. Checked before anything else touches the database.
   if (a.rehearsal) assertFakeAllowed(process.env, cfg.databaseUrl, 'paper --rehearsal');
-  // Finding I2: the paper clock and the collector's clock must agree, or every boundary lands where
-  // no snapshot exists and the run yields nothing while looking perfectly healthy.
-  const intervalSec = resolveIntervalSec(a.intervalSec, cfg.intervalSec, a.allowIntervalMismatch);
   const universe = await loadUniverse();
   const token = universe.tokens.find((t) => t.ticker === a.ticker);
   if (!token) throw new Error(`unknown ticker ${a.ticker}; not in universe.json`);
@@ -290,17 +297,65 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   const onSignal = (sig: string): void => { log.info({ sig }, 'stopping after the current candle'); ac.abort(); };
   process.once('SIGINT', () => onSignal('SIGINT'));
   process.once('SIGTERM', () => onSignal('SIGTERM'));
-  let runId: number | null = null;
-  // Only used by the catch block below to record an abort against whatever run was in flight; the try
-  // block itself uses the non-optional `runs` const declared just after `ensureTokens`, so every
-  // read/write inside it is FK-safe without re-checking for undefined on every call.
-  let runsForCatch: PgRunRepo | undefined;
   try {
-    // ensureTokens MUST run before the first FK-writing repo is constructed (finding F4): `runs.base_unit`
-    // is FK'd to tokens(unit), the same as every other command that touches this table.
+    // ensureTokens MUST run before the first FK-writing repo is constructed (finding F4):
+    // `runs.base_unit` is FK'd to tokens(unit), the same as every other command that touches this
+    // table. `commandsSyncTokens.test.ts` pins this ordering by reading this file's source.
     await ensureTokens(db, universe);
-    const runs = new PgRunRepo(db);
-    runsForCatch = runs;
+    await runPaper({
+      db, runs: new PgRunRepo(db), candleRepo: new PgCandleRepo(db), token, strategy, args: a,
+      collectIntervalSec: cfg.intervalSec, log, now: () => new Date(), sleep, signal: ac.signal,
+    });
+  } finally {
+    await db.end();
+  }
+}
+
+/** Everything `runPaper` needs from the outside, so the loop can be exercised against a real
+ * database with a scripted feed and a fake clock instead of a real process and a real hour. */
+export interface RunPaperDeps {
+  db: Db;
+  runs: RunRepo;
+  candleRepo: CandleRepo;
+  token: Pick<TokenSpec, 'unit' | 'decimals' | 'ticker'>;
+  strategy: Strategy;
+  args: PaperArgs;
+  /** `COLLECT_INTERVAL_SECONDS`: the cadence the collector writes at, which the paper clock must
+   * agree with or silently miss every boundary (finding I2). */
+  collectIntervalSec: number;
+  log: Logger;
+  now: () => Date;
+  sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+  signal: AbortSignal;
+  /** Replaces the live feed. A test scripts candles through the same `onTick` contract instead of
+   * sleeping to real interval boundaries. */
+  feedFactory?: (deps: LiveFeedDeps) => AsyncIterable<Candle>;
+  /** Binds a repo to one transaction's client. Injectable so a test can make one commit fail. */
+  bindRunRepo?: (q: Queryable) => RunRepo;
+  /** Provenance for a NEW run; defaults to the working tree's HEAD. */
+  gitSha?: string;
+}
+
+export interface RunPaperResult {
+  runId: number;
+  summary: RunSummaryStats;
+  /** What the run row was left at. `aborted` means the feed-failure rule stopped it (finding I5). */
+  status: 'finished' | 'aborted';
+}
+
+/**
+ * One paper segment, start to stop: resolve or create the run, restore the portfolio and the seq on
+ * a resume, run the engine against the live feed committing one candle per transaction, then close
+ * the run out and print its report.
+ */
+export async function runPaper(d: RunPaperDeps): Promise<RunPaperResult> {
+  const { args: a, db, runs, candleRepo, token, strategy, log } = d;
+  // Finding I2: the paper clock and the collector's clock must agree, or every boundary lands where
+  // no snapshot exists and the run yields nothing while looking perfectly healthy.
+  const intervalSec = resolveIntervalSec(a.intervalSec, d.collectIntervalSec, a.allowIntervalMismatch);
+  const bindRunRepo = d.bindRunRepo ?? ((q: Queryable) => new PgRunRepo(db, q));
+  let runId: number | null = null;
+  try {
     if (!a.rehearsal) {
       // Synthetic data can never be mistaken for real: any `Fake` snapshot OR any `Fake:` candle for
       // this token, of any age, means a rehearsal touched this database and never cleaned up.
@@ -324,7 +379,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       if (prior.strategyId !== strategy.id || prior.baseUnit !== token.unit) {
         throw new Error(`run ${a.resume} is ${prior.strategyId}/${prior.baseUnit}, not ${strategy.id}/${token.unit}`);
       }
-      const resumeCheckedAt = new Date();
+      const resumeCheckedAt = d.now();
       const statusError = resumeStatusError(prior, resumeCheckedAt);
       if (statusError) throw new Error(`run ${a.resume} ${statusError}`);
       // Finding C2: resuming a row still marked `running` is the recovery path for a process that
@@ -348,7 +403,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       if (last) { initial = { cashLovelace: last.cashLovelace, positionBase: last.positionBase }; afterTick = last.tickTs; }
       startSeq = await runs.lastOrderSeq(a.resume);
       runId = a.resume;
-      const resumedAt = new Date();
+      const resumedAt = d.now();
       await runs.appendResume(runId, resumedAt);
       await runs.setStatus(runId, 'running', null);
       // Finding F5: the intents pending at the previous stop were rejected `stopped` and never
@@ -356,14 +411,14 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       resumeWarning = `resumed at ${resumedAt.toISOString()} from ${afterTick?.toISOString() ?? 'start'}; intents pending at the previous stop were lost`;
       log.info({ runId, afterTick, startSeq }, 'resumed run; intents pending at the previous stop were lost');
     } else {
-      const gitSha = gitShaOrUnknown(process.cwd());
       runId = await runs.createRun({
-        mode: 'paper', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: 'candles', fillModel: 'cpmm_observed',
-        dataFrom: new Date(), dataTo: new Date(),
+        mode: 'paper', strategyId: strategy.id, gitSha: d.gitSha ?? gitShaOrUnknown(process.cwd()),
+        baseUnit: token.unit, dataSource: 'candles', fillModel: 'cpmm_observed',
+        dataFrom: d.now(), dataTo: d.now(),
         params: {
           ...buildRunParams(strategy.defaultParams, a.params, cashAda, null, {}, maxGapMs),
           intervalSec, graceSec: a.graceSec, rehearsal: a.rehearsal,
-          collectIntervalSec: cfg.intervalSec, allowIntervalMismatch: a.allowIntervalMismatch,
+          collectIntervalSec: d.collectIntervalSec, allowIntervalMismatch: a.allowIntervalMismatch,
           maxTickFailures: a.maxTickFailures,
         },
         status: 'running', rehearsal: a.rehearsal,
@@ -371,8 +426,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     }
     console.log(`run id: ${runId}${a.rehearsal ? ' (REHEARSAL)' : ''}`);
     const id = runId;
-    const existingParams = (await runs.getRun(runId))?.params ?? {};
-    const candleRepo = new PgCandleRepo(db);
+    const existingParams = (await runs.getRun(id))?.params ?? {};
     // Finding I6: a resumed run starts its indicators warm, from candles it already lived through,
     // instead of spending its first `warmup` boundaries structurally unable to emit an intent.
     const primeHistory = afterTick
@@ -391,15 +445,20 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     /** Set when the feed-failure rule stops the run, so the exit path below leaves the `aborted`
      * status and its reason alone instead of overwriting them with `finished`. */
     let feedAbortReason: string | null = null;
+    const ac = new AbortController();
+    // One signal for the engine and the feed: the caller's (SIGINT, or a test's) OR this run's own
+    // feed-failure abort. `d.signal` may already be aborted, in which case this fires immediately.
+    if (d.signal.aborted) ac.abort();
+    else d.signal.addEventListener('abort', () => ac.abort(), { once: true });
 
-    const feed = liveCandleFeed({
-      repo: candleRepo, token, intervalSec, graceSec: a.graceSec, maxGapMs, now: () => new Date(), sleep, signal: ac.signal, log, afterTick,
+    const feedDeps: LiveFeedDeps = {
+      repo: candleRepo, token, intervalSec, graceSec: a.graceSec, maxGapMs, now: d.now, sleep: d.sleep, signal: ac.signal, log, afterTick,
       onTick: async (info) => {
         feedCounters = accumulateFeedCounters(feedCounters, info);
         // These writes are inside the feed's own try (finding I1a): if Postgres is the thing that is
         // down, failing to record the heartbeat costs this boundary and counts as a tick failure —
         // it does not throw the run out of its loop, and the streak below is what eventually stops it.
-        await runs.heartbeat(id, new Date(), null);
+        await runs.heartbeat(id, d.now(), null);
         await runs.updateFeedCounters(id, feedCounters);
         const abortReason = tickFailureAbortReason(info, a.maxTickFailures);
         if (abortReason) {
@@ -409,15 +468,16 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
           ac.abort();
         }
       },
-    });
+    };
+    const feed = (d.feedFactory ?? liveCandleFeed)(feedDeps);
 
     /**
      * Finding I1(b): one candle, one transaction. The per-event sinks wrote each candle's orders and
      * its equity point in separate autocommit statements, so a crash between them left the database
      * claiming a fill no equity point reflects — the run's own "every order and every equity point is
-     * persisted before the loop moves to the next candle" could not actually hold. A `PgRunRepo`
-     * bound to the transaction's client (the shape `PgCandleRepo.transaction` already uses) writes
-     * orders, equity and the heartbeat together or not at all.
+     * persisted before the loop moves to the next candle" could not actually hold. A `RunRepo` bound
+     * to the transaction's client (the shape `PgCandleRepo.transaction` already uses) writes orders,
+     * equity and the heartbeat together or not at all.
      *
      * Wrapped in a bounded retry because a five-second database blip must cost a candle, not a run.
      * The budget is half a boundary (`intervalSec * 500` ms): past that, retrying has eaten the time
@@ -430,10 +490,10 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     const commitCandle = async (batch: { candle: Candle; orders: OrderRecord[]; equity: EquityPoint | null }): Promise<void> => {
       await retryWithBackoff(
         () => withTransaction(db, async (q) => {
-          const tx = new PgRunRepo(db, q);
+          const tx = bindRunRepo(q);
           if (batch.orders.length > 0) await tx.insertOrders(id, token.unit, batch.orders);
           if (batch.equity) await tx.insertEquity(id, [batch.equity]);
-          await tx.heartbeat(id, new Date(), batch.candle.tickTs);
+          await tx.heartbeat(id, d.now(), batch.candle.tickTs);
         }),
         {
           attempts: 5, baseMs: 500, maxMs: 8_000, budgetMs: intervalSec * 500,
@@ -451,23 +511,23 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     if (feedAbortReason !== null) {
       result.summary.warnings.push(`run stopped by the feed-failure rule after ${a.maxTickFailures} consecutive failing boundaries (${feedAbortReason})`);
     }
-    await runs.finishRun(id, new Date(), result.summary);
+    await runs.finishRun(id, d.now(), result.summary);
     // A run the feed-failure rule already marked `aborted`, with its reason, must keep that record:
     // overwriting it with `finished`/`signal` would erase the only trace of why it stopped.
     if (feedAbortReason === null) await runs.setStatus(id, 'finished', ac.signal.aborted ? 'signal' : 'feed ended');
     const run = await runs.getRun(id);
-    // The REHEARSAL header now comes from `run.rehearsal` inside printReport itself (finding F3), so
-    // every path that reads this run back — including a later `report <run-id>` in a different process
-    // — prints it, not just this process's own exit.
-    if (run) printReport(run, await runs.listOrders(id), token.ticker);
+    // The REHEARSAL header comes from `run.rehearsal` inside printReport itself (finding F3), so
+    // every path that reads this run back — including a later `report <run-id>` in a different
+    // process — prints it. Finding C1: the headline is recomputed from every persisted row, across
+    // every segment, rather than from this segment's `runs.summary` alone.
+    if (run) printReport(run, await runs.listOrders(id), token.ticker, await runs.listEquity(id, new Date(0), d.now()));
+    return { runId: id, summary: result.summary, status: feedAbortReason === null ? 'finished' : 'aborted' };
   } catch (err) {
     if (runId !== null) {
-      await runsForCatch?.setStatus(runId, 'aborted', (err as Error).message ?? String(err)).catch(() => {
+      await runs.setStatus(runId, 'aborted', (err as Error).message ?? String(err)).catch(() => {
         // intentional: original error wins; a failure recording the abort must not replace the real one
       });
     }
     throw err;
-  } finally {
-    await db.end();
   }
 }
