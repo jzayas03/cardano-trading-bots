@@ -21,7 +21,7 @@ describe('candles has no volume column (spec §4.3)', () => {
     const ddl = candlesDdl ?? '';
     const columnDefs = ddl.split(/[,\n]/).map((s) => s.trim());
     expect(columnDefs.some((s) => /^volume\b/.test(s))).toBe(false);
-    expect(columnDefs.some((s) => /^"volume"\b/.test(s))).toBe(false);
+    expect(columnDefs.some((s) => /^"volume"(?=\s|,|$)/.test(s))).toBe(false);
     // `ADD COLUMN IF NOT EXISTS volume` and quoted `"volume"` must also be caught, not just the
     // bare `ADD COLUMN volume` shape.
     expect(sql).not.toMatch(/ALTER TABLE\s+candles\s+ADD\s+(COLUMN\s+)?(IF NOT EXISTS\s+)?"?volume"?\b/i);
