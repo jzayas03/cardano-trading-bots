@@ -53,6 +53,13 @@ function priceFromAmounts(lovelace: bigint, base: bigint, decimals: number): Dec
  * loses precision exactly where the reserves are large, which is every real pool.
  */
 function deviationBps(fillScaled: bigint, referenceScaled: bigint, isBuy: boolean): number {
+  // Finding M3: a reference of 0 is not a 0% deviation, it is an unmeasurable one — and dividing by
+  // it threw a bigint `RangeError: Division by zero` straight out of `fill`, from inside the engine's
+  // settle step, which has no catch: one degenerate pool killed the whole run instead of costing it
+  // one order. `midScaled` is already screened by the `no mid price at t` rejection above; the t+1
+  // pool's own mid is not, and it floors to 0 whenever a pool's quote reserve is minute against its
+  // base reserve. Report 0 and let the fill stand.
+  if (referenceScaled <= 0n) return 0;
   const diff = isBuy ? fillScaled - referenceScaled : referenceScaled - fillScaled;
   return Math.round(Number((diff * 10_000n * BPS_SUBUNITS) / referenceScaled) / Number(BPS_SUBUNITS));
 }

@@ -7,7 +7,7 @@ describe('parsePaperArgs', () => {
     const a = parsePaperArgs(['ma-crossover', 'SNEK']);
     expect(a).toEqual({
       strategyId: 'ma-crossover', ticker: 'SNEK', cashAda: 1000, resume: null,
-      intervalSec: 300, graceSec: 60, maxGapMin: 15, rehearsal: false, params: {},
+      intervalSec: 300, graceSec: 60, maxGapMin: 15, rehearsal: false, params: {}, maxTickFailures: 12,
     });
   });
 

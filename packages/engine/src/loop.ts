@@ -27,6 +27,20 @@ export interface RunEngineDeps {
     onOrder?(o: OrderRecord): Promise<void>;
     onEquity?(e: EquityPoint): Promise<void>;
     onCandle?(c: Candle): Promise<void>;
+    /**
+     * One candle's whole settled batch, delivered once per candle after settle + observe and before
+     * the strategy decides (finding I1b). The per-event sinks above fire independently, which means
+     * a caller using them writes each candle's orders and its equity point in SEPARATE statements —
+     * so a crash between them leaves a fill no equity point reflects, or an equity point for orders
+     * that were never recorded. Handed the batch, a caller can write the whole candle in ONE
+     * transaction and actually honour "every order and every equity point is persisted before the
+     * loop moves to the next candle".
+     *
+     * `equity` is null on exactly one batch: the trailing one, emitted when intents left pending at
+     * the end of the feed (or at an abort) settle to `rejected` with no new candle observed. It
+     * exists so a caller that uses ONLY this sink never silently stops persisting those orders.
+     */
+    onCandleCommit?(batch: { candle: Candle; orders: OrderRecord[]; equity: EquityPoint | null }): Promise<void>;
   };
   /**
    * Keep the full `orders`/`equity` arrays in the returned `RunResult` (default `true`). A long-running
@@ -148,6 +162,9 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
   let candles = 0;
   let firstTs: Date | null = null;
   let lastTs: Date | null = null;
+  /** The most recent candle consumed, so the trailing leftover batch can name the candle its
+   * intents were decided on rather than inventing one. */
+  let lastCandle: Candle | null = null;
   let widestGapMs = 0;
   let gapsOverBound = 0;
   let aborted = false;
@@ -160,9 +177,14 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     if (history.length > historyLimit) { history.shift(); closes.shift(); }
   }
 
+  // This candle's settled orders, handed to `onCandleCommit` as one batch. Reset per candle, so it
+  // stays bounded even on a `retain: false` run that keeps nothing else.
+  let settledThisCandle: OrderRecord[] = [];
+
   const recordOrder = async (order: OrderRecord): Promise<void> => {
     if (retain) orders.push(order);
     summarizer.addOrder(order);
+    settledThisCandle.push(order);
     await d.sinks?.onOrder?.(order);
   };
 
@@ -175,10 +197,12 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     }
     firstTs ??= candle.tickTs;
     lastTs = candle.tickTs;
+    lastCandle = candle;
     // 1. settle what was decided on the previous candle. Intents decided together (same candle) fill
     // in order against a pool that depletes as they go: each fill's `poolAfter` becomes the `working`
     // reserves the next one in the batch trades against, instead of every one hitting the same quote.
     let working: WorkingPool | undefined;
+    settledThisCandle = [];
     for (const p of pending) {
       seq++;
       const result = d.executor.fill(p.intent, p.at, candle, portfolio, working);
@@ -203,6 +227,10 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     if (retain) equity.push(equityPoint);
     summarizer.addEquity(equityPoint);
     await d.sinks?.onEquity?.(equityPoint);
+    // 2b. commit this candle as one batch: what settled on it, plus the equity point it produced
+    // (finding I1b). Before the decision below, so nothing decided on THIS candle can leak into a
+    // batch labelled with it — a decision settles on the next candle and is committed there.
+    await d.sinks?.onCandleCommit?.({ candle, orders: settledThisCandle, equity: equityPoint });
     // 3. decide
     if (history.length >= warmup) {
       const intents = d.strategy.onCandle({ candle, history: [...history], closes: [...closes], portfolio, params });
@@ -224,9 +252,16 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
   // normal end of feed there was no t+1 candle to fill against; on an abort we stopped on purpose
   // before pulling one. Either way the intent is not silently dropped — it is recorded as rejected.
   const leftoverReason = aborted ? 'stopped' : 'no t+1 candle';
+  settledThisCandle = [];
   for (const p of pending) {
     seq++;
     await recordOrder({ seq, tsIntent: p.tsIntent, intent: p.intent, result: { status: 'rejected', reason: leftoverReason } });
+  }
+  // The leftovers observed no candle of their own, so they need a trailing batch with no equity
+  // point — otherwise a caller wired only to `onCandleCommit` would silently stop persisting them,
+  // which is exactly the "recorded as rejected, never dropped" guarantee above.
+  if (settledThisCandle.length > 0 && lastCandle !== null) {
+    await d.sinks?.onCandleCommit?.({ candle: lastCandle, orders: settledThisCandle, equity: null });
   }
   const coverage: RunCoverage = {
     candles,

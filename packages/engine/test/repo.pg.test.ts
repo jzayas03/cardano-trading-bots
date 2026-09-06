@@ -161,3 +161,51 @@ describe.skipIf(!PG_ENABLED)('PgRunRepo bulk insert (finding C1)', () => {
     });
   });
 });
+
+/**
+ * Finding I4: `liveCandleFeed` reported `built`/`yielded`/`skippedStale` on every boundary and the
+ * paper command dropped them on the floor. A run that stopped seeing candles at 03:00 — collector
+ * down, pool delisted, builder wedged — left behind exactly the same artefacts as one that ran
+ * clean: a moving heartbeat, `status = 'running'`, and an equity curve that simply stopped growing.
+ * The counters now live on the run row, so the failure is visible in the report instead of only in
+ * a log file nobody kept.
+ */
+describe.skipIf(!PG_ENABLED)('PgRunRepo.updateFeedCounters (finding I4)', () => {
+  it('writes the counters under params.feedCounters without disturbing the other params', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'paper', strategyId: 'ma-crossover', params: { fast: 12, slow: 48, intervalSec: 60 }, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10), status: 'running', rehearsal: true });
+
+      await repo.updateFeedCounters(id, { ticks: 3, built: 3, yielded: 2, skippedStale: 1, emptyBoundaries: 0, tickFailures: 0 });
+      const first = await repo.getRun(id);
+      expect(first?.params.feedCounters).toEqual({ ticks: 3, built: 3, yielded: 2, skippedStale: 1, emptyBoundaries: 0, tickFailures: 0 });
+      expect(first?.params.fast, 'the rest of params survives the jsonb_set').toBe(12);
+      expect(first?.params.intervalSec).toBe(60);
+
+      // A later write replaces the object wholesale — the caller holds the running totals.
+      await repo.updateFeedCounters(id, { ticks: 4, built: 4, yielded: 2, skippedStale: 1, emptyBoundaries: 1, tickFailures: 1 });
+      const second = await repo.getRun(id);
+      expect(second?.params.feedCounters).toEqual({ ticks: 4, built: 4, yielded: 2, skippedStale: 1, emptyBoundaries: 1, tickFailures: 1 });
+      expect(second?.params.slow).toBe(48);
+    });
+  });
+
+  it('coexists with appendResume: neither jsonb_set clobbers the other key', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'paper', strategyId: 'ma-crossover', params: {}, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10), status: 'running', rehearsal: true });
+      await repo.updateFeedCounters(id, { ticks: 1, built: 1, yielded: 1, skippedStale: 0, emptyBoundaries: 0, tickFailures: 0 });
+      await repo.appendResume(id, t(1));
+      await repo.updateFeedCounters(id, { ticks: 2, built: 2, yielded: 2, skippedStale: 0, emptyBoundaries: 0, tickFailures: 0 });
+      const run = await repo.getRun(id);
+      expect(run?.params.resumes).toEqual([t(1).toISOString()]);
+      expect(run?.params.feedCounters).toMatchObject({ ticks: 2 });
+    });
+  });
+});

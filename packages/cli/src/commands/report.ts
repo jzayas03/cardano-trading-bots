@@ -156,6 +156,20 @@ function resumesOf(run: RunRow): string[] {
 }
 
 /**
+ * Finding I4: the run's own view of its feed, from `params.feedCounters`. A day of `yielded 0` with
+ * a climbing `empty` count is what a dead collector looks like from inside the paper process, and
+ * before this it was visible only in a log file nobody kept. Read defensively — this is a jsonb blob
+ * that a run predating the counters simply will not have, and "not recorded" must not read as zero.
+ */
+export function feedCountersLine(params: Record<string, unknown>): string {
+  const raw = params.feedCounters;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'feed: not recorded (run predates feed counters)';
+  const c = raw as Record<string, unknown>;
+  const n = (k: string): string => (typeof c[k] === 'number' ? String(c[k]) : '?');
+  return `feed: ${n('ticks')} ticks | ${n('built')} built | ${n('yielded')} yielded | ${n('skippedStale')} stale-skipped | ${n('emptyBoundaries')} empty | ${n('tickFailures')} failed`;
+}
+
+/**
  * Finding C1. `runs.summary` is written by `finishRun` at the end of ONE process's segment, from a
  * `Summarizer` that only ever ingested that segment's own candles — so on a resumed run it silently
  * describes the last segment while presenting itself as the run's numbers (rehearsal run 6: summary
@@ -196,6 +210,7 @@ function printPaperStatusLines(run: RunRow): void {
   console.log(`stop_reason: ${run.stopReason ?? 'none'}`);
   const resumes = resumesOf(run);
   console.log(`resumes: ${resumes.length}${resumes.length ? ` (last ${resumes[resumes.length - 1]})` : ''}`);
+  console.log(feedCountersLine(run.params));
 }
 
 /**
@@ -210,8 +225,11 @@ export function printDayReport(
   run: RunRow, ticker: string, from: Date, to: Date, equity: EquityPoint[], orders: Array<OrderRecord & { baseUnit: string }>, now: Date,
 ): void {
   if (run.rehearsal) console.log('REHEARSAL — synthetic data — not evidence');
-  console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | day ${from.toISOString().slice(0, 10)}`);
+  // Finding I3: spec §8 M3 requires the DAILY report to cite the git sha. The non-day report always
+  // did; a reader who only ever saw `--day` output could not tell which code produced the numbers.
+  console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | day ${from.toISOString().slice(0, 10)} | git ${run.gitSha}`);
   console.log(`window: ${from.toISOString()} -> ${to.toISOString()}`);
+  if (run.mode === 'paper') console.log(feedCountersLine(run.params));
   const s = summarizeDay(equity, orders);
   console.table([{
     points: s.points,

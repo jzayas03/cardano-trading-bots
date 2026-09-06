@@ -12,6 +12,26 @@ export interface RunRow extends NewRun {
   status: 'running' | 'finished' | 'aborted'; heartbeatAt: Date | null; lastTickTs: Date | null; stopReason: string | null; rehearsal: boolean;
 }
 
+/**
+ * What the live feed has done since the run started, accumulated by the caller and written to
+ * `runs.params.feedCounters` (finding I4). Running totals across resumes are the caller's business:
+ * each write replaces the object wholesale.
+ */
+export interface FeedCounters {
+  /** Boundaries reported, successful or not. */
+  ticks: number;
+  /** Candles the builder wrote. */
+  built: number;
+  /** Candles handed to the engine. */
+  yielded: number;
+  /** Candles already older than the stale bound when they arrived, skipped per spec §6. */
+  skippedStale: number;
+  /** Boundaries that produced no candle and no error — the collector wrote nothing. */
+  emptyBoundaries: number;
+  /** Boundaries whose build, read, or tick report threw. */
+  tickFailures: number;
+}
+
 export interface RunningRun {
   id: number; strategyId: string; baseUnit: string; rehearsal: boolean; heartbeatAt: Date | null; lastTickTs: Date | null; createdAt: Date;
 }
@@ -36,6 +56,12 @@ export interface RunRepo {
   listRunning(): Promise<RunningRun[]>;
   /** Records a resume as an ISO timestamp appended to params.resumes, so a run's params carry every restart it survived. */
   appendResume(runId: number, at: Date): Promise<void>;
+  /**
+   * Replaces `params.feedCounters` with the caller's running totals (finding I4). Without this a run
+   * that stopped seeing candles mid-flight left behind exactly the artefacts of a healthy one — a
+   * moving heartbeat and an equity curve that simply stopped growing.
+   */
+  updateFeedCounters(runId: number, counters: FeedCounters): Promise<void>;
 }
 
 /** Returns the current commit sha, or 'unknown' when run outside a git checkout (e.g. a packaged deploy). */
@@ -179,6 +205,12 @@ export class PgRunRepo implements RunRepo {
     await this.q.query(
       `UPDATE runs SET params = jsonb_set(params, '{resumes}', coalesce(params->'resumes', '[]'::jsonb) || to_jsonb($2::text)) WHERE id = $1`,
       [runId, at.toISOString()]);
+  }
+
+  async updateFeedCounters(runId: number, counters: FeedCounters): Promise<void> {
+    await this.q.query(
+      `UPDATE runs SET params = jsonb_set(params, '{feedCounters}', $2::jsonb) WHERE id = $1`,
+      [runId, JSON.stringify(counters)]);
   }
 }
 

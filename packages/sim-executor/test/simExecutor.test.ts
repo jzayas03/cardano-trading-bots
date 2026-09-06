@@ -243,3 +243,31 @@ describe('synthetic worst-of pricing', () => {
     expect(sell('worst').amountOut).toBeLessThan(sell('close').amountOut);
   });
 });
+
+/**
+ * Finding M3: `deviationBps` divides by its reference price with no guard. `midScaled` (the t close)
+ * is checked — `no mid price at t` — but `poolMidScaled`, the t+1 pool's own mid used for
+ * `priceImpactBps`, is not. It is derived from reserves, and a pool whose quote reserve is minute
+ * against a large base reserve prices below 1e-18 ADA per token, which `decimalToScaled` floors to
+ * 0. The fill then died with a bigint `RangeError: Division by zero` thrown out of `Executor.fill` —
+ * inside the engine's settle step, which has no catch, so one degenerate pool killed the whole paper
+ * run rather than costing it one order. An unmeasurable impact reports as 0.
+ */
+describe('SimExecutor price-impact guard (finding M3)', () => {
+  const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: FIFTEEN_MIN });
+  // 1 lovelace against 1e18 base units: (1 * 1e18) / (1e18 * 1e6) floors to a scaled mid of 0.
+  const degenerate: Candle = { ...at, tickTs: new Date(Date.UTC(2026, 8, 6, 0, 5)), poolId: 'Minswap:x', closeReserveQuote: 1n, closeReserveBase: 10n ** 18n };
+
+  it('does not throw when the t+1 pool mid floors to zero', () => {
+    expect(decimalToScaled(priceAdaPerToken(1n, 10n ** 18n, 0)), 'the fixture really does floor to zero').toBe(0n);
+    expect(() => ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, degenerate, rich)).not.toThrow();
+  });
+
+  it('reports priceImpactBps 0 rather than a number divided by nothing, and still fills', () => {
+    const r = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, degenerate, rich);
+    expect(r.status).toBe('filled');
+    expect((r as { priceImpactBps: number }).priceImpactBps).toBe(0);
+    // Slippage is measured against the t mid, which is healthy here, so it is NOT zeroed out too.
+    expect((r as { slippageBps: number }).slippageBps).not.toBe(0);
+  });
+});

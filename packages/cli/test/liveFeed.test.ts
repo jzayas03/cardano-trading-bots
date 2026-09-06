@@ -3,7 +3,7 @@ import type { CandleRepo } from '@ctb/candles';
 import type { CandleRow, SnapshotForCandle } from '@ctb/candles';
 import type { Candle } from '@ctb/engine';
 import type { TokenSpec } from '@ctb/universe';
-import { liveCandleFeed } from '../src/liveFeed.js';
+import { liveCandleFeed, type FeedTickInfo } from '../src/liveFeed.js';
 
 const TOKEN: Pick<TokenSpec, 'unit' | 'decimals' | 'ticker'> = { unit: 'testunit', decimals: 6, ticker: 'TEST' };
 
@@ -23,6 +23,8 @@ class FakeCandleRepo implements CandleRepo {
   candles: CandleRow[] = [];
   readCandlesCalls: Array<{ from: Date; to: Date }> = [];
   failReadCandlesOnce = false;
+  /** Fail the next N `readCandles` calls, for testing a failure STREAK rather than one blip. */
+  failReadCandlesTimes = 0;
 
   async readSnapshotsSince(): Promise<SnapshotForCandle[]> {
     return [];
@@ -41,6 +43,10 @@ class FakeCandleRepo implements CandleRepo {
     this.readCandlesCalls.push({ from, to });
     if (this.failReadCandlesOnce) {
       this.failReadCandlesOnce = false;
+      throw new Error('read candles failed');
+    }
+    if (this.failReadCandlesTimes > 0) {
+      this.failReadCandlesTimes--;
       throw new Error('read candles failed');
     }
     return this.candles
@@ -147,7 +153,13 @@ describe('liveCandleFeed', () => {
     expect(out.map((c) => c.tickTs.toISOString())).toEqual(['2026-09-05T12:10:00.000Z']);
     expect(log.warn).toHaveBeenCalledWith(expect.objectContaining({ tickTs: stale.tickTs }), 'stale candle skipped');
     expect(onTick).toHaveBeenCalledTimes(1);
-    expect(onTick).toHaveBeenCalledWith({ boundary: new Date('2026-09-05T12:10:00.000Z'), built: 0, yielded: 1, skippedStale: 1 });
+    // The tick report grew `failed`/`emptyBoundary`/`consecutiveFailures`/`lastError` with findings
+    // I4 and I5 — the counters are now persisted and the streak drives an abort, so a clean tick has
+    // to say so explicitly rather than by the absence of a field.
+    expect(onTick).toHaveBeenCalledWith({
+      boundary: new Date('2026-09-05T12:10:00.000Z'), built: 0, yielded: 1, skippedStale: 1,
+      failed: false, emptyBoundary: false, consecutiveFailures: 0, lastError: null,
+    });
   });
 
   it('logs a repository error at one boundary and continues to the next boundary', async () => {
@@ -168,8 +180,12 @@ describe('liveCandleFeed', () => {
     const out = await collect(feed);
     expect(log.error).toHaveBeenCalledTimes(1);
     expect(log.error.mock.calls[0]?.[1]).toBe('live feed tick failed; continuing');
-    // The failed cycle still reports a tick (all zero) so the run's heartbeat keeps moving.
-    expect(onTick).toHaveBeenNthCalledWith(1, { boundary: new Date('2026-09-05T12:10:00.000Z'), built: 0, yielded: 0, skippedStale: 0 });
+    // The failed cycle still reports a tick (all zero) so the run's heartbeat keeps moving — and now
+    // names the failure and the streak, which is what lets the caller stop a permanently broken run.
+    expect(onTick).toHaveBeenNthCalledWith(1, {
+      boundary: new Date('2026-09-05T12:10:00.000Z'), built: 0, yielded: 0, skippedStale: 0,
+      failed: true, emptyBoundary: false, consecutiveFailures: 1, lastError: 'read candles failed',
+    });
     expect(out.map((c) => c.tickTs.toISOString())).toEqual(['2026-09-05T12:13:00.000Z']);
   });
 
@@ -189,5 +205,94 @@ describe('liveCandleFeed', () => {
     const out = await collect(feed);
     expect(out).toEqual([]);
     expect(repo.readCandlesCalls).toEqual([]);
+  });
+});
+
+/**
+ * Findings I1(a), I4 and I5. Three defects in one code path:
+ *
+ * I1(a): `await d.onTick(...)` sat OUTSIDE the feed's try, so a transient failure writing the
+ * heartbeat threw out of the generator, through the engine's `for await`, into `paperCommand`'s
+ * catch — a five-second Postgres blip ended a seven-day run. It belongs inside the try, counted like
+ * any other tick failure.
+ *
+ * I4: `built`/`yielded`/`skippedStale` were reported to `onTick` and then dropped on the floor. A
+ * run that stopped seeing candles at 03:00 looked identical, in every persisted artefact, to one
+ * that ran clean — so the counters are now accumulated and persisted.
+ *
+ * I5: the feed swallowed every error and looped forever. A paper run whose database or candle
+ * builder was permanently broken kept heartbeating, kept reporting `status = 'running'`, and never
+ * traded again. The feed now counts CONSECUTIVE failures (reset by any clean tick) and reports the
+ * streak, so the command can stop a run that is failing rather than merely slow.
+ */
+describe('liveCandleFeed tick reporting, counters, and failure streaks', () => {
+  it('reports a clean tick with failed false, a zero streak, and no error', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 2);
+    const repo = new FakeCandleRepo();
+    repo.candles.push(mkCandleRow(new Date('2026-09-05T12:10:00.000Z')));
+    const onTick = vi.fn(async (_info: FeedTickInfo) => undefined);
+    await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 20 * 60_000,
+      now: clock.now, sleep, signal: ac.signal, log: makeLog(), onTick,
+    }));
+    expect(onTick).toHaveBeenCalledWith({
+      boundary: new Date('2026-09-05T12:10:00.000Z'), built: 0, yielded: 1, skippedStale: 0,
+      failed: false, emptyBoundary: false, consecutiveFailures: 0, lastError: null,
+    });
+  });
+
+  it('does not kill the run when onTick itself throws: it counts as this boundary failing (finding I1a)', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 3);
+    const repo = new FakeCandleRepo();
+    repo.candles.push(mkCandleRow(new Date('2026-09-05T12:10:00.000Z')), mkCandleRow(new Date('2026-09-05T12:13:00.000Z')));
+    const log = makeLog();
+    let calls = 0;
+    const onTick = vi.fn(async (_info: FeedTickInfo) => {
+      calls++;
+      if (calls === 1) throw new Error('heartbeat write failed');
+    });
+    // The generator must not reject; the second boundary must still be reached and reported.
+    const out = await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 20 * 60_000,
+      now: clock.now, sleep, signal: ac.signal, log, onTick,
+    }));
+    expect(out.map((c) => c.tickTs.toISOString())).toEqual(['2026-09-05T12:10:00.000Z', '2026-09-05T12:13:00.000Z']);
+    expect(log.error).toHaveBeenCalled();
+    const failing = onTick.mock.calls.map((c) => c[0]);
+    expect(failing.some((i) => i.failed && i.lastError === 'heartbeat write failed'), 'the failed boundary is reported, not swallowed').toBe(true);
+  });
+
+  it('counts consecutive failures and resets the streak on the first clean tick (finding I5)', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 4); // three boundaries, then stop
+    const repo = new FakeCandleRepo();
+    repo.failReadCandlesTimes = 2; // boundaries 1 and 2 fail, boundary 3 succeeds
+    repo.candles.push(mkCandleRow(new Date('2026-09-05T12:18:00.000Z')));
+    const onTick = vi.fn(async (_info: FeedTickInfo) => undefined);
+    await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 40 * 60_000,
+      now: clock.now, sleep, signal: ac.signal, log: makeLog(), onTick,
+    }));
+    const streaks = onTick.mock.calls.map((c) => (c[0] as { consecutiveFailures: number }).consecutiveFailures);
+    expect(streaks).toEqual([1, 2, 0]);
+  });
+
+  it('carries the failing boundary error message so the caller can name it in a stop reason', async () => {
+    const clock = makeClock('2026-09-05T12:05:00.000Z');
+    const ac = new AbortController();
+    const sleep = makeFakeSleep(clock, [], ac, 2);
+    const repo = new FakeCandleRepo();
+    repo.failReadCandlesTimes = 1;
+    const onTick = vi.fn(async (_info: FeedTickInfo) => undefined);
+    await collect(liveCandleFeed({
+      repo, token: TOKEN, intervalSec: 300, graceSec: 60, maxGapMs: 20 * 60_000,
+      now: clock.now, sleep, signal: ac.signal, log: makeLog(), onTick,
+    }));
+    expect(onTick.mock.calls[0]?.[0]).toMatchObject({ failed: true, consecutiveFailures: 1, lastError: 'read candles failed' });
   });
 });
