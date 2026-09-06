@@ -38,7 +38,7 @@ async function main(): Promise<void> {
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
         'backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
-        'report <run-id>|' +
+        'report <run-id> [--day YYYY-MM-DD]|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec 300] [--grace-sec 60] [--max-gap-min 15] [--rehearsal] [--param k=v]...>',
       );
       process.exitCode = 2;
