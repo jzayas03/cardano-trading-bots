@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import type { Db } from '@ctb/db';
+import { withTransaction, type Db, type Queryable } from '@ctb/db';
 import type { OrderRecord, RunSummaryStats } from './types.js';
 
 export interface NewRun {
@@ -31,11 +31,22 @@ export function gitShaOrUnknown(cwd: string): string {
  * status, reject_reason, reason — 20 columns, matching the INSERT column list below. */
 const ORDER_PARAMS = 20;
 
+/**
+ * 20 parameters per order means a single multi-row INSERT hit Postgres's 65535-parameter Bind cap at
+ * 3277 orders — reachable in one long backtest. Chunk and wrap in one transaction (finding C1).
+ */
+const ORDER_CHUNK_ROWS = 1000;
+
 export class PgRunRepo implements RunRepo {
-  constructor(private readonly db: Db) {}
+  private readonly q: Queryable;
+
+  /** `q` is passed only when binding this repo to one checked-out client inside a transaction. */
+  constructor(private readonly db: Db, q?: Queryable) {
+    this.q = q ?? db;
+  }
 
   async createRun(r: NewRun): Promise<number> {
-    const res = await this.db.query<{ id: string }>(
+    const res = await this.q.query<{ id: string }>(
       `INSERT INTO runs (mode, strategy_id, params, git_sha, base_unit, data_source, fill_model, data_from, data_to)
        VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, $9) RETURNING id`,
       [r.mode, r.strategyId, JSON.stringify(r.params), r.gitSha, r.baseUnit, r.dataSource, r.fillModel, r.dataFrom, r.dataTo]);
@@ -45,11 +56,11 @@ export class PgRunRepo implements RunRepo {
   }
 
   async finishRun(id: number, finishedAt: Date, summary: RunSummaryStats): Promise<void> {
-    await this.db.query('UPDATE runs SET finished_at = $2, summary = $3::jsonb WHERE id = $1', [id, finishedAt, JSON.stringify(summary)]);
+    await this.q.query('UPDATE runs SET finished_at = $2, summary = $3::jsonb WHERE id = $1', [id, finishedAt, JSON.stringify(summary)]);
   }
 
   async getRun(id: number): Promise<RunRow | null> {
-    const res = await this.db.query<{
+    const res = await this.q.query<{
       id: string; mode: 'backtest' | 'paper'; strategy_id: string; params: Record<string, unknown>; git_sha: string; base_unit: string;
       data_source: 'candles' | 'candles_external'; fill_model: 'cpmm_observed' | 'cpmm_synthetic_depth'; data_from: Date; data_to: Date; created_at: Date; finished_at: Date | null; summary: RunSummaryStats | null;
     }>('SELECT * FROM runs WHERE id = $1', [id]);
@@ -61,27 +72,18 @@ export class PgRunRepo implements RunRepo {
 
   async insertOrders(runId: number, baseUnit: string, orders: OrderRecord[]): Promise<number> {
     if (orders.length === 0) return 0;
-    const values: unknown[] = [];
-    const tuples = orders.map((o, i) => {
-      const f = o.result.status === 'filled' ? o.result : null;
-      values.push(
-        runId, o.seq, o.tsIntent, f?.tsFill ?? null, baseUnit, f?.poolId ?? null, o.intent.side,
-        f?.unitIn ?? (o.intent.side === 'buy' ? 'lovelace' : baseUnit), o.intent.amountIn.toString(),
-        f?.unitOut ?? null, f ? f.amountOut.toString() : null, f?.midPrice ?? null, f?.fillPrice ?? null,
-        f ? f.poolFeeIn.toString() : null, f ? f.batcherFeeLovelace.toString() : null, f ? f.networkFeeLovelace.toString() : null,
-        f?.slippageBps ?? null, o.result.status, o.result.status === 'rejected' ? o.result.reason : null, o.intent.reason,
-      );
-      return `(${Array.from({ length: ORDER_PARAMS }, (_, k) => `$${i * ORDER_PARAMS + k + 1}`).join(', ')})`;
-    });
-    const res = await this.db.query(
-      `INSERT INTO paper_orders (run_id, seq, ts_intent, ts_fill, base_unit, pool_id, side, unit_in, amount_in, unit_out, amount_out, mid_price, fill_price,
-         pool_fee_in, batcher_fee_lovelace, network_fee_lovelace, slippage_bps, status, reject_reason, reason) VALUES ${tuples.join(', ')}`,
-      values);
-    return res.rowCount ?? 0;
+    const run = async (q: Queryable): Promise<number> => {
+      let inserted = 0;
+      for (let i = 0; i < orders.length; i += ORDER_CHUNK_ROWS) {
+        inserted += await insertOrderChunk(q, runId, baseUnit, orders.slice(i, i + ORDER_CHUNK_ROWS));
+      }
+      return inserted;
+    };
+    return this.q === this.db ? withTransaction(this.db, run) : run(this.q);
   }
 
   async listOrders(runId: number): Promise<Array<OrderRecord & { baseUnit: string }>> {
-    const res = await this.db.query<{
+    const res = await this.q.query<{
       seq: number; ts_intent: Date; ts_fill: Date | null; base_unit: string; pool_id: string | null; side: 'buy' | 'sell'; unit_in: string; amount_in: string; unit_out: string | null;
       amount_out: string | null; mid_price: string | null; fill_price: string | null; pool_fee_in: string | null; batcher_fee_lovelace: string | null; network_fee_lovelace: string | null;
       slippage_bps: number | null; status: 'filled' | 'rejected'; reject_reason: string | null; reason: string;
@@ -96,4 +98,24 @@ export class PgRunRepo implements RunRepo {
         : { status: 'rejected', reason: r.reject_reason ?? 'unknown' },
     }));
   }
+}
+
+async function insertOrderChunk(q: Queryable, runId: number, baseUnit: string, orders: OrderRecord[]): Promise<number> {
+  const values: unknown[] = [];
+  const tuples = orders.map((o, i) => {
+    const f = o.result.status === 'filled' ? o.result : null;
+    values.push(
+      runId, o.seq, o.tsIntent, f?.tsFill ?? null, baseUnit, f?.poolId ?? null, o.intent.side,
+      f?.unitIn ?? (o.intent.side === 'buy' ? 'lovelace' : baseUnit), o.intent.amountIn.toString(),
+      f?.unitOut ?? null, f ? f.amountOut.toString() : null, f?.midPrice ?? null, f?.fillPrice ?? null,
+      f ? f.poolFeeIn.toString() : null, f ? f.batcherFeeLovelace.toString() : null, f ? f.networkFeeLovelace.toString() : null,
+      f?.slippageBps ?? null, o.result.status, o.result.status === 'rejected' ? o.result.reason : null, o.intent.reason,
+    );
+    return `(${Array.from({ length: ORDER_PARAMS }, (_, k) => `$${i * ORDER_PARAMS + k + 1}`).join(', ')})`;
+  });
+  const res = await q.query(
+    `INSERT INTO paper_orders (run_id, seq, ts_intent, ts_fill, base_unit, pool_id, side, unit_in, amount_in, unit_out, amount_out, mid_price, fill_price,
+       pool_fee_in, batcher_fee_lovelace, network_fee_lovelace, slippage_bps, status, reject_reason, reason) VALUES ${tuples.join(', ')}`,
+    values);
+  return res.rowCount ?? 0;
 }

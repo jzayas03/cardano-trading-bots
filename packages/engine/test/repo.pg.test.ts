@@ -34,3 +34,45 @@ describe.skipIf(!PG_ENABLED)('PgRunRepo', () => {
     });
   });
 });
+
+/**
+ * Final-review finding C1: `paper_orders` binds 20 parameters per row, so a single multi-row INSERT
+ * broke at 3277 orders — reachable in one long backtest. The repo now chunks at 1000 rows inside one
+ * transaction.
+ */
+describe.skipIf(!PG_ENABLED)('PgRunRepo bulk insert (finding C1)', () => {
+  it('inserts 4000 orders in one transaction, well past the 65535 bind-parameter limit', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'backtest', strategyId: 'ma-crossover', params: {}, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10) });
+      const orders: OrderRecord[] = Array.from({ length: 4000 }, (_, i) => ({
+        seq: i + 1, tsIntent: t(i), intent: { side: 'buy' as const, amountIn: 1_000n, reason: 'bulk' },
+        result: { status: 'rejected' as const, reason: 'dust' },
+      }));
+      expect(await repo.insertOrders(id, SNEK, orders)).toBe(4000);
+      const count = await db.query<{ n: string }>('SELECT count(*) AS n FROM paper_orders WHERE run_id = $1', [id]);
+      expect(count.rows[0]?.n).toBe('4000');
+    });
+  });
+
+  it('rolls the whole chunked insert back when a later chunk fails', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'backtest', strategyId: 'ma-crossover', params: {}, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10) });
+      const orders: OrderRecord[] = Array.from({ length: 1500 }, (_, i) => ({
+        // seq 1200 (second chunk) repeats seq 1, violating the (run_id, seq) primary key
+        seq: i === 1200 ? 1 : i + 1, tsIntent: t(i), intent: { side: 'buy' as const, amountIn: 1_000n, reason: 'bulk' },
+        result: { status: 'rejected' as const, reason: 'dust' },
+      }));
+      await expect(repo.insertOrders(id, SNEK, orders)).rejects.toThrow();
+      const count = await db.query<{ n: string }>('SELECT count(*) AS n FROM paper_orders WHERE run_id = $1', [id]);
+      expect(count.rows[0]?.n, 'the first chunk must not survive a failure in the second').toBe('0');
+    });
+  });
+});

@@ -16,10 +16,11 @@ describe.skipIf(!PG_ENABLED)('0002_candles_engine', () => {
     await withTestSchema(async (db) => {
       const applied = await migrate(db);
       // Scoped assertion: 0003+ appends more filenames to this list. This is 0002's own test, so
-      // assert 0002 ran last and 0001 ran before it — not the exact full list — so a later
-      // migration's PR never has to touch this file to pass.
-      expect(applied[applied.length - 1]).toBe('0002_candles_engine.sql');
+      // assert only that 0001 and 0002 both ran and in that order — "0002 ran LAST" was still an
+      // assertion about the whole corpus and broke in 0003's PR, on a test 0003 never touched.
       expect(applied).toContain('0001_core.sql');
+      expect(applied).toContain('0002_candles_engine.sql');
+      expect(applied.indexOf('0001_core.sql')).toBeLessThan(applied.indexOf('0002_candles_engine.sql'));
       const t = await db.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1`,
       );
