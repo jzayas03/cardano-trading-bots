@@ -5,5 +5,6 @@ export default defineConfig({
     environment: 'node',
     include: ['test/**/*.test.ts', 'packages/*/test/**/*.test.ts'],
     testTimeout: 30_000,
+    server: { deps: { inline: ['@indigo-labs/dexter'] } },
   },
 });
