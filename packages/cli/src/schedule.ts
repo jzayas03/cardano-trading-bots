@@ -7,7 +7,16 @@ export function msUntilNextBoundary(now: Date, intervalSec: number): number {
 
 export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
-    const t = setTimeout(resolve, ms);
-    signal?.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+    const onAbort = () => {
+      clearTimeout(t);
+      resolve();
+    };
+    const t = setTimeout(() => {
+      // Remove the listener on normal completion too, or a long-lived signal (the `collect`
+      // loop's `stop.signal`) accumulates one 'abort' listener per completed tick forever.
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

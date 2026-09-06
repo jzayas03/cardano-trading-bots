@@ -22,4 +22,19 @@ describe('loadConfig', () => {
   it('requires DATABASE_URL', () => {
     expect(() => loadConfig({}, { blockfrost: false })).toThrow(/DATABASE_URL/);
   });
+
+  it('pins an empty BLOCKFROST_PROJECT_ID as absent, not a validation failure', () => {
+    // .env.example ships a bare `BLOCKFROST_PROJECT_ID=` line, which dotenv loads as ''.
+    // Commands that don't need Blockfrost must still succeed; commands that do must still
+    // fail closed and name the variable, exactly as when it's unset.
+    expect(loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: false })).toEqual({
+      databaseUrl: base.DATABASE_URL,
+      blockfrostProjectId: null,
+      intervalSec: 300,
+      logLevel: 'info',
+    });
+    expect(() => loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: true })).toThrow(
+      /BLOCKFROST_PROJECT_ID/,
+    );
+  });
 });
