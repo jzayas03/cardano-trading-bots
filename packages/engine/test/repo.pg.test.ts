@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { migrate } from '@ctb/db';
 import { decimalToScaled } from '@ctb/candles';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';
-import { PgRunRepo, type OrderRecord } from '../src/index.js';
+import { PgRunRepo, type EquityPoint, type OrderRecord } from '../src/index.js';
 
 const SNEK = '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f534e454b';
 const t = (m: number) => new Date(Date.UTC(2026, 8, 6, 12, m));
@@ -45,6 +45,77 @@ describe.skipIf(!PG_ENABLED)('PgRunRepo', () => {
       const recomputed = Math.round(Number(((fill - mid) * 10_000_000n) / mid) / 1000);
       expect(Math.abs((row?.slippage_bps ?? 0) - recomputed)).toBeLessThanOrEqual(1);
       expect(back[1]?.result).toEqual({ status: 'rejected', reason: 'dust' });
+    });
+  });
+
+  it('persists a paper run incrementally: equity, orders-in-window, heartbeat, status, resume', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'paper', strategyId: 'ma-crossover', params: { fast: 12, slow: 48 }, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10), status: 'running', rehearsal: true });
+      const run = await repo.getRun(id);
+      expect(run).toMatchObject({ status: 'running', rehearsal: true });
+
+      const points: EquityPoint[] = [
+        { tickTs: t(0), cashLovelace: 1_000_000_000n, positionBase: 0n, equityLovelace: 1_000_000_000n, equityExecutableLovelace: 1_000_000_000n, price: '0.5' },
+        { tickTs: t(5), cashLovelace: 500_000_000n, positionBase: 900_000n, equityLovelace: 950_000_000n, equityExecutableLovelace: null, price: '0.5' },
+        { tickTs: t(10), cashLovelace: 500_000_000n, positionBase: 900_000n, equityLovelace: 980_000_000n, equityExecutableLovelace: 975_000_000n, price: '0.53' },
+      ];
+      expect(await repo.insertEquity(id, points)).toBe(3);
+
+      const last = await repo.lastEquity(id);
+      expect(last).toMatchObject({ tickTs: t(10), cashLovelace: 500_000_000n, positionBase: 900_000n, equityLovelace: 980_000_000n, equityExecutableLovelace: 975_000_000n });
+
+      const windowed = await repo.listEquity(id, t(0), t(5));
+      expect(windowed).toHaveLength(2);
+      expect(windowed[1]?.equityExecutableLovelace).toBeNull();
+
+      const orders: OrderRecord[] = [
+        { seq: 1, tsIntent: t(0), intent: { side: 'buy', amountIn: 1_000_000_000n, reason: 'x' }, result: { status: 'filled', poolId: 'SundaeSwapV3:p', unitIn: 'lovelace', amountIn: 1_000_000_000n,
+          unitOut: SNEK, amountOut: 441_500n, midPrice: '0.5', fillPrice: '0.5', poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n,
+          networkFeeLovelace: 200_000n, slippageBps: 0, priceImpactBps: 0, tsFill: t(5) } },
+        { seq: 2, tsIntent: t(10), intent: { side: 'sell', amountIn: 1n, reason: 'y' }, result: { status: 'rejected', reason: 'dust' } },
+      ];
+      expect(await repo.insertOrders(id, SNEK, orders)).toBe(2);
+      expect(await repo.lastOrderSeq(id)).toBe(2);
+
+      const between = await repo.listOrdersBetween(id, t(0), t(0));
+      expect(between).toHaveLength(1);
+      expect(between[0]?.seq).toBe(1);
+
+      await repo.heartbeat(id, t(5), t(5));
+      const afterHeartbeat = await repo.getRun(id);
+      expect(afterHeartbeat?.heartbeatAt).toEqual(t(5));
+      expect(afterHeartbeat?.lastTickTs).toEqual(t(5));
+
+      const running = await repo.listRunning();
+      expect(running.map((r) => r.id)).toContain(id);
+
+      await repo.setStatus(id, 'aborted', 'boom');
+      const aborted = await repo.getRun(id);
+      expect(aborted).toMatchObject({ status: 'aborted', stopReason: 'boom' });
+      expect(aborted?.finishedAt).not.toBeNull();
+
+      const runningAfter = await repo.listRunning();
+      expect(runningAfter.map((r) => r.id)).not.toContain(id);
+    });
+  });
+});
+
+describe.skipIf(!PG_ENABLED)('PgRunRepo.appendResume', () => {
+  it('appends ISO timestamps to params.resumes on each call', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await db.query(`INSERT INTO tokens VALUES ($1, '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', '534e454b', 'SNEK', 0, 'Meme', '2026-09-05', 'test')`, [SNEK]);
+      const repo = new PgRunRepo(db);
+      const id = await repo.createRun({ mode: 'paper', strategyId: 'ma-crossover', params: {}, gitSha: 'abc123', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(10), status: 'running', rehearsal: true });
+      await repo.appendResume(id, t(1));
+      await repo.appendResume(id, t(2));
+      const run = await repo.getRun(id);
+      expect(run?.params.resumes).toEqual([t(1).toISOString(), t(2).toISOString()]);
     });
   });
 });

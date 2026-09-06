@@ -67,7 +67,8 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     history.push(candle);
     closes.push(decimalToNumber(candle.close));
     if (history.length > historyLimit) { history.shift(); closes.shift(); }
-    equity.push({ tickTs: candle.tickTs, cashLovelace: portfolio.cashLovelace, positionBase: portfolio.positionBase, equityLovelace: equityLovelace(portfolio, candle.close, d.decimals), price: candle.close });
+    // equityExecutableLovelace is filled in by the live paper loop (Task 3); the backtest loop never prices a real sell, so it stays null here.
+    equity.push({ tickTs: candle.tickTs, cashLovelace: portfolio.cashLovelace, positionBase: portfolio.positionBase, equityLovelace: equityLovelace(portfolio, candle.close, d.decimals), equityExecutableLovelace: null, price: candle.close });
     // 3. decide
     if (history.length >= warmup) {
       const intents = d.strategy.onCandle({ candle, history: [...history], closes: [...closes], portfolio, params });

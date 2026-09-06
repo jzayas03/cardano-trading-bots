@@ -33,7 +33,12 @@ export type FillResult =
   | { status: 'rejected'; reason: string };
 export interface Executor { fill(intent: Intent, at: Candle, next: Candle, portfolio: Readonly<Portfolio>): FillResult }
 export interface OrderRecord { seq: number; tsIntent: Date; intent: Intent; result: FillResult }
-export interface EquityPoint { tickTs: Date; cashLovelace: bigint; positionBase: bigint; equityLovelace: bigint; price: Decimal }
+export interface EquityPoint {
+  tickTs: Date; cashLovelace: bigint; positionBase: bigint; equityLovelace: bigint;
+  /** What the position would fetch if sold now, net of fees; null when the executor cannot price it (filled in by the live paper loop, Plan 3 Task 3). */
+  equityExecutableLovelace: bigint | null;
+  price: Decimal;
+}
 /** How much of the requested window the feed actually held. Sparse history makes a P&L number unreadable without it (finding C3). */
 export interface RunCoverage {
   candles: number;
