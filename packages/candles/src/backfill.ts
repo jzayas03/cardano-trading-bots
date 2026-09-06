@@ -23,7 +23,7 @@ export async function backfillToken(d: {
     map = { externalPoolId: chosen.pool.hex, externalDex: chosen.pool.dex, matchMethod: chosen.method };
     d.log.info({ ticker: d.token.ticker, pool: chosen.pool.hex, dex: chosen.pool.dex, method: chosen.method }, 'external pool chosen');
   }
-  let before: Date | undefined = d.to;
+  let before: Date = d.to;
   let pages = 0;
   let rows = 0;
   while (pages < MAX_PAGES) {
@@ -34,6 +34,15 @@ export async function backfillToken(d: {
     rows += await d.repo.upsertExternal(d.token.unit, map.externalPoolId, inWindow);
     const oldest = page[0]!.tickTs;
     if (oldest.getTime() < d.from.getTime()) break;
+    // Paging backwards only works while each page reaches further back than the last. A pool whose
+    // history starts inside the window returns the SAME page forever, and the old code walked all
+    // 400 pages (twenty minutes at 3 s spacing) importing nothing before MAX_PAGES stopped it. If
+    // `before` did not move, there is nothing older to fetch (finding M6).
+    if (oldest.getTime() >= before.getTime()) {
+      d.log.warn({ ticker: d.token.ticker, pages, oldest: oldest.toISOString(), before: before.toISOString() },
+        'backfill stopped: the page did not reach further back, so the pool has no older history in this window');
+      break;
+    }
     before = oldest;
   }
   if (pages >= MAX_PAGES) d.log.warn({ ticker: d.token.ticker, pages }, 'backfill stopped at MAX_PAGES; window may be incomplete');

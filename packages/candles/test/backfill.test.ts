@@ -56,4 +56,20 @@ describe('backfillToken', () => {
     await expect(backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, from: new Date(t0), to: new Date(t0 + day), log }))
       .rejects.toThrow(/no ADA pool on geckoterminal for X/);
   });
+
+  /**
+   * Finding M6: `before` was set to the oldest row of each page unconditionally. A pool whose oldest
+   * bucket is at the start of its history returns the SAME page forever, so the loop spent 400
+   * requests (and, at 3 s spacing, twenty minutes) re-importing zero new rows before MAX_PAGES saved
+   * it. If the window did not advance, there is nothing older to fetch.
+   */
+  it('stops when a page does not reach further back than the last one', async () => {
+    const warned: Array<Record<string, unknown>> = [];
+    const noisy = { info: () => {}, warn: (o: Record<string, unknown>) => { warned.push(o); }, error: () => {} };
+    const stuck = [candle(t0 + 2 * day), candle(t0 + 3 * day)];
+    const client = new FakeClient([stuck, [...stuck], [...stuck], [...stuck]]);
+    const r = await backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, from: new Date(t0), to: new Date(t0 + 4 * day), log: noisy });
+    expect(r.pages, 'one page to see the oldest row, one more to see it did not move').toBe(2);
+    expect(warned.some((w) => 'oldest' in w)).toBe(true);
+  });
 });

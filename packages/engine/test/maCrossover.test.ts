@@ -26,4 +26,19 @@ describe('maCrossover', () => {
     expect(maCrossover.warmup).toBe(49);
     expect(maCrossover.defaultParams).toEqual({ fast: 12, slow: 48, fraction: 0.5 });
   });
+
+  // Finding I5: the warmup depends on the params actually in force, not on the defaults. A run with
+  // --param slow=200 needs 201 candles before it can cross anything.
+  it('derives warmup from the params in force', () => {
+    expect(maCrossover.warmupFor({ fast: 12, slow: 48, fraction: 0.5 })).toBe(49);
+    expect(maCrossover.warmupFor({ fast: 3, slow: 200, fraction: 0.5 })).toBe(201);
+  });
+
+  // Finding M8: `ctx.params.slow ?? 48` silently substituted the default for a missing param, so a
+  // strategy could run on numbers nobody chose. Missing is a bug, and it fails closed.
+  it('fails closed on a missing param instead of quietly substituting a default', () => {
+    const ctx = ctxFor([3, 2, 1, 2, 4], 100_000_000n, 0n);
+    expect(() => maCrossover.onCandle({ ...ctx, params: { fast: 2, fraction: 0.5 } })).toThrow(/slow/);
+    expect(() => maCrossover.warmupFor({ fast: 2, fraction: 0.5 })).toThrow(/slow/);
+  });
 });

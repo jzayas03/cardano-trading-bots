@@ -1,9 +1,9 @@
 import { backfillToken, GeckoTerminalClient, PgExternalRepo } from '@ctb/candles';
-import { PgSnapshotRepo } from '@ctb/collector';
 import { createPool } from '@ctb/db';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
+import { ensureTokens } from '../ensureTokens.js';
 
 export function parseIsoDate(label: string, s: string | undefined): Date {
   const d = s ? new Date(s) : new Date(NaN);
@@ -22,10 +22,7 @@ export async function backfillCommand(log: Logger, args: string[]): Promise<void
   if (!token) throw new Error(`unknown ticker ${ticker}; not in universe.json`);
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   try {
-    // external_pool_map and candles_external are FK'd to tokens(unit). On a database where
-    // `collect` has never run, `tokens` is empty and the first write below hits the FK — sync
-    // the universe in first, exactly as collect.ts does before its own FK'd writes.
-    await new PgSnapshotRepo(db).syncTokens(universe.tokens, { seededAt: universe.seededAt, seedSource: universe.seedSource });
+    await ensureTokens(db, universe);
     const client = new GeckoTerminalClient({ log });
     const repo = new PgExternalRepo(db);
     const r = await backfillToken({ client, repo, token, from, to, log });

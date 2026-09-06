@@ -3,6 +3,7 @@ import { createPool } from '@ctb/db';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
+import { ensureTokens } from '../ensureTokens.js';
 import { sleep } from '../schedule.js';
 
 const REDISCOVER_AFTER_MS = 24 * 60 * 60 * 1000;
@@ -12,8 +13,12 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   const universe = await loadUniverse();
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   const repo = new PgSnapshotRepo(db);
-  await repo.syncTokens(universe.tokens, { seededAt: universe.seededAt, seedSource: universe.seedSource });
-  const source = new DexterPoolSource({ blockfrostProjectId: cfg.blockfrostProjectId as string, log });
+  await ensureTokens(db, universe);
+  // Finding I7: `retryBudgetMs` existed on DexterPoolSource and nothing ever set it, so every
+  // deployment silently ran the built-in 60 s — longer than a 60 s collector interval would allow,
+  // and unrelated to whatever interval is configured. Half the tick is the bound that makes sense:
+  // retries that outlive their own tick only delay the next one.
+  const source = new DexterPoolSource({ blockfrostProjectId: cfg.blockfrostProjectId as string, log, retryBudgetMs: cfg.intervalSec * 500 });
   const state: CollectorState = { lastDiscoveryAt: null };
   const stop = new AbortController();
   const onSignal = (sig: string) => { log.info({ sig }, 'stopping after current tick'); stop.abort(); };

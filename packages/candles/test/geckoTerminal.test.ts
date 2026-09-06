@@ -23,6 +23,15 @@ const poolsBody = {
   ],
 };
 
+// Finding I2: `ADA / SNEK` also contains 'ADA', but its OHLCV is quoted the other way round -- SNEK
+// per ADA. Importing it as history silently inverts every price in the series.
+const invertedPoolsBody = {
+  data: [
+    { id: 'cardano_ddd', attributes: { name: 'ADA / SNEK', address: 'ddd', reserve_in_usd: '9999' }, relationships: { dex: { data: { id: 'minswap-cardano' } } } },
+    { id: 'cardano_aaa', attributes: { name: 'SNEK / ADA', address: 'aaa', reserve_in_usd: '100.5' }, relationships: { dex: { data: { id: 'minswap-cardano' } } } },
+  ],
+};
+
 describe('GeckoTerminalClient', () => {
   it('lists only ADA pools, parses reserve, and spaces calls', async () => {
     const slept: number[] = [];
@@ -35,6 +44,17 @@ describe('GeckoTerminalClient', () => {
     await c.listAdaPools('unit1');
     expect(slept.length).toBe(1); // second call waited for the spacing window
     expect(c.calls()).toBe(2);
+  });
+
+  it('keeps only pools with ADA as the QUOTE leg and warns about an inverted one', async () => {
+    const warned: Array<Record<string, unknown>> = [];
+    const noisy = { info: () => {}, warn: (o: Record<string, unknown>) => { warned.push(o); }, error: () => {} };
+    const { f } = fakeFetch([() => json(invertedPoolsBody)]);
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, minSpacingMs: 0, log: noisy });
+    const pools = await c.listAdaPools('unit1');
+    expect(pools.map((p) => p.hex), 'the deeper ADA / SNEK pool is skipped, not chosen').toEqual(['aaa']);
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toMatchObject({ pool: 'ddd', name: 'ADA / SNEK' });
   });
 
   it('parses ohlcv rows into ascending decimal candles', async () => {

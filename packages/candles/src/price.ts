@@ -17,6 +17,19 @@ export function formatScaled(scaled: bigint): Decimal {
   return `${s.slice(0, -PRICE_SCALE)}.${s.slice(-PRICE_SCALE)}`;
 }
 
+/**
+ * The exact inverse of `formatScaled`: a decimal price string back to its scaled bigint (price x
+ * 1e18). This is the ONLY way a price crosses back into arithmetic — three packages had grown their
+ * own copy of the split-pad-BigInt dance, and a float shortcut next to any of them is how a fill
+ * price stops being reproducible from what was stored (finding M3). Extra fractional digits beyond
+ * 18 places are truncated, matching `formatScaled`'s own precision.
+ */
+export function decimalToScaled(d: Decimal): bigint {
+  const m = /^(\d+)(?:\.(\d*))?$/.exec(d.trim());
+  if (!m) throw new Error(`not a non-negative decimal: ${d}`);
+  return BigInt(m[1] + (m[2] ?? '').padEnd(PRICE_SCALE, '0').slice(0, PRICE_SCALE));
+}
+
 /** For indicators and reports only. Never use the result as an amount. */
 export function decimalToNumber(d: Decimal): number {
   const n = Number(d);
