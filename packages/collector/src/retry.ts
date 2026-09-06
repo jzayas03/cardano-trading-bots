@@ -6,6 +6,13 @@ export interface RetryOptions {
   onRetry?: (info: { attempt: number; delayMs: number; message: string }) => void;
 }
 
+// Matches on message TEXT only, not a parsed HTTP status field — there is no structured status on
+// these errors (Dexter/Blockfrost throw plain strings and Errors, not typed HTTP exceptions). This
+// means a non-HTTP error message that happens to contain an isolated 3-digit token in the 4xx/5xx
+// shape (e.g. an on-chain identifier or byte count that reads as "...503...") would be misclassified
+// transient and retried. That is bounded, not unsafe: it costs at most `attempts` extra tries within
+// `budgetMs` before rethrowing the original error — it can never turn a real failure into a false
+// success, since retrying only re-runs the same failing call.
 const TRANSIENT = /\b(429|5\d\d)\b|ETIMEDOUT|ECONNRESET|ENOTFOUND|EAI_AGAIN|timed out|TimeoutError/;
 
 export function isTransientHttpError(err: unknown): boolean {

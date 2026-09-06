@@ -22,6 +22,28 @@ class CountingBlockfrostProvider extends BlockfrostProvider {
   override datumValue(...args: Parameters<BlockfrostProvider['datumValue']>) { this.calls++; return super.datumValue(...args); }
 }
 
+/**
+ * Structural view of the piece of Dexter that `DefaultPoolFetcher.poolState` needs — just the one
+ * on-chain call it wraps in retry. Kept separate from `PoolFetcher` (which is the seam for the
+ * whole `DexterPoolSource`) so a unit test can prove the retry wrapping around this single call
+ * with a plain fake, without importing Dexter, touching the network, or faking `discoverVenue` too.
+ */
+export interface PoolStateClient {
+  getLiquidityPoolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined>;
+}
+
+export interface DefaultPoolFetcherOptions {
+  url: string;
+  projectId: string;
+  log: Logger;
+  retryBudgetMs: number;
+  /** Injectable seam for tests (finding: DefaultPoolFetcher.poolState's retry wrapping was untested).
+   *  Omit to use the real Dexter-backed client, wired up exactly as before. */
+  poolStateClient?: PoolStateClient;
+  /** Injectable seam for the retry backoff's sleep, so a unit test proving retry behavior does not wait on a real timer. Omit for a real timer. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
 /** The real `PoolFetcher`: wraps Dexter exactly as `DexterPoolSource` always has. Constructing it is
  *  synchronous and makes no network call (Dexter/BlockfrostProvider only build an axios client in
  *  their constructors), so it is safe to construct even in a unit test that never calls it. */
@@ -30,14 +52,25 @@ class DefaultPoolFetcher implements PoolFetcher {
   private readonly provider: CountingBlockfrostProvider;
   private readonly log: Logger;
   private readonly retryBudgetMs: number;
+  private readonly poolStateClient: PoolStateClient;
+  private readonly sleep?: (ms: number) => Promise<void>;
 
-  constructor(url: string, projectId: string, log: Logger, retryBudgetMs: number) {
-    this.provider = new CountingBlockfrostProvider({ url, projectId }, { timeout: 20_000, retries: 2 });
+  constructor(opts: DefaultPoolFetcherOptions) {
+    this.provider = new CountingBlockfrostProvider({ url: opts.url, projectId: opts.projectId }, { timeout: 20_000, retries: 2 });
     // shouldFallbackToApi false: an on-chain failure must surface as a failure, not as a quietly different data source.
     this.dexter = new Dexter({ shouldFetchMetadata: false, shouldFallbackToApi: false }, { timeout: 20_000, retries: 2 });
     this.dexter.withDataProvider(this.provider);
-    this.log = log;
-    this.retryBudgetMs = retryBudgetMs;
+    this.log = opts.log;
+    this.retryBudgetMs = opts.retryBudgetMs;
+    this.sleep = opts.sleep;
+    // Production wiring, unchanged in behavior: adapt the real Dexter FetchRequest to PoolStateClient,
+    // including the same `as unknown as` casts DefaultPoolFetcher always used at this boundary.
+    this.poolStateClient = opts.poolStateClient ?? {
+      getLiquidityPoolState: async (pool) => {
+        const state = await this.dexter.newFetchRequest().getLiquidityPoolState(pool as unknown as LiquidityPool);
+        return state as unknown as LiquidityPoolShape | undefined;
+      },
+    };
   }
 
   providerCalls(): number { return this.provider.calls; }
@@ -55,18 +88,18 @@ class DefaultPoolFetcher implements PoolFetcher {
   // (see the venue-failure comment in `discover` below), so a retry there would never fire.
   async poolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined> {
     return retryWithBackoff(
-      async () => {
-        const state = await this.dexter.newFetchRequest().getLiquidityPoolState(pool as unknown as LiquidityPool);
-        return state as unknown as LiquidityPoolShape | undefined;
-      },
+      () => this.poolStateClient.getLiquidityPoolState(pool),
       {
         attempts: 4, baseMs: 500, maxMs: 8_000, budgetMs: this.retryBudgetMs,
         isTransient: isTransientHttpError,
+        sleep: this.sleep,
         onRetry: (info) => this.log.warn(info, 'blockfrost retry'),
       },
     );
   }
 }
+
+export { DefaultPoolFetcher };
 
 export interface DexterPoolSourceOptions {
   blockfrostProjectId: string;
@@ -108,7 +141,9 @@ export class DexterPoolSource implements PoolSource {
       this.fetcher = opts.fetcher;
       this.defaultFetcher = null;
     } else {
-      this.defaultFetcher = new DefaultPoolFetcher(this.url, this.projectId, this.log, this.retryBudgetMs);
+      this.defaultFetcher = new DefaultPoolFetcher({
+        url: this.url, projectId: this.projectId, log: this.log, retryBudgetMs: this.retryBudgetMs, sleep: this.sleep,
+      });
       this.fetcher = this.defaultFetcher;
     }
   }
