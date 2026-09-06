@@ -1,9 +1,11 @@
 import 'dotenv/config';
 import pino from 'pino';
 import { backfillCommand } from './commands/backfill.js';
+import { backtestCommand } from './commands/backtest.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
 import { migrateCommand } from './commands/migrate.js';
+import { reportCommand } from './commands/report.js';
 import { statusCommand } from './commands/status.js';
 
 const log = pino({
@@ -25,8 +27,16 @@ async function main(): Promise<void> {
       return candlesCommand(log, { ticker: rest[0] });
     case 'backfill':
       return backfillCommand(log, rest);
+    case 'backtest':
+      return backtestCommand(log, rest);
+    case 'report':
+      return reportCommand(log, rest);
     default:
-      console.error('usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>>');
+      console.error(
+        'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
+        'backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
+        'report <run-id>>',
+      );
       process.exitCode = 2;
   }
 }

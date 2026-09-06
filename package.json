@@ -14,7 +14,9 @@
     "collect": "tsx packages/cli/src/main.ts collect",
     "status": "tsx packages/cli/src/main.ts status",
     "candles": "tsx packages/cli/src/main.ts candles",
-    "backfill": "tsx packages/cli/src/main.ts backfill"
+    "backfill": "tsx packages/cli/src/main.ts backfill",
+    "backtest": "tsx packages/cli/src/main.ts backtest",
+    "report": "tsx packages/cli/src/main.ts report"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

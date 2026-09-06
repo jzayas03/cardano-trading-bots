@@ -1,0 +1,8 @@
+{
+  "name": "@ctb/engine",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": { "@ctb/candles": "*", "@ctb/collector": "*", "@ctb/db": "*", "@ctb/universe": "*", "pg": "^8.13.0" },
+  "devDependencies": { "@types/pg": "^8.11.0" }
+}

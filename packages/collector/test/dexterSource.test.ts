@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Pair } from '@ctb/universe';
-import { DexterPoolSource, type DexName, type Logger, type LiquidityPoolShape, type PoolFetcher } from '../src/index.js';
+import {
+  DefaultPoolFetcher, DexterPoolSource,
+  type DexName, type Logger, type LiquidityPoolShape, type PoolFetcher, type PoolStateClient,
+} from '../src/index.js';
 
 const PAIR: Pair = {
   base: {
@@ -153,6 +156,7 @@ describe('DexterPoolSource.tip', () => {
     }) as unknown as typeof fetch;
     const source = new DexterPoolSource({
       blockfrostProjectId: 'unit-test', log, fetch: timeoutFetch, fetcher: new FakeFetcher(),
+      sleep: async () => {},
     });
 
     await expect(source.tip()).rejects.toThrow('blockfrost /blocks/latest timed out after 10000 ms');
@@ -173,5 +177,89 @@ describe('DexterPoolSource.tip', () => {
 
     expect(tip.height).toBe(123);
     expect(capturedSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('retries a transient 503 once and succeeds, without waiting on a real timer', async () => {
+    const { log } = makeLog();
+    let calls = 0;
+    const flakyFetch = (async () => {
+      calls++;
+      if (calls === 1) return new Response('', { status: 503 });
+      return new Response(JSON.stringify({ height: 456, time: 2000 }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const slept: number[] = [];
+    const source = new DexterPoolSource({
+      blockfrostProjectId: 'unit-test', log, fetch: flakyFetch, fetcher: new FakeFetcher(),
+      sleep: async (ms) => { slept.push(ms); },
+    });
+
+    const tip = await source.tip();
+
+    expect(tip.height).toBe(456);
+    expect(calls).toBe(2);
+    expect(slept.length).toBe(1);
+  });
+});
+
+describe('DefaultPoolFetcher.poolState', () => {
+  const pool = shape('MinswapV2', 'good', 'addr_good');
+
+  it('retries a transient rejection once and succeeds, without waiting on a real timer', async () => {
+    const { log, warns } = makeLog();
+    const slept: number[] = [];
+    let calls = 0;
+    const poolStateClient: PoolStateClient = {
+      getLiquidityPoolState: async () => {
+        calls++;
+        if (calls === 1) throw new Error('Request failed with status code 503');
+        return pool;
+      },
+    };
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000,
+      poolStateClient, sleep: async (ms) => { slept.push(ms); },
+    });
+
+    const result = await fetcher.poolState(pool);
+
+    expect(result).toEqual(pool);
+    expect(calls).toBe(2);
+    expect(slept.length).toBe(1);
+    expect(warns.length).toBe(1);
+  });
+
+  it('does not retry a non-transient rejection', async () => {
+    const { log, warns } = makeLog();
+    const slept: number[] = [];
+    let calls = 0;
+    const poolStateClient: PoolStateClient = {
+      getLiquidityPoolState: async () => { calls++; throw new Error('Request failed with status code 403'); },
+    };
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000,
+      poolStateClient, sleep: async (ms) => { slept.push(ms); },
+    });
+
+    await expect(fetcher.poolState(pool)).rejects.toThrow(/403/);
+    expect(calls).toBe(1);
+    expect(slept.length).toBe(0);
+    expect(warns.length).toBe(0);
+  });
+
+  it('gives up after 4 attempts on a persistent 503', async () => {
+    const { log } = makeLog();
+    const slept: number[] = [];
+    let calls = 0;
+    const poolStateClient: PoolStateClient = {
+      getLiquidityPoolState: async () => { calls++; throw new Error('Request failed with status code 503'); },
+    };
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000,
+      poolStateClient, sleep: async (ms) => { slept.push(ms); },
+    });
+
+    await expect(fetcher.poolState(pool)).rejects.toThrow(/after 4 attempts/);
+    expect(calls).toBe(4);
+    expect(slept.length).toBe(3);
   });
 });
