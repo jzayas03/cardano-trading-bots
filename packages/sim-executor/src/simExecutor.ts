@@ -16,7 +16,7 @@ export interface SimExecutorOptions {
    * seven hours later is not a batcher delay — it is a different market (finding C3).
    */
   maxGapMs: number;
-  costOverrides?: Partial<VenueCosts>;
+  costOverrides?: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>;
 }
 
 const SCALE = 10n ** BigInt(PRICE_SCALE);

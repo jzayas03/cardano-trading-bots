@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decimalToScaled, priceAdaPerToken } from '@ctb/candles';
 import type { Candle } from '@ctb/engine';
-import { costsForPoolId, cpmmAmountOut, DEFAULT_COSTS, SimExecutor } from '../src/index.js';
+import { costsForPoolId, cpmmAmountOut, SimExecutor } from '../src/index.js';
 
 const RQ = 52_331_970_594n;
 const RB = 23_779_491n;
@@ -37,7 +37,7 @@ describe('SimExecutor cpmm_observed', () => {
   it('fills the hand-computed buy at 292 bps slippage against the t mid (spec §4.5)', () => {
     const r = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, nextSameReserves, rich);
     expect(r).toMatchObject({ status: 'filled', poolId: 'SundaeSwapV3:x', unitIn: 'lovelace', amountIn: 1_000_000_000n, amountOut: 441_500n,
-      unitOut: SNEK, poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n, networkFeeLovelace: 200_000n, midPrice: MID,
+      unitOut: SNEK, poolFeeIn: 10_000_000n, batcherFeeLovelace: 1_000_000n, networkFeeLovelace: 200_000n, midPrice: MID,
       slippageBps: 292, priceImpactBps: 292, tsFill: nextSameReserves.tickTs });
     expect((r as { fillPrice: string }).fillPrice).toBe('0.002265005662514156');
   });
@@ -99,11 +99,14 @@ describe('SimExecutor cpmm_observed', () => {
   // Finding M9: a sell can be rejected AFTER the swap is priced, when the ADA it returns still does
   // not cover the batcher + network fees. That branch had no test at all.
   it('rejects a sell whose proceeds still do not cover the lovelace fees', () => {
-    // 1000 SNEK out of this pool returns 2 178 620 lovelace; fees are 2 200 000 and there is no cash.
-    const r = ex.fill({ side: 'sell', amountIn: 1_000n, reason: 't' }, at, nextSameReserves, { cashLovelace: 0n, positionBase: 1_000n });
+    // 500 SNEK out of this pool returns 1 089 333 lovelace (cpmmAmountOut(500n, RB, RQ, 100));
+    // fees are now 1 000 000 (SundaeSwapV3 batcher, re-derived from the venue docs) + 200 000
+    // network = 1 200 000, and there is no cash.
+    const r = ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 0n, positionBase: 500n });
     expect(r).toEqual({ status: 'rejected', reason: 'insufficient cash' });
-    // With enough cash on hand to top the fees up, the very same sell clears.
-    const ok = ex.fill({ side: 'sell', amountIn: 1_000n, reason: 't' }, at, nextSameReserves, { cashLovelace: 200_000n, positionBase: 1_000n });
+    // With enough cash on hand to top the fees up (200 000 + 1 089 333 = 1 289 333 >= 1 200 000),
+    // the very same sell clears.
+    const ok = ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 200_000n, positionBase: 500n });
     expect(ok.status).toBe('filled');
   });
 
@@ -161,8 +164,9 @@ describe('SimExecutor cpmm_synthetic_depth', () => {
 
 describe('costsForPoolId', () => {
   it('returns the venue table and applies overrides', () => {
-    expect(costsForPoolId('MinswapV2:abc')).toEqual(DEFAULT_COSTS);
-    expect(costsForPoolId('Splash:abc', { batcherFeeLovelace: 1_500_000n })).toEqual({ batcherFeeLovelace: 1_500_000n, networkFeeLovelace: 200_000n });
+    expect(costsForPoolId('MinswapV2:abc')).toMatchObject({ batcherFeeLovelace: 2_000_000n, basis: 'assumed' });
+    expect(costsForPoolId('Splash:abc', { batcherFeeLovelace: 1_500_000n }))
+      .toMatchObject({ batcherFeeLovelace: 1_500_000n, networkFeeLovelace: 200_000n, basis: 'assumed', source: 'cli override' });
     expect(() => costsForPoolId('FutureSwap:abc')).toThrow(/unknown venue/);
   });
 });
