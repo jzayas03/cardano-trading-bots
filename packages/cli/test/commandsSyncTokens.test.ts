@@ -38,4 +38,13 @@ describe('CLI commands sync the universe into tokens before writing FK-scoped ro
     const repoAt = indexOfFirst(src, 'new PgCandleRepo(');
     expect(syncAt).toBeLessThan(repoAt);
   });
+
+  // Task 10: `runs.base_unit` is FK'd to tokens(unit) the same way. backtest.ts must sync the
+  // universe in before its first use of PgRunRepo (the run row is the first FK'd write it makes).
+  it('backtest.ts calls syncTokens before constructing PgRunRepo', async () => {
+    const src = await readCommandSource('backtest.ts');
+    const syncAt = indexOfFirst(src, 'syncTokens(');
+    const repoAt = indexOfFirst(src, 'new PgRunRepo(');
+    expect(syncAt).toBeLessThan(repoAt);
+  });
 });
