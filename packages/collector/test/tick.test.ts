@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Pair } from '@ctb/universe';
 import {
-  runTick, type CollectorState, type PoolLike, type PoolSource, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult,
+  isPoolFailure, runTick,
+  type CollectorState, type PoolLike, type PoolSource, type RunError, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult,
 } from '../src/index.js';
 
 const SNEK_PAIR: Pair = {
@@ -20,9 +21,25 @@ class FakeSource implements PoolSource {
   discoverCalls = 0;
   refreshCalls = 0;
   calls = 0;
-  constructor(private readonly pools: PoolLike[], private readonly tipFails = false) {}
-  async discover(): Promise<SourceResult> { this.discoverCalls++; this.calls += 10; return { pools: this.pools, failures: [] }; }
-  async refresh(): Promise<SourceResult> { this.refreshCalls++; this.calls += this.pools.length; return { pools: this.pools, failures: [] }; }
+  constructor(
+    private readonly pools: PoolLike[],
+    private readonly tipFails = false,
+    private readonly discoverFailures: RunError[] = [],
+    private readonly refreshFailures: RunError[] = [],
+    private readonly throwOn?: 'discover' | 'refresh',
+  ) {}
+  async discover(): Promise<SourceResult> {
+    this.discoverCalls++;
+    this.calls += 10;
+    if (this.throwOn === 'discover') throw new Error('boom');
+    return { pools: this.pools, failures: this.discoverFailures };
+  }
+  async refresh(): Promise<SourceResult> {
+    this.refreshCalls++;
+    this.calls += this.pools.length;
+    if (this.throwOn === 'refresh') throw new Error('boom');
+    return { pools: this.pools, failures: this.refreshFailures };
+  }
   async tip() { if (this.tipFails) throw new Error('blockfrost down'); return { height: 42, time: new Date() }; }
   providerCalls() { return this.calls; }
   resetProviderCalls() { this.calls = 0; }
@@ -90,5 +107,58 @@ describe('runTick', () => {
     const s = await runTick(deps(source, repo, state));
     expect(s.discovered).toBe(true);
     expect(state.lastDiscoveryAt).toEqual(fixedNow());
+  });
+
+  it('counts per-pool discovery failures (both venue-scoped and pool-scoped) toward poolsAttempted/poolsFailed', async () => {
+    const discoverFailures: RunError[] = [
+      { scope: 'discover:Splash', message: 'venue down' },
+      { scope: 'discover:MinswapV2:bad', message: 'no address' },
+    ];
+    const source = new FakeSource([pool('MinswapV2', 'a'), pool('SundaeSwapV3', 'b')], false, discoverFailures);
+    const repo = new FakeRepo();
+    const s = await runTick(deps(source, repo));
+    expect(s.poolsAttempted).toBe(3);
+    expect(s.poolsFailed).toBe(1);
+    expect(s.poolsWritten).toBe(2);
+    expect(s.errors).toHaveLength(2);
+  });
+
+  it('counts per-pool refresh failures toward poolsAttempted/poolsFailed', async () => {
+    const refreshFailures: RunError[] = [{ scope: 'refresh:MinswapV2:x', message: 'timeout' }];
+    const source = new FakeSource([pool('MinswapV2', 'a')], false, [], refreshFailures);
+    const repo = new FakeRepo();
+    const state: CollectorState = { lastDiscoveryAt: null };
+    await runTick(deps(source, repo, state));
+    source.resetProviderCalls();
+    const s = await runTick(deps(source, repo, state));
+    expect(s.poolsAttempted).toBe(2);
+    expect(s.poolsFailed).toBe(1);
+  });
+
+  it('never propagates a throw from refresh(); records it on the run row with no snapshots', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a')], false, [], [], 'refresh');
+    const repo = new FakeRepo();
+    const state: CollectorState = { lastDiscoveryAt: null };
+    await runTick(deps(source, repo, state)); // first tick: discover succeeds, seeds known pools
+    const rowsBefore = repo.rows.length;
+    await expect(runTick(deps(source, repo, state))).resolves.toBeDefined();
+    expect(repo.rows.length).toBe(rowsBefore);
+    expect(repo.summaries.at(-1)?.errors[0]).toEqual({ scope: 'refresh', message: 'boom' });
+    expect(repo.summaries.at(-1)?.discovered).toBe(false);
+  });
+});
+
+describe('isPoolFailure', () => {
+  it('is true for a per-pool refresh failure', () => {
+    expect(isPoolFailure({ scope: 'refresh:a', message: 'x' })).toBe(true);
+  });
+  it('is true for a per-pool discovery failure (venue:identifier)', () => {
+    expect(isPoolFailure({ scope: 'discover:Splash:abc', message: 'x' })).toBe(true);
+  });
+  it('is false for a venue-level discovery failure', () => {
+    expect(isPoolFailure({ scope: 'discover:Splash', message: 'x' })).toBe(false);
+  });
+  it('is false for an unrelated scope', () => {
+    expect(isPoolFailure({ scope: 'tip', message: 'x' })).toBe(false);
   });
 });

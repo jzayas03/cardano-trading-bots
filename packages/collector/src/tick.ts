@@ -1,11 +1,20 @@
 import type { Pair } from '@ctb/universe';
 import type { RunError, RunSummary, SnapshotRepo } from './repo.js';
 import { bucketTick, poolIdOf, poolToSnapshot } from './snapshot.js';
-import type { PoolSource } from './source.js';
+import type { PoolSource, SourceResult } from './source.js';
 import type { Logger, SnapshotRow } from './types.js';
 
 export interface CollectorState {
   lastDiscoveryAt: Date | null;
+}
+
+/**
+ * True for a per-pool failure: `refresh:<poolId>` (always per-pool) or `discover:<venue>:<identifier>`
+ * (a pool-mapping failure within a venue). False for a venue-level `discover:<venue>` failure — the
+ * whole venue's fetch failed, so no individual pool was ever attempted.
+ */
+export function isPoolFailure(err: RunError): boolean {
+  return err.scope.startsWith('refresh:') || /^discover:[^:]+:./.test(err.scope);
 }
 
 export interface TickDeps {
@@ -51,7 +60,13 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
     d.source.knownPoolCount() === 0 ||
     startedAt.getTime() - d.state.lastDiscoveryAt.getTime() > d.rediscoverAfterMs;
 
-  const result = stale ? await d.source.discover(d.pairs) : await d.source.refresh();
+  let result: SourceResult;
+  try {
+    result = stale ? await d.source.discover(d.pairs) : await d.source.refresh();
+  } catch (err) {
+    errors.push({ scope: stale ? 'discover' : 'refresh', message: (err as Error).message ?? String(err) });
+    return finish();
+  }
   if (stale) {
     summary.discovered = true;
     d.state.lastDiscoveryAt = startedAt;
@@ -59,7 +74,7 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   errors.push(...result.failures);
 
   const rows: SnapshotRow[] = [];
-  summary.poolsAttempted = result.pools.length + result.failures.filter((f) => f.scope.startsWith('refresh:')).length;
+  summary.poolsAttempted = result.pools.length + result.failures.filter(isPoolFailure).length;
   for (const pool of result.pools) {
     try {
       rows.push(poolToSnapshot(pool, { tickTs, blockHeight: tip.height, observedAt: d.now() }));
