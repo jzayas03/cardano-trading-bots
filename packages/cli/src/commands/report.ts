@@ -263,7 +263,12 @@ export async function reportCommand(log: Logger, args: string[]): Promise<void> 
       if (value === undefined) throw new Error(USAGE);
       dayArg = value;
       i++;
+      continue;
     }
+    // Finding M2: anything else used to be skipped in silence, so `report 6 --dya 2026-09-06` — or a
+    // stray shell word — produced a confident full-run report instead of the day the operator asked
+    // for. Every other command in this CLI rejects an unknown flag; this one now does too.
+    throw new Error(`unknown argument ${args[i]}\n${USAGE}`);
   }
   // Validate before opening a pool so a malformed --day fails fast without a DB round trip.
   const window = dayArg !== undefined ? dayWindow(dayArg) : null;

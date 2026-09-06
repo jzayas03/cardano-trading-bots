@@ -289,3 +289,30 @@ describe('report headers cite provenance and feed health (findings I3, I4)', () 
     expect(lines.some((l) => l.startsWith('feed:'))).toBe(false);
   });
 });
+
+/**
+ * Finding M2: `reportCommand` looped over its arguments looking only for `--day` and ignored
+ * everything else, so `report 6 --dya 2026-09-06`, `report 6 --rehearsal`, or a stray shell word
+ * produced a confident full-run report while silently discarding what the operator asked for. Every
+ * other command in this CLI rejects an unknown flag; this one did not.
+ */
+describe('reportCommand rejects unknown arguments (finding M2)', () => {
+  const noopLog = { error: () => {} } as unknown as Logger;
+
+  it('rejects a misspelled flag rather than reporting something else', async () => {
+    await expect(reportCommand(noopLog, ['5', '--dya', '2026-09-06'])).rejects.toThrow(/unknown argument --dya/);
+  });
+
+  it('rejects a stray positional argument', async () => {
+    await expect(reportCommand(noopLog, ['5', '2026-09-06'])).rejects.toThrow(/unknown argument 2026-09-06/);
+  });
+
+  it('rejects a flag that belongs to another command', async () => {
+    await expect(reportCommand(noopLog, ['5', '--rehearsal'])).rejects.toThrow(/unknown argument --rehearsal/);
+  });
+
+  it('still rejects a run id that is not a positive integer', async () => {
+    await expect(reportCommand(noopLog, ['0'])).rejects.toThrow(/usage: report <run-id>/);
+    await expect(reportCommand(noopLog, ['abc'])).rejects.toThrow(/usage: report <run-id>/);
+  });
+});

@@ -1,5 +1,5 @@
 import { PgCandleRepo, type CandleRepo } from '@ctb/candles';
-import { createPool, withTransaction } from '@ctb/db';
+import { createPool, withTransaction, type Queryable } from '@ctb/db';
 import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Candle, type EquityPoint, type FeedCounters, type OrderRecord, type Portfolio, type RunRow } from '@ctb/engine';
 import { SimExecutor } from '@ctb/sim-executor';
 import { retryWithBackoff } from '@ctb/collector';
@@ -7,6 +7,7 @@ import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
+import { assertFakeAllowed } from '../fakeWalk.js';
 import { candleFromRow, liveCandleFeed, type FeedTickInfo } from '../liveFeed.js';
 import { isHeartbeatStale } from './status.js';
 import { sleep } from '../schedule.js';
@@ -14,7 +15,16 @@ import { buildRunParams } from './backtest.js';
 import { printReport } from './report.js';
 
 export interface PaperArgs {
-  strategyId: string; ticker: string; cashAda: number; resume: number | null; intervalSec: number;
+  strategyId: string; ticker: string;
+  /** null when `--cash-ada` was not given. Distinguishing "not given" from "given as the default"
+   * is what lets `--resume` refuse a flag that would silently do nothing (finding M5). */
+  cashAda: number | null;
+  resume: number | null;
+  /** null when `--interval-sec` was not given: the collector's own `COLLECT_INTERVAL_SECONDS` is
+   * then the default, rather than a hard-coded 300 unrelated to it (finding I2). */
+  intervalSec: number | null;
+  /** Proceed with an interval that differs from the collector's, recorded in the run's params. */
+  allowIntervalMismatch: boolean;
   graceSec: number; maxGapMin: number; rehearsal: boolean; params: Record<string, number>;
   /**
    * Consecutive failing feed boundaries after which the run stops itself (finding I5); 0 disables
@@ -24,15 +34,15 @@ export interface PaperArgs {
   maxTickFailures: number;
 }
 
-const USAGE = 'usage: paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec 300] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...';
+const USAGE = 'usage: paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...';
 const ada = (n: number): bigint => BigInt(Math.round(n * 1_000_000));
 
 export function parsePaperArgs(args: string[]): PaperArgs {
   const [strategyId, ticker, ...rest] = args;
   if (!strategyId || !ticker) throw new Error(USAGE);
   const out: PaperArgs = {
-    strategyId, ticker, cashAda: 1000, resume: null, intervalSec: 300, graceSec: 60, maxGapMin: 15, rehearsal: false, params: {},
-    maxTickFailures: 12,
+    strategyId, ticker, cashAda: null, resume: null, intervalSec: null, allowIntervalMismatch: false,
+    graceSec: 60, maxGapMin: 15, rehearsal: false, params: {}, maxTickFailures: 12,
   };
   const num = (flag: string, v: string | undefined, min: number): number => {
     const n = Number(v);
@@ -49,6 +59,7 @@ export function parsePaperArgs(args: string[]): PaperArgs {
       case '--grace-sec': out.graceSec = num(flag, val, 0); i++; break;
       case '--max-gap-min': out.maxGapMin = num(flag, val, 1); i++; break;
       case '--max-tick-failures': out.maxTickFailures = num(flag, val, 0); i++; break;
+      case '--allow-interval-mismatch': out.allowIntervalMismatch = true; break;
       case '--rehearsal': out.rehearsal = true; break;
       case '--param': {
         const eq = (val ?? '').indexOf('=');
@@ -123,6 +134,57 @@ export function paramsMismatch(prior: Record<string, unknown>, current: Record<s
   }
   return null;
 }
+
+/** `--cash-ada` when it is not given. A fresh run with no flag starts on 1000 ADA, as it always has. */
+export const DEFAULT_CASH_ADA = 1000;
+
+/**
+ * Finding I2: `--interval-sec` defaulted to a hard-coded 300 with no relation to the collector's own
+ * `COLLECT_INTERVAL_SECONDS`. The paper feed sleeps to ITS interval's boundaries and then reads
+ * candles bucketed at the COLLECTOR's, so a mismatch means every boundary lands where no snapshot
+ * exists: a run that heartbeats forever, yields almost nothing, and has no error anywhere to explain
+ * it — the silent shape, not the loud one. Task 6's rehearsal set both to 60 by hand, which is
+ * exactly why nothing caught this. An operator who really wants a different cadence says so.
+ */
+export function resolveIntervalSec(argIntervalSec: number | null, configIntervalSec: number, allowMismatch: boolean): number {
+  if (argIntervalSec === null) return configIntervalSec;
+  if (argIntervalSec !== configIntervalSec && !allowMismatch) {
+    throw new Error(
+      `--interval-sec ${argIntervalSec} differs from COLLECT_INTERVAL_SECONDS ${configIntervalSec}; the collector's boundaries would not line up` +
+      '\npass --allow-interval-mismatch if that is deliberate',
+    );
+  }
+  return argIntervalSec;
+}
+
+/**
+ * Finding M5: `--cash-ada` was accepted alongside `--resume` and then silently ignored — a resumed
+ * run's portfolio comes from its last equity row. `--resume 6 --cash-ada 5000` continued on the old
+ * balance with nothing to say the flag had done nothing. It is only refused when there IS an equity
+ * row to restore from: resuming a run that never wrote one has no other source for a balance.
+ */
+export function cashAdaOnResumeError(cashAdaGiven: boolean, hasRestoredEquity: boolean): string | null {
+  return cashAdaGiven && hasRestoredEquity ? 'cash is restored from the run; --cash-ada is not allowed with --resume' : null;
+}
+
+/**
+ * Finding I7: how much synthetic data this token carries, in BOTH tables and with no time window.
+ * The old guard counted `pool_snapshots` alone, inside a 24-hour window, and both halves were holes.
+ * `candles` is the table the paper feed actually reads — a `Fake:` candle outlives the snapshot it
+ * was built from, and a run that believes it is trading real data would fill against it. And the
+ * window meant a rehearsal left alone for a day stopped being detectable at all, so "synthetic data
+ * can never be mistaken for real" quietly expired on a timer.
+ */
+export async function fakeRowsPresent(db: Queryable, baseUnit: string): Promise<{ snapshots: number; candles: number }> {
+  const snapshots = await db.query<{ n: string }>(
+    'SELECT count(*) AS n FROM pool_snapshots WHERE base_unit = $1 AND dex = $2', [baseUnit, FAKE_DEX]);
+  const candles = await db.query<{ n: string }>(
+    'SELECT count(*) AS n FROM candles WHERE base_unit = $1 AND pool_id LIKE $2', [baseUnit, `${FAKE_DEX}:%`]);
+  return { snapshots: Number(snapshots.rows[0]?.n ?? 0), candles: Number(candles.rows[0]?.n ?? 0) };
+}
+
+/** The synthetic venue `dev:fake-collector` writes under. One definition, matched in both tables. */
+const FAKE_DEX = 'Fake';
 
 /**
  * Finding I5: how a run stops itself when its feed is not merely slow but broken. `liveCandleFeed`
@@ -213,8 +275,13 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
   const a = parsePaperArgs(args);
   const strategy = STRATEGIES[a.strategyId];
   if (!strategy) throw new Error(`unknown strategy ${a.strategyId}; known: ${Object.keys(STRATEGIES).join(', ')}`);
-  if (a.rehearsal && process.env.CTB_ALLOW_FAKE_DATA !== '1') throw new Error('rehearsal requires CTB_ALLOW_FAKE_DATA=1');
   const cfg = loadConfig(process.env, { blockfrost: false });
+  // Finding I7: the consumer of synthetic data gets the same two-part gate as the producer — the
+  // explicit opt-in AND a localhost database. Checked before anything else touches the database.
+  if (a.rehearsal) assertFakeAllowed(process.env, cfg.databaseUrl, 'paper --rehearsal');
+  // Finding I2: the paper clock and the collector's clock must agree, or every boundary lands where
+  // no snapshot exists and the run yields nothing while looking perfectly healthy.
+  const intervalSec = resolveIntervalSec(a.intervalSec, cfg.intervalSec, a.allowIntervalMismatch);
   const universe = await loadUniverse();
   const token = universe.tokens.find((t) => t.ticker === a.ticker);
   if (!token) throw new Error(`unknown ticker ${a.ticker}; not in universe.json`);
@@ -235,16 +302,18 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     const runs = new PgRunRepo(db);
     runsForCatch = runs;
     if (!a.rehearsal) {
-      // Synthetic data can never be mistaken for real: a Fake-dex snapshot in the last 24h for this
-      // token means a rehearsal run touched this database and never cleaned up after itself.
-      const fake = await db.query<{ n: string }>(
-        `SELECT count(*) AS n FROM pool_snapshots WHERE base_unit = $1 AND dex = 'Fake' AND tick_ts > now() - interval '24 hours'`,
-        [token.unit],
-      );
-      if (Number(fake.rows[0]?.n ?? 0) > 0) throw new Error('rehearsal data present for this token; pass --rehearsal or clean the database');
+      // Synthetic data can never be mistaken for real: any `Fake` snapshot OR any `Fake:` candle for
+      // this token, of any age, means a rehearsal touched this database and never cleaned up.
+      const fake = await fakeRowsPresent(db, token.unit);
+      if (fake.snapshots > 0 || fake.candles > 0) {
+        throw new Error(
+          `rehearsal data present for this token (${fake.snapshots} Fake pool_snapshots, ${fake.candles} Fake candles); pass --rehearsal or clean the database`,
+        );
+      }
     }
     const maxGapMs = a.maxGapMin * 60_000;
-    let initial: Portfolio = { cashLovelace: ada(a.cashAda), positionBase: 0n };
+    const cashAda = a.cashAda ?? DEFAULT_CASH_ADA;
+    let initial: Portfolio = { cashLovelace: ada(cashAda), positionBase: 0n };
     let startSeq = 0;
     let afterTick: Date | null = null;
     let resumeWarning: string | undefined;
@@ -273,6 +342,9 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       const mismatch = paramsMismatch(prior.params, current);
       if (mismatch) throw new Error(`run ${a.resume} ${mismatch}`);
       const last = await runs.lastEquity(a.resume);
+      // Finding M5: refuse a flag that would silently do nothing rather than accept and ignore it.
+      const cashError = cashAdaOnResumeError(a.cashAda !== null, last !== null);
+      if (cashError) throw new Error(cashError);
       if (last) { initial = { cashLovelace: last.cashLovelace, positionBase: last.positionBase }; afterTick = last.tickTs; }
       startSeq = await runs.lastOrderSeq(a.resume);
       runId = a.resume;
@@ -288,7 +360,12 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       runId = await runs.createRun({
         mode: 'paper', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: 'candles', fillModel: 'cpmm_observed',
         dataFrom: new Date(), dataTo: new Date(),
-        params: { ...buildRunParams(strategy.defaultParams, a.params, a.cashAda, null, {}, maxGapMs), intervalSec: a.intervalSec, graceSec: a.graceSec, rehearsal: a.rehearsal },
+        params: {
+          ...buildRunParams(strategy.defaultParams, a.params, cashAda, null, {}, maxGapMs),
+          intervalSec, graceSec: a.graceSec, rehearsal: a.rehearsal,
+          collectIntervalSec: cfg.intervalSec, allowIntervalMismatch: a.allowIntervalMismatch,
+          maxTickFailures: a.maxTickFailures,
+        },
         status: 'running', rehearsal: a.rehearsal,
       });
     }
@@ -299,7 +376,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     // Finding I6: a resumed run starts its indicators warm, from candles it already lived through,
     // instead of spending its first `warmup` boundaries structurally unable to emit an intent.
     const primeHistory = afterTick
-      ? await readPrimeHistory(candleRepo, token.unit, afterTick, strategy.warmupFor({ ...strategy.defaultParams, ...a.params }), a.intervalSec)
+      ? await readPrimeHistory(candleRepo, token.unit, afterTick, strategy.warmupFor({ ...strategy.defaultParams, ...a.params }), intervalSec)
       : undefined;
     if (primeHistory) log.info({ runId: id, primed: primeHistory.length, afterTick }, 'primed strategy history from persisted candles');
     // Plan 3 Task 6: `Fake` (dev:fake-collector's synthetic venue) is not a Dexter venue and would
@@ -316,7 +393,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     let feedAbortReason: string | null = null;
 
     const feed = liveCandleFeed({
-      repo: candleRepo, token, intervalSec: a.intervalSec, graceSec: a.graceSec, maxGapMs, now: () => new Date(), sleep, signal: ac.signal, log, afterTick,
+      repo: candleRepo, token, intervalSec, graceSec: a.graceSec, maxGapMs, now: () => new Date(), sleep, signal: ac.signal, log, afterTick,
       onTick: async (info) => {
         feedCounters = accumulateFeedCounters(feedCounters, info);
         // These writes are inside the feed's own try (finding I1a): if Postgres is the thing that is
@@ -359,7 +436,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
           await tx.heartbeat(id, new Date(), batch.candle.tickTs);
         }),
         {
-          attempts: 5, baseMs: 500, maxMs: 8_000, budgetMs: a.intervalSec * 500,
+          attempts: 5, baseMs: 500, maxMs: 8_000, budgetMs: intervalSec * 500,
           isTransient: isTransientPgError,
           onRetry: ({ attempt, delayMs, message }) => log.warn({ runId: id, tickTs: batch.candle.tickTs, attempt, delayMs, err: message }, 'candle commit failed; retrying'),
         },
@@ -368,7 +445,7 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
 
     const result = await runEngine({
       feed, strategy, params: a.params, executor, initial, decimals: token.decimals, log, retain: false, startSeq, signal: ac.signal,
-      intervalSec: a.intervalSec, maxGapMs, primeHistory, initialWarnings: [staleResumeWarning, resumeWarning].filter((w): w is string => w !== undefined),
+      intervalSec, maxGapMs, primeHistory, initialWarnings: [staleResumeWarning, resumeWarning].filter((w): w is string => w !== undefined),
       sinks: { onCandleCommit: commitCandle },
     });
     if (feedAbortReason !== null) {

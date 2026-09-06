@@ -3,12 +3,28 @@ import type { RunRow } from '@ctb/engine';
 import { paramsMismatch, parsePaperArgs, resumeStatusError } from '../src/commands/paper.js';
 
 describe('parsePaperArgs', () => {
-  it('defaults cashAda, intervalSec, graceSec, maxGapMin, rehearsal, and resume', () => {
+  // Findings I2 and M5 changed two of these defaults from a VALUE to null. `cashAda` and
+  // `intervalSec` now mean "not given", which is what lets `--resume` refuse a `--cash-ada` that
+  // would silently do nothing, and lets the interval default to the collector's own
+  // COLLECT_INTERVAL_SECONDS instead of a hard-coded 300 unrelated to it. The parser no longer
+  // decides either value; `resolveIntervalSec`/`DEFAULT_CASH_ADA` do, where the config is in scope.
+  it('leaves cashAda and intervalSec unset, and defaults the rest', () => {
     const a = parsePaperArgs(['ma-crossover', 'SNEK']);
     expect(a).toEqual({
-      strategyId: 'ma-crossover', ticker: 'SNEK', cashAda: 1000, resume: null,
-      intervalSec: 300, graceSec: 60, maxGapMin: 15, rehearsal: false, params: {}, maxTickFailures: 12,
+      strategyId: 'ma-crossover', ticker: 'SNEK', cashAda: null, resume: null,
+      intervalSec: null, allowIntervalMismatch: false, graceSec: 60, maxGapMin: 15,
+      rehearsal: false, params: {}, maxTickFailures: 12,
     });
+  });
+
+  it('records an explicit --cash-ada and --interval-sec, including 0 ADA', () => {
+    expect(parsePaperArgs(['ma-crossover', 'SNEK', '--cash-ada', '5000']).cashAda).toBe(5000);
+    expect(parsePaperArgs(['ma-crossover', 'SNEK', '--cash-ada', '0']).cashAda).toBe(0);
+    expect(parsePaperArgs(['ma-crossover', 'SNEK', '--interval-sec', '60']).intervalSec).toBe(60);
+  });
+
+  it('parses --allow-interval-mismatch', () => {
+    expect(parsePaperArgs(['ma-crossover', 'SNEK', '--allow-interval-mismatch']).allowIntervalMismatch).toBe(true);
   });
 
   it('parses --resume', () => {
