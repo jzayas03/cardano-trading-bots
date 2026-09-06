@@ -1,10 +1,22 @@
 import { createPool } from '@ctb/db';
-import { PgRunRepo, type OrderRecord, type RunRow } from '@ctb/engine';
+import { PgRunRepo, type OrderRecord, type RunCoverage, type RunRow } from '@ctb/engine';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 
 const adaStr = (lovelace: string | bigint): string => (Number(BigInt(lovelace)) / 1_000_000).toFixed(6);
+
+/**
+ * Coverage belongs in the header, next to the provenance: a return figure computed over 4400 sparse
+ * candles in a window that should hold 26 000 is not the same claim as one computed over a full
+ * window, and nothing else on the report says which one it is (finding C3).
+ */
+export function coverageLine(c: RunCoverage | undefined): string {
+  if (!c) return 'coverage: not recorded (run predates coverage stats)';
+  const pct = c.expectedBuckets > 0 ? ((c.candles / c.expectedBuckets) * 100).toFixed(1) : '0.0';
+  const range = c.first && c.last ? `${c.first} -> ${c.last}` : 'empty window';
+  return `coverage: ${c.candles} of ${c.expectedBuckets} expected buckets (${pct}%) | ${range} | max gap ${Math.round(c.maxGapMs / 60_000)}m | ${c.gapsOverBound} gaps over the stale-fill bound`;
+}
 
 /** Operator output. Every number here comes from the runs row and its orders; the header is the provenance. */
 export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit: string }>, ticker: string): void {
@@ -13,13 +25,16 @@ export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit:
   console.log(`params: ${JSON.stringify(run.params)}`);
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
+  console.log(coverageLine(s.coverage));
+  for (const w of s.warnings ?? []) console.log(`warning: ${w}`);
   console.table([{ candles: s.candles, intents: s.intents, filled: s.filled, rejected: s.rejected, startAda: adaStr(s.startEquityLovelace), endAda: adaStr(s.endEquityLovelace),
     returnPct: s.returnPct, maxDrawdownPct: s.maxDrawdownPct, lovelaceFeesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn }]);
   if (Object.keys(s.rejectReasons).length) console.table(Object.entries(s.rejectReasons).map(([reason, count]) => ({ reason, count })));
   console.table(orders.slice(0, 50).map((o) => ({
     seq: o.seq, intent: o.tsIntent.toISOString(), side: o.intent.side, amountIn: o.intent.amountIn.toString(), status: o.result.status,
     fill: o.result.status === 'filled' ? o.result.tsFill.toISOString() : '-', amountOut: o.result.status === 'filled' ? o.result.amountOut.toString() : '-',
-    slippageBps: o.result.status === 'filled' ? o.result.slippageBps : '-', reason: o.result.status === 'rejected' ? o.result.reason : o.intent.reason,
+    slippageBps: o.result.status === 'filled' ? o.result.slippageBps : '-',
+    priceImpactBps: o.result.status === 'filled' ? o.result.priceImpactBps : '-', reason: o.result.status === 'rejected' ? o.result.reason : o.intent.reason,
   })));
   if (orders.length > 50) console.log(`... ${orders.length - 50} more orders (query paper_orders where run_id = ${run.id})`);
 }

@@ -11,8 +11,25 @@ export const DEFAULT_COSTS: VenueCosts = { batcherFeeLovelace: 2_000_000n, netwo
 
 export const VENUE_COSTS: Record<DexName, VenueCosts> = Object.fromEntries(VENUE_NAMES.map((v) => [v, DEFAULT_COSTS])) as Record<DexName, VenueCosts>;
 
-export function costsForPoolId(poolId: string, overrides?: Partial<VenueCosts>): VenueCosts {
-  const venue = poolId.split(':')[0] ?? '';
-  if (!isDexName(venue)) throw new Error(`unknown venue in pool id ${poolId}`);
+/** The venue half of a `<dex>:<identifier>` pool id, or '' when there is no prefix. */
+export function venueOf(poolId: string): string {
+  return poolId.split(':')[0] ?? '';
+}
+
+/**
+ * Null when the venue prefix is not one we have a cost table for. The executor needs this shape
+ * rather than an exception: a pool we cannot cost is one rejected order, counted and reported with
+ * every other rejection, not a thrown error that ends the whole run (finding M1).
+ */
+export function tryCostsForPoolId(poolId: string, overrides?: Partial<VenueCosts>): VenueCosts | null {
+  const venue = venueOf(poolId);
+  if (!isDexName(venue)) return null;
   return { ...VENUE_COSTS[venue], ...overrides };
+}
+
+/** Throwing variant, for callers configuring a run up front where an unknown venue IS a config error. */
+export function costsForPoolId(poolId: string, overrides?: Partial<VenueCosts>): VenueCosts {
+  const costs = tryCostsForPoolId(poolId, overrides);
+  if (!costs) throw new Error(`unknown venue in pool id ${poolId}`);
+  return costs;
 }

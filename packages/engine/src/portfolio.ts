@@ -1,4 +1,4 @@
-import { PRICE_SCALE, type Decimal } from '@ctb/candles';
+import { decimalToScaled, PRICE_SCALE, type Decimal } from '@ctb/candles';
 import type { FillResult, Portfolio } from './types.js';
 
 type Filled = Extract<FillResult, { status: 'filled' }>;
@@ -14,8 +14,7 @@ export function applyFill(p: Portfolio, r: Filled, side: 'buy' | 'sell'): Portfo
 
 /** price is ADA per whole token as an 18-place decimal; position is in smallest units. */
 export function equityLovelace(p: Portfolio, price: Decimal, decimals: number): bigint {
-  const [intPart, frac = ''] = price.split('.');
-  const scaled = BigInt(intPart + frac.padEnd(PRICE_SCALE, '0').slice(0, PRICE_SCALE)); // price * 1e18
+  const scaled = decimalToScaled(price); // price * 1e18, via the one shared parser (finding M3)
   const positionValue = (p.positionBase * scaled * 1_000_000n) / (10n ** BigInt(decimals) * 10n ** BigInt(PRICE_SCALE));
   return p.cashLovelace + positionValue;
 }

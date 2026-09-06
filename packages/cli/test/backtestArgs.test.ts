@@ -18,6 +18,14 @@ describe('parseBacktestArgs', () => {
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast=quick'])).toThrow(/numeric/);
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--bogus'])).toThrow(/unknown flag --bogus/);
   });
+  // Finding C3: the stale-fill bound is a run parameter, with a default that must be visible.
+  it('defaults the stale-fill bound to 15 minutes and accepts an override', () => {
+    expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01']).maxGapMin).toBe(15);
+    expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--max-gap-min', '60']).maxGapMin).toBe(60);
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--max-gap-min', '0'])).toThrow(/positive number of minutes/);
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--max-gap-min', 'soon'])).toThrow(/--max-gap-min/);
+  });
+
   it('rejects --param with an empty value or an empty key (Number(\'\') is 0, not a valid numeric value)', () => {
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast='])).toThrow(/numeric/);
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', '=5'])).toThrow(/numeric/);

@@ -11,7 +11,7 @@ import { buildRunParams } from '../src/commands/backtest.js';
  */
 describe('buildRunParams', () => {
   it('records DEFAULT_COSTS when no cost overrides are given', () => {
-    const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, {});
+    const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, {}, 900_000);
     expect(params.costs).toEqual({
       batcherFeeLovelace: DEFAULT_COSTS.batcherFeeLovelace.toString(),
       networkFeeLovelace: DEFAULT_COSTS.networkFeeLovelace.toString(),
@@ -19,7 +19,7 @@ describe('buildRunParams', () => {
   });
 
   it('records an overridden batcher fee in lovelace when --batcher-ada is given', () => {
-    const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, { batcherFeeLovelace: 1_500_000n });
+    const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, { batcherFeeLovelace: 1_500_000n }, 900_000);
     expect(params.costs).toEqual({
       batcherFeeLovelace: '1500000',
       networkFeeLovelace: DEFAULT_COSTS.networkFeeLovelace.toString(),
@@ -27,7 +27,7 @@ describe('buildRunParams', () => {
   });
 
   it('merges strategy defaults with arg params and carries cashAda/depthAda through', () => {
-    const params = buildRunParams({ fast: 12, slow: 48 }, { fast: 6 }, 500, 800_000, {});
+    const params = buildRunParams({ fast: 12, slow: 48 }, { fast: 6 }, 500, 800_000, {}, 900_000);
     expect(params).toMatchObject({ fast: 6, slow: 48, cashAda: 500, depthAda: 800_000 });
   });
 });

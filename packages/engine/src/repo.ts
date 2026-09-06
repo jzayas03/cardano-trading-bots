@@ -28,12 +28,12 @@ export function gitShaOrUnknown(cwd: string): string {
 
 /** Placeholders per paper_orders row: run_id, seq, ts_intent, ts_fill, base_unit, pool_id, side, unit_in, amount_in,
  * unit_out, amount_out, mid_price, fill_price, pool_fee_in, batcher_fee_lovelace, network_fee_lovelace, slippage_bps,
- * status, reject_reason, reason — 20 columns, matching the INSERT column list below. */
-const ORDER_PARAMS = 20;
+ * price_impact_bps, status, reject_reason, reason — 21 columns, matching the INSERT column list below. */
+const ORDER_PARAMS = 21;
 
 /**
- * 20 parameters per order means a single multi-row INSERT hit Postgres's 65535-parameter Bind cap at
- * 3277 orders — reachable in one long backtest. Chunk and wrap in one transaction (finding C1).
+ * 21 parameters per order means a single multi-row INSERT hit Postgres's 65535-parameter Bind cap at
+ * 3120 orders — reachable in one long backtest. Chunk and wrap in one transaction (finding C1).
  */
 const ORDER_CHUNK_ROWS = 1000;
 
@@ -86,7 +86,7 @@ export class PgRunRepo implements RunRepo {
     const res = await this.q.query<{
       seq: number; ts_intent: Date; ts_fill: Date | null; base_unit: string; pool_id: string | null; side: 'buy' | 'sell'; unit_in: string; amount_in: string; unit_out: string | null;
       amount_out: string | null; mid_price: string | null; fill_price: string | null; pool_fee_in: string | null; batcher_fee_lovelace: string | null; network_fee_lovelace: string | null;
-      slippage_bps: number | null; status: 'filled' | 'rejected'; reject_reason: string | null; reason: string;
+      slippage_bps: number | null; price_impact_bps: number | null; status: 'filled' | 'rejected'; reject_reason: string | null; reason: string;
     }>('SELECT * FROM paper_orders WHERE run_id = $1 ORDER BY seq', [runId]);
     return res.rows.map((r) => ({
       seq: r.seq, tsIntent: r.ts_intent, baseUnit: r.base_unit,
@@ -94,7 +94,8 @@ export class PgRunRepo implements RunRepo {
       result: r.status === 'filled'
         ? { status: 'filled', poolId: r.pool_id ?? '', unitIn: r.unit_in, amountIn: BigInt(r.amount_in), unitOut: r.unit_out ?? '', amountOut: BigInt(r.amount_out ?? '0'),
             midPrice: r.mid_price ?? '0', fillPrice: r.fill_price ?? '0', poolFeeIn: BigInt(r.pool_fee_in ?? '0'), batcherFeeLovelace: BigInt(r.batcher_fee_lovelace ?? '0'),
-            networkFeeLovelace: BigInt(r.network_fee_lovelace ?? '0'), slippageBps: r.slippage_bps ?? 0, tsFill: r.ts_fill ?? r.ts_intent }
+            networkFeeLovelace: BigInt(r.network_fee_lovelace ?? '0'), slippageBps: r.slippage_bps ?? 0, priceImpactBps: r.price_impact_bps ?? 0,
+            tsFill: r.ts_fill ?? r.ts_intent }
         : { status: 'rejected', reason: r.reject_reason ?? 'unknown' },
     }));
   }
@@ -109,13 +110,13 @@ async function insertOrderChunk(q: Queryable, runId: number, baseUnit: string, o
       f?.unitIn ?? (o.intent.side === 'buy' ? 'lovelace' : baseUnit), o.intent.amountIn.toString(),
       f?.unitOut ?? null, f ? f.amountOut.toString() : null, f?.midPrice ?? null, f?.fillPrice ?? null,
       f ? f.poolFeeIn.toString() : null, f ? f.batcherFeeLovelace.toString() : null, f ? f.networkFeeLovelace.toString() : null,
-      f?.slippageBps ?? null, o.result.status, o.result.status === 'rejected' ? o.result.reason : null, o.intent.reason,
+      f?.slippageBps ?? null, f?.priceImpactBps ?? null, o.result.status, o.result.status === 'rejected' ? o.result.reason : null, o.intent.reason,
     );
     return `(${Array.from({ length: ORDER_PARAMS }, (_, k) => `$${i * ORDER_PARAMS + k + 1}`).join(', ')})`;
   });
   const res = await q.query(
     `INSERT INTO paper_orders (run_id, seq, ts_intent, ts_fill, base_unit, pool_id, side, unit_in, amount_in, unit_out, amount_out, mid_price, fill_price,
-       pool_fee_in, batcher_fee_lovelace, network_fee_lovelace, slippage_bps, status, reject_reason, reason) VALUES ${tuples.join(', ')}`,
+       pool_fee_in, batcher_fee_lovelace, network_fee_lovelace, slippage_bps, price_impact_bps, status, reject_reason, reason) VALUES ${tuples.join(', ')}`,
     values);
   return res.rowCount ?? 0;
 }
