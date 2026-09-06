@@ -148,10 +148,13 @@ function printPaperStatusLines(run: RunRow): void {
 
 /**
  * `--day` report: window, the day's summary (mark-to-market and executable equity, return, fills,
- * rejects with reasons, the `stale t+1` count, fees), and — for paper runs — a heartbeat-age line so
- * an operator can tell a live run apart from one that stopped ticking mid-day.
+ * rejects with reasons, the `stale t+1` count, fees), the same assumed-venue-costs warning
+ * `printReport` prints (a day view should not hide that its fills' fees were assumed rather than
+ * documented — review finding, Task 5 round 1), and — for paper runs — a heartbeat-age line so an
+ * operator can tell a live run apart from one that stopped ticking mid-day. Exported for direct
+ * unit testing with a console spy, the same pattern `printReport` already uses.
  */
-function printDayReport(
+export function printDayReport(
   run: RunRow, ticker: string, from: Date, to: Date, equity: EquityPoint[], orders: Array<OrderRecord & { baseUnit: string }>, now: Date,
 ): void {
   if (run.rehearsal) console.log('REHEARSAL — synthetic data — not evidence');
@@ -168,6 +171,8 @@ function printDayReport(
     filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
     feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
   }]);
+  const assumed = assumedVenuesTouched(orders);
+  if (assumed.length) console.log(`warning: fills touched venues with ASSUMED costs: ${assumed.join(', ')} (see runs.params.costs.venues)`);
   if (Object.keys(s.rejectReasons).length) console.table(Object.entries(s.rejectReasons).map(([reason, count]) => ({ reason, count })));
   if (run.mode === 'paper') {
     const ageS = run.heartbeatAt ? Math.round((now.getTime() - run.heartbeatAt.getTime()) / 1000) : null;
@@ -180,7 +185,15 @@ export async function reportCommand(log: Logger, args: string[]): Promise<void> 
   if (!Number.isInteger(id) || id <= 0) throw new Error(USAGE);
   let dayArg: string | undefined;
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--day') { dayArg = args[i + 1]; i++; }
+    if (args[i] === '--day') {
+      // A missing value (e.g. `--day` as the last argument) previously left `dayArg` undefined,
+      // which is indistinguishable from "no --day at all" below and silently fell through to the
+      // non-day report instead of failing (review finding, Task 5 round 1).
+      const value = args[i + 1];
+      if (value === undefined) throw new Error(USAGE);
+      dayArg = value;
+      i++;
+    }
   }
   // Validate before opening a pool so a malformed --day fails fast without a DB round trip.
   const window = dayArg !== undefined ? dayWindow(dayArg) : null;

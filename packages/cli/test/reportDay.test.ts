@@ -1,6 +1,7 @@
 import type { EquityPoint, OrderRecord, RunRow } from '@ctb/engine';
+import type { Logger } from 'pino';
 import { describe, expect, it, vi } from 'vitest';
-import { dayWindow, printReport, summarizeDay } from '../src/commands/report.js';
+import { dayWindow, printDayReport, printReport, reportCommand, summarizeDay } from '../src/commands/report.js';
 
 /**
  * `dayWindow` turns an operator-supplied `--day YYYY-MM-DD` into the UTC window a `BETWEEN` query
@@ -152,5 +153,71 @@ describe('printReport paper-run status lines', () => {
     } finally {
       log.mockRestore();
     }
+  });
+});
+
+/**
+ * Review finding (Task 5, round 1): `report --day` omitted the assumed-venue warning that the
+ * non-`--day` `printReport` already prints — a `--day` reader had no way to know a day's fills
+ * touched a venue whose batcher/network fee is `assumed` rather than read from documentation
+ * (`assumedVenuesTouched`, `packages/sim-executor/src/costs.ts`). `Splash` is `basis: 'assumed'`;
+ * `Minswap` is `basis: 'documented'` — same fixture shape the non-`--day` path already relies on.
+ */
+describe('printDayReport assumed-venue warning', () => {
+  const dayRun: RunRow = {
+    id: 9, mode: 'paper', strategyId: 'ma-crossover', params: {}, gitSha: 'abc123', baseUnit: 'lovelace.TOKEN',
+    dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: new Date('2026-06-15T00:00:00Z'), dataTo: new Date('2026-06-15T00:00:00Z'),
+    createdAt: new Date('2026-06-15T00:00:00Z'), finishedAt: null, summary: null,
+    status: 'running', heartbeatAt: null, lastTickTs: null, stopReason: null, rehearsal: false,
+  };
+  const { from, to } = dayWindow('2026-06-15');
+
+  const filledOn = (poolId: string): OrderRecord & { baseUnit: string } => ({
+    seq: 1,
+    tsIntent: new Date('2026-06-15T05:00:00.000Z'),
+    intent: { side: 'buy', amountIn: 500_000_000n, reason: 'signal' },
+    result: {
+      status: 'filled', poolId, unitIn: 'lovelace', amountIn: 500_000_000n, unitOut: 'lovelace.TOKEN', amountOut: 400_000_000n,
+      midPrice: '1.0', fillPrice: '1.01', poolFeeIn: 1_500_000n, batcherFeeLovelace: 2_000_000n, networkFeeLovelace: 200_000n,
+      slippageBps: 10, priceImpactBps: 5, poolAfter: null, tsFill: new Date('2026-06-15T05:00:01.000Z'),
+    },
+    baseUnit: 'lovelace.TOKEN',
+  });
+
+  it('prints the warning when a filled order in the day touched an assumed venue', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      printDayReport(dayRun, 'TOKEN', from, to, [], [filledOn('Splash:x')], new Date());
+      const lines = log.mock.calls.map((c) => String(c[0]));
+      expect(lines).toContainEqual(expect.stringContaining('ASSUMED costs: Splash'));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it('does not print the warning when the day only touched a documented venue', () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      printDayReport(dayRun, 'TOKEN', from, to, [], [filledOn('Minswap:x')], new Date());
+      const lines = log.mock.calls.map((c) => String(c[0]));
+      expect(lines.some((l) => l.includes('ASSUMED costs'))).toBe(false);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
+/**
+ * Review finding (Task 5, round 1): `report <id> --day` with `--day` as the LAST argument (no value
+ * following it) silently fell through to the non-`--day` path instead of failing — `dayArg` stayed
+ * `undefined` so `window` was computed as `null`, and the command proceeded as if `--day` had never
+ * been passed. An operator who fat-fingers the flag gets the wrong report silently rather than a
+ * usage error.
+ */
+describe('reportCommand --day requires a value', () => {
+  const noopLog = { error: () => {} } as unknown as Logger;
+
+  it('throws a usage error rather than falling through to the non-day report', async () => {
+    await expect(reportCommand(noopLog, ['5', '--day'])).rejects.toThrow(/usage: report <run-id>/);
   });
 });
