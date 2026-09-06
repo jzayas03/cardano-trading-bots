@@ -13,7 +13,8 @@
     "migrate": "tsx packages/cli/src/main.ts migrate",
     "collect": "tsx packages/cli/src/main.ts collect",
     "status": "tsx packages/cli/src/main.ts status",
-    "candles": "tsx packages/cli/src/main.ts candles"
+    "candles": "tsx packages/cli/src/main.ts candles",
+    "backfill": "tsx packages/cli/src/main.ts backfill"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

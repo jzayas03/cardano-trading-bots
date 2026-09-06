@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pino from 'pino';
+import { backfillCommand } from './commands/backfill.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
 import { migrateCommand } from './commands/migrate.js';
@@ -22,8 +23,10 @@ async function main(): Promise<void> {
       return statusCommand(log);
     case 'candles':
       return candlesCommand(log, { ticker: rest[0] });
+    case 'backfill':
+      return backfillCommand(log, rest);
     default:
-      console.error('usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]>');
+      console.error('usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>>');
       process.exitCode = 2;
   }
 }
