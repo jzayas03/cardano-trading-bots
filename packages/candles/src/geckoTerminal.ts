@@ -43,12 +43,23 @@ export class GeckoTerminalClient {
     const body = (await this.get(`/networks/cardano/tokens/${unit}/pools?page=1`)) as {
       data?: Array<{ id: string; attributes: { name: string; address: string; reserve_in_usd: string | null }; relationships: { dex: { data: { id: string } } } }>;
     };
-    return (body.data ?? [])
-      .filter((p) => p.attributes.name.split(' / ').includes('ADA'))
-      .map((p) => ({
+    const out: GeckoPool[] = [];
+    for (const p of body.data ?? []) {
+      // `X / ADA` quotes in ADA per X, which is what our candles mean. `ADA / X` quotes the other way
+      // round, so importing it as history inverts every price in the series — and because that name
+      // also contains the string 'ADA', a membership test happily accepted it (finding I2). The skip
+      // is logged rather than silent: an inverted pool that is also the deepest is worth knowing about.
+      const [base, quote] = p.attributes.name.split(' / ');
+      if (quote !== 'ADA') {
+        if (base === 'ADA') this.log.warn({ pool: p.attributes.address, name: p.attributes.name }, 'skipping ADA-first pool: its prices are quoted in the wrong direction');
+        continue;
+      }
+      out.push({
         id: p.id, hex: p.attributes.address, name: p.attributes.name, dex: p.relationships.dex.data.id,
         reserveUsd: p.attributes.reserve_in_usd === null ? null : Number(p.attributes.reserve_in_usd),
-      }));
+      });
+    }
+    return out;
   }
 
   async ohlcv5m(poolHex: string, beforeTs?: Date): Promise<GeckoCandle[]> {
