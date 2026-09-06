@@ -4,6 +4,7 @@
   "type": "module",
   "exports": "./src/main.ts",
   "dependencies": {
+    "@ctb/candles": "*",
     "@ctb/collector": "*",
     "@ctb/db": "*",
     "@ctb/universe": "*",
