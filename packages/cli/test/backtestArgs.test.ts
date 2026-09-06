@@ -4,7 +4,7 @@ import { parseBacktestArgs } from '../src/commands/backtest.js';
 describe('parseBacktestArgs', () => {
   it('parses positionals, defaults, and params', () => {
     const a = parseBacktestArgs(['ma-crossover', 'SNEK', '2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', '--param', 'fast=6', '--param', 'slow=24']);
-    expect(a).toMatchObject({ strategyId: 'ma-crossover', ticker: 'SNEK', source: 'candles', cashAda: 1000, depthAda: null, params: { fast: 6, slow: 24 } });
+    expect(a).toMatchObject({ strategyId: 'ma-crossover', ticker: 'SNEK', source: 'candles', cashAda: 1000, depthAda: null, params: { fast: 6, slow: 24 }, syntheticPrice: 'close' });
     expect(a.from.toISOString()).toBe('2026-08-01T00:00:00.000Z');
   });
   it('requires --depth-ada for the external source and forbids it otherwise', () => {
@@ -39,5 +39,14 @@ describe('parseBacktestArgs', () => {
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'fast'])).toThrow(/numeric/);
     // A negative value still parses: the '=' split must not swallow the sign.
     expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--param', 'drift=-1.5']).params.drift).toBe(-1.5);
+  });
+
+  // Plan 3 Task 3: worst-of synthetic pricing is opt-in and only means anything for the synthetic
+  // fill model. Defaulting to 'close' keeps every existing backtest identical.
+  it('defaults --synthetic-price to close, accepts worst for the external source, and forbids it otherwise', () => {
+    expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01']).syntheticPrice).toBe('close');
+    expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--source', 'external', '--depth-ada', '5000', '--synthetic-price', 'worst']).syntheticPrice).toBe('worst');
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--synthetic-price', 'worst'])).toThrow(/--synthetic-price only applies/);
+    expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--source', 'external', '--depth-ada', '5000', '--synthetic-price', 'bogus'])).toThrow(/--synthetic-price must be/);
   });
 });

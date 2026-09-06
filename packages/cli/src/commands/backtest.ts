@@ -13,12 +13,14 @@ import { parseIsoDate } from './backfill.js';
 export interface BacktestArgs {
   strategyId: string; ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
   cashAda: number; depthAda: number | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
+  /** Only meaningful with `--source external` (the synthetic fill model); defaults to `close` so every existing backtest is unchanged. */
+  syntheticPrice: 'close' | 'worst';
 }
 
 /** Default stale-fill bound: three 5-minute buckets. Sparse external history routinely exceeds it (finding C3). */
 export const DEFAULT_MAX_GAP_MIN = 15;
 
-const USAGE = 'usage: backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--param k=v]...';
+const USAGE = 'usage: backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
 
 function num(flag: string, v: string | undefined): number {
   const n = Number(v);
@@ -44,7 +46,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   if (from.getTime() >= to.getTime()) throw new Error(`from must be before to\n${USAGE}`);
-  const out: BacktestArgs = { strategyId, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {} };
+  const out: BacktestArgs = { strategyId, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close' };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val = rest[i + 1];
@@ -61,6 +63,9 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
         if (n <= 0) throw new Error(`${flag} needs a positive number of minutes; 0 would reject every fill\n${USAGE}`);
         out.maxGapMin = n; i++; break;
       }
+      case '--synthetic-price':
+        if (val !== 'close' && val !== 'worst') throw new Error(`--synthetic-price must be close or worst\n${USAGE}`);
+        out.syntheticPrice = val; i++; break;
       case '--param': {
         const [k, v] = splitParam(val);
         const n = Number(v);
@@ -72,6 +77,9 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
   }
   if (out.source === 'candles_external' && out.depthAda === null) throw new Error(`--depth-ada is required with --source external (declared pool depth in ADA for the synthetic fill model)\n${USAGE}`);
   if (out.source === 'candles' && out.depthAda !== null) throw new Error(`--depth-ada only applies to --source external; observed reserves are used otherwise\n${USAGE}`);
+  // Same footgun as depthAda: silently accepting a flag with no effect reads as "I turned on
+  // worst-of pricing" when the observed fill model never looks at it.
+  if (out.source === 'candles' && out.syntheticPrice !== 'close') throw new Error(`--synthetic-price only applies to --source external; observed reserves have no assumed intra-candle price\n${USAGE}`);
   return out;
 }
 
@@ -89,6 +97,8 @@ export function buildRunParams(
   depthAda: number | null,
   costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>,
   maxGapMs: number,
+  /** Extra provenance merged into the top-level params blob, e.g. `{ fillModelDetail: { syntheticPrice } }` for an external-source run. Omitted (as every backtest and Task 4's paper run do) leaves the blob unchanged. */
+  extra?: Record<string, unknown>,
 ): Record<string, unknown> {
   const params = { ...strategyDefaults, ...argParams };
   return {
@@ -115,6 +125,7 @@ export function buildRunParams(
         readAt: c.readAt,
       }])),
     },
+    ...extra,
   };
 }
 
@@ -132,12 +143,17 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     const runs = new PgRunRepo(db);
     const gitSha = gitShaOrUnknown(process.cwd());
     if (gitSha === 'unknown') log.warn({}, 'git sha unknown: run provenance is incomplete');
-    const fillModel: FillModel = a.source === 'candles' ? { kind: 'cpmm_observed' } : { kind: 'cpmm_synthetic_depth', depthLovelace: ada(a.depthAda ?? 0) };
+    const fillModel: FillModel = a.source === 'candles'
+      ? { kind: 'cpmm_observed' }
+      : { kind: 'cpmm_synthetic_depth', depthLovelace: ada(a.depthAda ?? 0), price: a.syntheticPrice };
     const maxGapMs = a.maxGapMin * 60_000;
     const costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
+    // The synthetic price mode only means anything for the external source's fill model; recording it
+    // for an observed-reserves run would claim a choice that was never actually in effect.
+    const extra = a.source === 'candles_external' ? { fillModelDetail: { syntheticPrice: a.syntheticPrice } } : undefined;
     const runId = await runs.createRun({
       mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
-      params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs),
+      params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs, extra),
     });
     console.log(`run id: ${runId}`);
     const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(new PgExternalRepo(db), token.unit, a.from, a.to);

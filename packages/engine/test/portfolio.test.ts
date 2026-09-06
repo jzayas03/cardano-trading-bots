@@ -3,7 +3,7 @@ import { applyFill, equityLovelace, type FillResult } from '../src/index.js';
 
 const filled = (o: Partial<Extract<FillResult, { status: 'filled' }>>): Extract<FillResult, { status: 'filled' }> => ({
   status: 'filled', poolId: 'p', unitIn: 'lovelace', amountIn: 1_000_000_000n, unitOut: 'snek', amountOut: 441_500n, midPrice: '0.0022', fillPrice: '0.0022650',
-  poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n, networkFeeLovelace: 200_000n, slippageBps: 292, priceImpactBps: 292, tsFill: new Date(0), ...o,
+  poolFeeIn: 10_000_000n, batcherFeeLovelace: 2_000_000n, networkFeeLovelace: 200_000n, slippageBps: 292, priceImpactBps: 292, poolAfter: null, tsFill: new Date(0), ...o,
 });
 
 describe('portfolio', () => {

@@ -23,7 +23,7 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
   });
   it('assumedVenuesTouched lists distinct assumed venues of filled orders only', () => {
     const filled = (poolId: string): { result: FillResult } => ({ result: { status: 'filled', poolId, unitIn: 'lovelace', amountIn: 1n, unitOut: 'x', amountOut: 1n,
-      midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, tsFill: new Date(0) } });
+      midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: new Date(0) } });
     const rejected = { result: { status: 'rejected' as const, reason: 'dust' } };
     expect(assumedVenuesTouched([filled('Splash:a'), filled('Splash:b'), filled('Minswap:c'), rejected, filled('VyFinance:d')])).toEqual(['Splash', 'VyFinance']);
   });

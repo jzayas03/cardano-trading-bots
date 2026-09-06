@@ -1,7 +1,9 @@
 import { decimalToNumber } from '@ctb/candles';
 import type { Logger } from '@ctb/collector';
 import { applyFill, equityLovelace } from './portfolio.js';
-import type { Candle, EquityPoint, Executor, Intent, OrderRecord, Portfolio, RunCoverage, RunResult, RunSummaryStats, Strategy } from './types.js';
+import type {
+  Candle, EquityPoint, Executor, Intent, OrderRecord, Portfolio, RunCoverage, RunResult, RunSummaryStats, Strategy, WorkingPool,
+} from './types.js';
 
 export interface RunEngineDeps {
   feed: Iterable<Candle> | AsyncIterable<Candle>;
@@ -16,10 +18,90 @@ export interface RunEngineDeps {
   intervalSec?: number;
   /** The executor's stale-fill bound, so coverage can count how many gaps will reject a fill. */
   maxGapMs?: number;
+  /**
+   * Persistence hooks. Each is awaited before the loop moves on to the next candle, so a crash loses
+   * at most the in-flight intents of the candle in progress — never a silently-unwritten order or
+   * equity point from an earlier one.
+   */
+  sinks?: {
+    onOrder?(o: OrderRecord): Promise<void>;
+    onEquity?(e: EquityPoint): Promise<void>;
+    onCandle?(c: Candle): Promise<void>;
+  };
+  /**
+   * Keep the full `orders`/`equity` arrays in the returned `RunResult` (default `true`). A long-running
+   * paper run passes `false` for bounded memory: the summary is still computed, incrementally, from the
+   * same events the sinks receive — never from the (empty) arrays.
+   */
+  retain?: boolean;
+  /** The first order emitted gets `startSeq + 1`; lets a resumed run continue numbering rather than restart at 1. */
+  startSeq?: number;
+  /**
+   * Checked once per candle, after that candle is fully settled/observed/decided. When aborted, the
+   * loop stops pulling more candles from the feed; any intents just decided (and therefore still
+   * pending, never settled) are recorded as rejected `stopped` instead of being silently dropped.
+   */
+  signal?: AbortSignal;
 }
 
 const DEFAULT_INTERVAL_SEC = 300;
 const DEFAULT_MAX_GAP_MS = 15 * 60_000;
+
+/**
+ * Accumulates `RunSummaryStats` from a stream of orders and equity points, without ever holding the
+ * full history — so a bounded-memory run (`retain: false`) and a fully-retained one compute the exact
+ * same numbers from the exact same per-event math, and cannot drift apart (the "identical summary"
+ * test pins this). `summarize()` below is a thin wrapper over the same class, for the same reason.
+ */
+export class Summarizer {
+  private startEquity: bigint | null = null;
+  private endEquity = 0n;
+  private peak = 0n;
+  private maxDd = 0;
+  private fees = 0n;
+  private poolFees = 0n;
+  private filled = 0;
+  private intents = 0;
+  private readonly rejectReasons: Record<string, number> = {};
+
+  addOrder(o: OrderRecord): void {
+    this.intents++;
+    if (o.result.status === 'filled') {
+      this.filled++;
+      this.fees += o.result.batcherFeeLovelace + o.result.networkFeeLovelace;
+      this.poolFees += o.result.poolFeeIn;
+    } else {
+      this.rejectReasons[o.result.reason] = (this.rejectReasons[o.result.reason] ?? 0) + 1;
+    }
+  }
+
+  addEquity(e: EquityPoint): void {
+    this.startEquity ??= e.equityLovelace;
+    this.endEquity = e.equityLovelace;
+    if (e.equityLovelace > this.peak) this.peak = e.equityLovelace;
+    if (this.peak > 0n) {
+      const dd = Number((this.peak - e.equityLovelace) * 10_000n / this.peak) / 100;
+      if (dd > this.maxDd) this.maxDd = dd;
+    }
+  }
+
+  /** Number of orders ingested so far, regardless of whether the caller is retaining them. */
+  get orderCount(): number {
+    return this.intents;
+  }
+
+  finish(coverage: RunCoverage, warnings: string[]): RunSummaryStats {
+    const start = this.startEquity ?? 0n;
+    const end = this.endEquity;
+    return {
+      candles: coverage.candles, intents: this.intents, filled: this.filled, rejected: this.intents - this.filled,
+      startEquityLovelace: start.toString(), endEquityLovelace: end.toString(),
+      returnPct: start > 0n ? Number((end - start) * 10_000n / start) / 100 : 0,
+      maxDrawdownPct: this.maxDd, feesLovelace: this.fees.toString(), poolFeesIn: this.poolFees.toString(),
+      rejectReasons: this.rejectReasons, coverage, warnings,
+    };
+  }
+}
 
 /** One loop for backtest and paper: intents from candle t are filled against candle t+1. */
 export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
@@ -33,18 +115,28 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
   }
   const intervalMs = (d.intervalSec ?? DEFAULT_INTERVAL_SEC) * 1000;
   const maxGapMs = d.maxGapMs ?? DEFAULT_MAX_GAP_MS;
+  const retain = d.retain ?? true;
+  const startSeq = d.startSeq ?? 0;
   const history: Candle[] = [];
   const closes: number[] = [];
   const orders: OrderRecord[] = [];
   const equity: EquityPoint[] = [];
+  const summarizer = new Summarizer();
   let portfolio: Portfolio = { ...d.initial };
   let pending: Array<{ tsIntent: Date; at: Candle; intent: Intent }> = [];
-  let seq = 0;
+  let seq = startSeq;
   let candles = 0;
   let firstTs: Date | null = null;
   let lastTs: Date | null = null;
   let widestGapMs = 0;
   let gapsOverBound = 0;
+  let aborted = false;
+
+  const recordOrder = async (order: OrderRecord): Promise<void> => {
+    if (retain) orders.push(order);
+    summarizer.addOrder(order);
+    await d.sinks?.onOrder?.(order);
+  };
 
   for await (const candle of d.feed as AsyncIterable<Candle>) {
     candles++;
@@ -55,19 +147,34 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     }
     firstTs ??= candle.tickTs;
     lastTs = candle.tickTs;
-    // 1. settle what was decided on the previous candle
+    // 1. settle what was decided on the previous candle. Intents decided together (same candle) fill
+    // in order against a pool that depletes as they go: each fill's `poolAfter` becomes the `working`
+    // reserves the next one in the batch trades against, instead of every one hitting the same quote.
+    let working: WorkingPool | undefined;
     for (const p of pending) {
       seq++;
-      const result = d.executor.fill(p.intent, p.at, candle, portfolio);
-      if (result.status === 'filled') portfolio = applyFill(portfolio, result, p.intent.side);
-      orders.push({ seq, tsIntent: p.tsIntent, intent: p.intent, result });
+      const result = d.executor.fill(p.intent, p.at, candle, portfolio, working);
+      if (result.status === 'filled') {
+        portfolio = applyFill(portfolio, result, p.intent.side);
+        if (result.poolAfter) working = result.poolAfter;
+      }
+      await recordOrder({ seq, tsIntent: p.tsIntent, intent: p.intent, result });
     }
     pending = [];
     // 2. observe
     history.push(candle);
     closes.push(decimalToNumber(candle.close));
     if (history.length > historyLimit) { history.shift(); closes.shift(); }
-    equity.push({ tickTs: candle.tickTs, cashLovelace: portfolio.cashLovelace, positionBase: portfolio.positionBase, equityLovelace: equityLovelace(portfolio, candle.close, d.decimals), price: candle.close });
+    await d.sinks?.onCandle?.(candle);
+    const equityPoint: EquityPoint = {
+      tickTs: candle.tickTs, cashLovelace: portfolio.cashLovelace, positionBase: portfolio.positionBase,
+      equityLovelace: equityLovelace(portfolio, candle.close, d.decimals),
+      equityExecutableLovelace: d.executor.markToMarket(portfolio, candle),
+      price: candle.close,
+    };
+    if (retain) equity.push(equityPoint);
+    summarizer.addEquity(equityPoint);
+    await d.sinks?.onEquity?.(equityPoint);
     // 3. decide
     if (history.length >= warmup) {
       const intents = d.strategy.onCandle({ candle, history: [...history], closes: [...closes], portfolio, params });
@@ -76,10 +183,15 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
         pending.push({ tsIntent: candle.tickTs, at: candle, intent });
       }
     }
+    if (d.signal?.aborted) { aborted = true; break; }
   }
+  // Whatever was decided on the last candle we actually processed never got a chance to settle: on a
+  // normal end of feed there was no t+1 candle to fill against; on an abort we stopped on purpose
+  // before pulling one. Either way the intent is not silently dropped — it is recorded as rejected.
+  const leftoverReason = aborted ? 'stopped' : 'no t+1 candle';
   for (const p of pending) {
     seq++;
-    orders.push({ seq, tsIntent: p.tsIntent, intent: p.intent, result: { status: 'rejected', reason: 'no t+1 candle' } });
+    await recordOrder({ seq, tsIntent: p.tsIntent, intent: p.intent, result: { status: 'rejected', reason: leftoverReason } });
   }
   const coverage: RunCoverage = {
     candles,
@@ -90,43 +202,21 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     gapsOverBound,
   };
   const warnings: string[] = [];
-  if (orders.length === 0) {
+  if (summarizer.orderCount === 0) {
     // A run that emitted nothing is indistinguishable from a run that found no signal unless someone
     // says which it was. Params, warmup, and candle count are what tell them apart (finding I5).
     const warning = `strategy ${d.strategy.id} produced zero intents over ${candles} candles (warmup ${warmup}, params ${JSON.stringify(params)})`;
     warnings.push(warning);
     d.log.warn({ strategy: d.strategy.id, candles, warmup, params }, 'run produced zero intents');
   }
-  const summary = summarize(orders, equity, coverage, warnings);
+  const summary = summarizer.finish(coverage, warnings);
   d.log.info({ strategy: d.strategy.id, ...summary }, 'engine run finished');
   return { orders, equity, final: portfolio, summary };
 }
 
 export function summarize(orders: OrderRecord[], equity: EquityPoint[], coverage: RunCoverage, warnings: string[] = []): RunSummaryStats {
-  const start = equity[0]?.equityLovelace ?? 0n;
-  const end = equity.at(-1)?.equityLovelace ?? 0n;
-  let peak = 0n;
-  let maxDd = 0;
-  for (const e of equity) {
-    if (e.equityLovelace > peak) peak = e.equityLovelace;
-    if (peak > 0n) {
-      const dd = Number((peak - e.equityLovelace) * 10_000n / peak) / 100;
-      if (dd > maxDd) maxDd = dd;
-    }
-  }
-  let fees = 0n;
-  let poolFees = 0n;
-  const rejectReasons: Record<string, number> = {};
-  let filled = 0;
-  for (const o of orders) {
-    if (o.result.status === 'filled') { filled++; fees += o.result.batcherFeeLovelace + o.result.networkFeeLovelace; poolFees += o.result.poolFeeIn; }
-    else rejectReasons[o.result.reason] = (rejectReasons[o.result.reason] ?? 0) + 1;
-  }
-  return {
-    candles: coverage.candles, intents: orders.length, filled, rejected: orders.length - filled,
-    startEquityLovelace: start.toString(), endEquityLovelace: end.toString(),
-    returnPct: start > 0n ? Number((end - start) * 10_000n / start) / 100 : 0,
-    maxDrawdownPct: maxDd, feesLovelace: fees.toString(), poolFeesIn: poolFees.toString(), rejectReasons,
-    coverage, warnings,
-  };
+  const s = new Summarizer();
+  for (const o of orders) s.addOrder(o);
+  for (const e of equity) s.addEquity(e);
+  return s.finish(coverage, warnings);
 }

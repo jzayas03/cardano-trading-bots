@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runEngine, type Candle, type Executor, type FillResult, type Intent, type Strategy } from '../src/index.js';
+import { runEngine, type Candle, type Executor, type FillResult, type Intent, type Strategy, type WorkingPool } from '../src/index.js';
 
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const c = (i: number, close: string): Candle => ({
@@ -7,14 +7,15 @@ const c = (i: number, close: string): Candle => ({
   poolId: 'p', poolType: 'cpmm', feeBps: 30, closeReserveBase: 1_000_000n, closeReserveQuote: 1_000_000_000n, tvlLovelace: 2_000_000_000n,
 });
 
-/** Fills at next.close with no fees; enough to test the loop's mechanics. */
+/** Fills at next.close with no fees; enough to test the loop's mechanics. Does not model reserves. */
 const passthrough: Executor = {
   fill(intent, _at, next): FillResult {
     const px = Number(next.close);
     const out = intent.side === 'buy' ? BigInt(Math.floor(Number(intent.amountIn) / px / 1e6)) : BigInt(Math.floor(Number(intent.amountIn) * px * 1e6));
     return { status: 'filled', poolId: 'p', unitIn: intent.side === 'buy' ? 'lovelace' : 'base', amountIn: intent.amountIn, unitOut: intent.side === 'buy' ? 'base' : 'lovelace',
-      amountOut: out, midPrice: _at.close, fillPrice: next.close, poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, tsFill: next.tickTs };
+      amountOut: out, midPrice: _at.close, fillPrice: next.close, poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: next.tickTs };
   },
+  markToMarket: () => null,
 };
 
 const buyOnceThenSell: Strategy = {
@@ -64,6 +65,59 @@ describe('runEngine', () => {
     const s: Strategy = { id: 'h', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: (ctx) => { maxSeen = Math.max(maxSeen, ctx.history.length); return []; } };
     await runEngine({ feed: Array.from({ length: 30 }, (_, i) => c(i, '1')), strategy: s, executor: passthrough, initial: { cashLovelace: 0n, positionBase: 0n }, decimals: 0, log, historyLimit: 10 });
     expect(maxSeen).toBe(10);
+  });
+});
+
+/**
+ * Plan 3 Task 3: persistence sinks, bounded memory (`retain: false`), `startSeq`/abort for resume, and
+ * intra-candle reserve depletion via `poolAfter`. `equityExecutableLovelace` now comes from
+ * `executor.markToMarket` rather than always being null.
+ */
+describe('runEngine persistence, resume, and mark-to-market', () => {
+  it('persists through sinks in order and does not retain arrays when retain=false', async () => {
+    const seen: string[] = [];
+    const feed = [c(0, '1.0'), c(1, '1.0'), c(2, '2.0'), c(3, '2.0'), c(4, '4.0'), c(5, '4.0')];
+    const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log, retain: false,
+      sinks: { onCandle: async (k) => { seen.push(`candle ${k.tickTs.getUTCMinutes()}`); }, onOrder: async (o) => { seen.push(`order ${o.seq}`); }, onEquity: async (e) => { seen.push(`equity ${e.tickTs.getUTCMinutes()}`); } } });
+    expect(r.orders).toEqual([]); expect(r.equity).toEqual([]);
+    expect(r.summary.filled).toBe(2);
+    expect(seen.slice(0, 5)).toEqual(['candle 0', 'equity 0', 'candle 5', 'equity 5', 'order 1']); // order settles at t+1 BEFORE that candle's equity? see ordering note
+  });
+  it('summary is identical with retain true or false', async () => {
+    const feed = Array.from({ length: 40 }, (_, i) => c(i, (1 + 0.1 * Math.sin(i / 3)).toFixed(6)));
+    const a = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+    const b = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log, retain: false });
+    expect(b.summary).toEqual(a.summary);
+  });
+  it('startSeq continues numbering and an abort stops after the current candle with pending intents marked stopped', async () => {
+    const ac = new AbortController();
+    const s: Strategy = { id: 'always', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [{ side: 'buy', amountIn: 1_000_000n, reason: 'x' }] };
+    let n = 0;
+    const feed = { async *[Symbol.asyncIterator]() { while (n < 100) { const k = c(n++, '1.0'); if (n === 3) ac.abort(); yield k; } } };
+    const r = await runEngine({ feed, strategy: s, executor: passthrough, initial: { cashLovelace: 10_000_000_000n, positionBase: 0n }, decimals: 0, log, startSeq: 10, signal: ac.signal });
+    expect(r.orders[0]?.seq).toBe(11);
+    expect(r.summary.candles).toBe(3);
+    expect(r.orders.at(-1)?.result).toEqual({ status: 'rejected', reason: 'stopped' });
+  });
+  it('threads poolAfter into the next intent of the same candle', async () => {
+    const seenWorking: Array<WorkingPool | undefined> = [];
+    const recording: Executor = {
+      fill(intent, at, next, portfolio, working) {
+        seenWorking.push(working);
+        const r = passthrough.fill(intent, at, next, portfolio);
+        return r.status === 'filled' ? { ...r, poolAfter: { poolId: 'p', reserveBase: 1n + BigInt(seenWorking.length), reserveQuote: 1n, feeBps: 30 } } : r;
+      },
+      markToMarket: () => null,
+    };
+    const twoBuys: Strategy = { id: 'two', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: (ctx) => (ctx.history.length === 1 ? [{ side: 'buy', amountIn: 1_000_000n, reason: 'a' }, { side: 'buy', amountIn: 1_000_000n, reason: 'b' }] : []) };
+    await runEngine({ feed: [c(0, '1.0'), c(1, '1.0')], strategy: twoBuys, executor: recording, initial: { cashLovelace: 10_000_000n, positionBase: 0n }, decimals: 0, log });
+    expect(seenWorking[0]).toBeUndefined();
+    expect(seenWorking[1]).toEqual({ poolId: 'p', reserveBase: 2n, reserveQuote: 1n, feeBps: 30 });
+  });
+  it('records equityExecutableLovelace from executor.markToMarket', async () => {
+    const mtm: Executor = { ...passthrough, markToMarket: (p) => p.cashLovelace - 1n };
+    const r = await runEngine({ feed: [c(0, '1.0'), c(1, '1.0')], strategy: buyOnceThenSell, executor: mtm, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+    expect(r.equity[0]?.equityExecutableLovelace).toBe(999_999_999n);
   });
 });
 

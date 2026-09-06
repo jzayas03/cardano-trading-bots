@@ -8,6 +8,8 @@ export interface Candle {
 }
 export interface Intent { side: 'buy' | 'sell'; amountIn: bigint; reason: string }
 export interface Portfolio { cashLovelace: bigint; positionBase: bigint }
+/** A pool's reserves and fee at a point in time — resolved from a candle, or carried forward as `poolAfter` from an earlier fill in the same candle so the next intent trades against a depleted pool. */
+export interface WorkingPool { poolId: string; reserveBase: bigint; reserveQuote: bigint; feeBps: number }
 export interface StrategyContext { candle: Candle; history: Candle[]; closes: number[]; portfolio: Readonly<Portfolio>; params: Record<string, number> }
 export interface Strategy {
   id: string;
@@ -29,11 +31,26 @@ export type FillResult =
       slippageBps: number;
       /** Fill against the t+1 pool's own mid — how much of the move was this trade in that pool. */
       priceImpactBps: number;
+      /** Reserves of the traded pool right after this fill, so a second intent decided on the same
+       * candle trades against a depleted pool instead of the same one twice; null when the executor
+       * does not model reserves (e.g. a no-fee passthrough in tests). */
+      poolAfter: WorkingPool | null;
       tsFill: Date }
   | { status: 'rejected'; reason: string };
-export interface Executor { fill(intent: Intent, at: Candle, next: Candle, portfolio: Readonly<Portfolio>): FillResult }
+export interface Executor {
+  /** `working`, when present, overrides the reserves the loop would otherwise resolve from `next` —
+   * it is the `poolAfter` of an earlier fill decided on the same candle. */
+  fill(intent: Intent, at: Candle, next: Candle, portfolio: Readonly<Portfolio>, working?: WorkingPool): FillResult;
+  /** Value the position right now, net of the fees a real exit would pay; null when the executor cannot price it (e.g. no reserves at this candle). Must never throw. */
+  markToMarket(portfolio: Readonly<Portfolio>, candle: Candle): bigint | null;
+}
 export interface OrderRecord { seq: number; tsIntent: Date; intent: Intent; result: FillResult }
-export interface EquityPoint { tickTs: Date; cashLovelace: bigint; positionBase: bigint; equityLovelace: bigint; price: Decimal }
+export interface EquityPoint {
+  tickTs: Date; cashLovelace: bigint; positionBase: bigint; equityLovelace: bigint;
+  /** What the position would fetch if sold now, net of fees, from `executor.markToMarket`; null when the executor cannot price it. */
+  equityExecutableLovelace: bigint | null;
+  price: Decimal;
+}
 /** How much of the requested window the feed actually held. Sparse history makes a P&L number unreadable without it (finding C3). */
 export interface RunCoverage {
   candles: number;
