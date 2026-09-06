@@ -27,4 +27,15 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
     const rejected = { result: { status: 'rejected' as const, reason: 'dust' } };
     expect(assumedVenuesTouched([filled('Splash:a'), filled('Splash:b'), filled('Minswap:c'), rejected, filled('VyFinance:d')])).toEqual(['Splash', 'VyFinance']);
   });
+
+  // Plan 3 Task 6 controller ruling: `Fake` (dev:fake-collector's venue) is not a Dexter venue at
+  // all, so it has no VENUE_COSTS entry to be documented or assumed in — but SimExecutor still
+  // charges it DEFAULT_COSTS (basis 'assumed'), and the report has to say so rather than silently
+  // treating "not in the table" as "not assumed".
+  it('treats any non-DexName venue (Fake, synthetic) as assumed too', () => {
+    const filled = (poolId: string): { result: FillResult } => ({ result: { status: 'filled', poolId, unitIn: 'lovelace', amountIn: 1n, unitOut: 'x', amountOut: 1n,
+      midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: new Date(0) } });
+    expect(assumedVenuesTouched([filled('Fake:SNEK'), filled('Minswap:c')])).toEqual(['Fake']);
+    expect(assumedVenuesTouched([filled('synthetic')])).toEqual(['synthetic']);
+  });
 });

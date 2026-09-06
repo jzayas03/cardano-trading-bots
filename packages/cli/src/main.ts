@@ -4,6 +4,7 @@ import { backfillCommand } from './commands/backfill.js';
 import { backtestCommand } from './commands/backtest.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
+import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
 import { reportCommand } from './commands/report.js';
@@ -34,12 +35,15 @@ async function main(): Promise<void> {
       return reportCommand(log, rest);
     case 'paper':
       return paperCommand(log, rest);
+    case 'dev:fake-collector':
+      return devFakeCollectorCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
         'backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
         'report <run-id> [--day YYYY-MM-DD]|' +
-        'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec 300] [--grace-sec 60] [--max-gap-min 15] [--rehearsal] [--param k=v]...>',
+        'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec 300] [--grace-sec 60] [--max-gap-min 15] [--rehearsal] [--param k=v]...|' +
+        'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]>',
       );
       process.exitCode = 2;
   }

@@ -1,6 +1,6 @@
 import { PgCandleRepo } from '@ctb/candles';
 import { createPool } from '@ctb/db';
-import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Portfolio } from '@ctb/engine';
+import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES, type Portfolio, type RunRow } from '@ctb/engine';
 import { SimExecutor } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -67,6 +67,24 @@ export function parsePaperArgs(args: string[]): PaperArgs {
  * rather than treated as a mismatch. Compared with `Number(...)` because jsonb round-trips a number
  * that was written as a numeric literal back out the same way node-postgres always does — as text.
  */
+/**
+ * Task 6 rehearsal defect (found by actually running the stop/resume cycle in Step 3, not by any
+ * unit test — no test exercised `paperCommand` end to end before this): the ONLY way a live paper
+ * run ever stops is a signal (`liveCandleFeed` loops forever while `!signal.aborted`; the
+ * `'feed ended'` stop_reason this file also writes is unreachable for paper mode today), and that
+ * signal path always records `status: 'finished'`. The guard here used to refuse to resume exactly
+ * that status — `if (prior.status === 'finished') throw ...` — which meant `--resume` could never
+ * succeed on the one kind of run it exists to serve; `RunRepo.setStatus`'s own doc comment
+ * ("re-entering 'running' on resume clears [finished_at]") already assumed resuming a finished run
+ * was the normal path, so the check contradicted the interface it sat next to. The real hazard is a
+ * SECOND process resuming a run a FIRST process is still actively running: two writers on one
+ * `run_id` would race `paper_orders.seq` (both read the same `lastOrderSeq` and insert the same next
+ * seq) and `run_equity` inserts — so this now blocks `'running'` instead of `'finished'`.
+ */
+export function resumeStatusError(status: RunRow['status']): string | null {
+  return status === 'running' ? 'is already running; stop it (SIGINT) first, then resume' : null;
+}
+
 export function paramsMismatch(prior: Record<string, unknown>, current: Record<string, number>): string | null {
   for (const key of Object.keys(current)) {
     const p = prior[key];
@@ -122,7 +140,8 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
       if (prior.strategyId !== strategy.id || prior.baseUnit !== token.unit) {
         throw new Error(`run ${a.resume} is ${prior.strategyId}/${prior.baseUnit}, not ${strategy.id}/${token.unit}`);
       }
-      if (prior.status === 'finished') throw new Error(`run ${a.resume} is finished; start a new run`);
+      const statusError = resumeStatusError(prior.status);
+      if (statusError) throw new Error(`run ${a.resume} ${statusError}`);
       // Finding F2: refuse to resume under strategy params that differ from the ones this run was
       // started with — a resumed equity curve that quietly switches `slow`/`fast` etc. mid-stream is
       // not comparable to itself before the resume.
@@ -152,7 +171,10 @@ export async function paperCommand(log: Logger, args: string[]): Promise<void> {
     console.log(`run id: ${runId}${a.rehearsal ? ' (REHEARSAL)' : ''}`);
     const id = runId;
     const candleRepo = new PgCandleRepo(db);
-    const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel: { kind: 'cpmm_observed' }, maxGapMs });
+    // Plan 3 Task 6: `Fake` (dev:fake-collector's synthetic venue) is not a Dexter venue and would
+    // otherwise be rejected as unknown; `rehearsalVenue` is only set here, so it costs DEFAULT_COSTS
+    // ONLY for a --rehearsal run — a real paper run still refuses to fill against a Fake pool.
+    const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel: { kind: 'cpmm_observed' }, maxGapMs, rehearsalVenue: a.rehearsal ? 'Fake' : undefined });
     const feed = liveCandleFeed({
       repo: candleRepo, token, intervalSec: a.intervalSec, graceSec: a.graceSec, maxGapMs, now: () => new Date(), sleep, signal: ac.signal, log, afterTick,
       onTick: async () => { await runs.heartbeat(id, new Date(), null); },
