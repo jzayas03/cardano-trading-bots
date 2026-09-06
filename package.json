@@ -16,7 +16,8 @@
     "candles": "tsx packages/cli/src/main.ts candles",
     "backfill": "tsx packages/cli/src/main.ts backfill",
     "backtest": "tsx packages/cli/src/main.ts backtest",
-    "report": "tsx packages/cli/src/main.ts report"
+    "report": "tsx packages/cli/src/main.ts report",
+    "paper": "tsx packages/cli/src/main.ts paper"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

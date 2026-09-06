@@ -1,7 +1,32 @@
 import { PgSnapshotRepo } from '@ctb/collector';
 import { createPool } from '@ctb/db';
+import { PgRunRepo } from '@ctb/engine';
+import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
+
+/** A paper run's own `params.intervalSec`/`params.graceSec` when present and numeric; the `paper`
+ * command's own defaults otherwise, for a run row that predates those params or lost them. */
+const DEFAULT_INTERVAL_SEC = 300;
+const DEFAULT_GRACE_SEC = 60;
+
+/**
+ * A running paper process only proves it is alive through its heartbeat. `2 * intervalSec +
+ * graceSec` is a liveness bound for the paper process itself — it is unrelated to `maxGapMs` and to
+ * `liveCandleFeed`'s late-tick rule (that rule skips one candle once its own age exceeds
+ * `maxGapMs`, a data-freshness check on the feed; this one is a process-heartbeat check with a
+ * different formula entirely). One missed heartbeat is normal jitter, two is a process an operator
+ * should look at. A run that has never heartbeated is treated as STALE too, not as age 0. Pure and
+ * exported so the STALE rule is unit-testable without a live process or a `Date.now` mock.
+ */
+export function heartbeatAgeCell(heartbeatAt: Date | null, params: Record<string, unknown>, now: Date): string {
+  const intervalSec = typeof params.intervalSec === 'number' ? params.intervalSec : DEFAULT_INTERVAL_SEC;
+  const graceSec = typeof params.graceSec === 'number' ? params.graceSec : DEFAULT_GRACE_SEC;
+  const staleAfterMs = (2 * intervalSec + graceSec) * 1000;
+  if (!heartbeatAt) return 'STALE';
+  const ageMs = now.getTime() - heartbeatAt.getTime();
+  return ageMs > staleAfterMs ? 'STALE' : String(Math.round(ageMs / 1000));
+}
 
 export async function statusCommand(log: Logger): Promise<void> {
   const cfg = loadConfig(process.env, { blockfrost: false });
@@ -25,6 +50,23 @@ export async function statusCommand(log: Logger): Promise<void> {
     })));
     console.table(perDex.rows.map((r) => ({ dex: r.dex, pools: Number(r.pools), tick: r.tick_ts.toISOString() })));
     console.log(`ticks missing in last 24h (approx): ${gaps.rows[0]?.missing_ticks ?? 'n/a'}`);
+
+    const paperRepo = new PgRunRepo(db);
+    const running = await paperRepo.listRunning();
+    const universe = await loadUniverse();
+    const now = new Date();
+    // Few rows at most (running paper processes, not request volume) — one getRun per row for its
+    // params is fine; listRunning() itself doesn't carry params.
+    const paperRows = await Promise.all(running.map(async (r) => {
+      const full = await paperRepo.getRun(r.id);
+      return {
+        id: r.id, strategy: r.strategyId, ticker: universe.tokens.find((t) => t.unit === r.baseUnit)?.ticker ?? r.baseUnit,
+        rehearsal: r.rehearsal, 'heartbeat age (s)': heartbeatAgeCell(r.heartbeatAt, full?.params ?? {}, now),
+        'last tick': r.lastTickTs ? r.lastTickTs.toISOString() : '-', created: r.createdAt.toISOString(),
+      };
+    }));
+    console.log('\npaper runs:');
+    if (paperRows.length) console.table(paperRows); else console.log('(none running)');
   } finally {
     await db.end();
   }

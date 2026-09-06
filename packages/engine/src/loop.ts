@@ -40,8 +40,16 @@ export interface RunEngineDeps {
    * Checked once per candle, after that candle is fully settled/observed/decided. When aborted, the
    * loop stops pulling more candles from the feed; any intents just decided (and therefore still
    * pending, never settled) are recorded as rejected `stopped` instead of being silently dropped.
+   * Also checked once more after the feed loop ends, in case the abort happened while the feed's
+   * iterator was blocked BETWEEN candles (e.g. a paper feed's inter-boundary sleep) rather than while
+   * the loop body was running — see the note above `leftoverReason` below (finding F1).
    */
   signal?: AbortSignal;
+  /**
+   * Warnings to seed `summary.warnings` with, ahead of anything the loop itself appends (e.g. a
+   * resumed run's "intents pending at the previous stop were lost" notice). Given in order.
+   */
+  initialWarnings?: string[];
 }
 
 const DEFAULT_INTERVAL_SEC = 300;
@@ -185,6 +193,13 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     }
     if (d.signal?.aborted) { aborted = true; break; }
   }
+  // If the signal aborted while the feed's async iterator was blocked BETWEEN candles (e.g. paper's
+  // inter-boundary sleep), `sleep()` resolves on abort and the generator returns without yielding
+  // another candle: the `for await` above then ends via a normal `{ done: true }` completion, never
+  // re-entering the loop body where the in-loop abort check lives. Without this, `aborted` would stay
+  // false here and any leftover pending intent would be mislabeled `no t+1 candle` instead of the
+  // correct `stopped` (finding F1).
+  if (d.signal?.aborted) aborted = true;
   // Whatever was decided on the last candle we actually processed never got a chance to settle: on a
   // normal end of feed there was no t+1 candle to fill against; on an abort we stopped on purpose
   // before pulling one. Either way the intent is not silently dropped — it is recorded as rejected.
@@ -201,7 +216,7 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     maxGapMs: widestGapMs,
     gapsOverBound,
   };
-  const warnings: string[] = [];
+  const warnings: string[] = [...(d.initialWarnings ?? [])];
   if (summarizer.orderCount === 0) {
     // A run that emitted nothing is indistinguishable from a run that found no signal unless someone
     // says which it was. Params, warmup, and candle count are what tell them apart (finding I5).
