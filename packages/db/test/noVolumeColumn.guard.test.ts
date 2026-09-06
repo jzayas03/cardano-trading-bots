@@ -15,8 +15,16 @@ describe('candles has no volume column (spec §4.3)', () => {
     expect(candlesDdl, 'candles DDL must exist in 0002').toBeTruthy();
     expect(candlesDdl).toMatch(/net_flow_base\s+numeric\(38,0\)/);
     expect(candlesDdl).toMatch(/net_flow_quote\s+numeric\(38,0\)/);
-    expect(candlesDdl).not.toMatch(/^\s*volume\b/m);
-    expect(sql).not.toMatch(/ALTER TABLE\s+candles\s+ADD\s+COLUMN\s+volume\b/i);
+    // Tokenize by comma/newline rather than anchoring on line start: a `volume` column declared
+    // mid-line after another column (e.g. `foo numeric(38,0), volume numeric(38,0),`) has no
+    // leading newline for `^` to anchor on, so a line-anchored regex misses it.
+    const ddl = candlesDdl ?? '';
+    const columnDefs = ddl.split(/[,\n]/).map((s) => s.trim());
+    expect(columnDefs.some((s) => /^volume\b/.test(s))).toBe(false);
+    expect(columnDefs.some((s) => /^"volume"\b/.test(s))).toBe(false);
+    // `ADD COLUMN IF NOT EXISTS volume` and quoted `"volume"` must also be caught, not just the
+    // bare `ADD COLUMN volume` shape.
+    expect(sql).not.toMatch(/ALTER TABLE\s+candles\s+ADD\s+(COLUMN\s+)?(IF NOT EXISTS\s+)?"?volume"?\b/i);
   });
 
   it('external candles do carry gross volume, in quote units', async () => {

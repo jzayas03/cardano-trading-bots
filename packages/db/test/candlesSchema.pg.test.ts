@@ -14,13 +14,21 @@ async function seedSnek(db: import('pg').Pool): Promise<void> {
 describe.skipIf(!PG_ENABLED)('0002_candles_engine', () => {
   it('applies after 0001 and creates the five tables', async () => {
     await withTestSchema(async (db) => {
-      expect(await migrate(db)).toEqual(['0001_core.sql', '0002_candles_engine.sql']);
+      const applied = await migrate(db);
+      // Scoped assertion: 0003+ appends more filenames to this list. This is 0002's own test, so
+      // assert 0002 ran last and 0001 ran before it — not the exact full list — so a later
+      // migration's PR never has to touch this file to pass.
+      expect(applied[applied.length - 1]).toBe('0002_candles_engine.sql');
+      expect(applied).toContain('0001_core.sql');
       const t = await db.query<{ table_name: string }>(
         `SELECT table_name FROM information_schema.tables WHERE table_schema = current_schema() ORDER BY 1`,
       );
-      expect(t.rows.map((r) => r.table_name)).toEqual([
-        'candles', 'candles_external', 'collector_runs', 'external_pool_map', 'paper_orders', 'pool_snapshots', 'runs', 'schema_migrations', 'tokens',
-      ]);
+      const tableNames = new Set(t.rows.map((r) => r.table_name));
+      // Scoped assertion: only 0002's own five tables are a required subset, not the whole
+      // schema — a later migration's PR never has to touch this file to add its own tables.
+      for (const table of ['candles', 'candles_external', 'external_pool_map', 'runs', 'paper_orders']) {
+        expect(tableNames.has(table), `expected table ${table}`).toBe(true);
+      }
     });
   });
 
