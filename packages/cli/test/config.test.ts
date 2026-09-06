@@ -8,7 +8,8 @@ describe('loadConfig', () => {
   it('applies defaults', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
-      databaseUrl: base.DATABASE_URL, blockfrostProjectId: null, intervalSec: 300, logLevel: 'info', venues: DEFAULT_VENUES,
+      databaseUrl: base.DATABASE_URL, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
+      venues: DEFAULT_VENUES, refreshPolicy: 'deepest',
     });
   });
 
@@ -33,22 +34,25 @@ describe('loadConfig', () => {
     expect(loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: false })).toEqual({
       databaseUrl: base.DATABASE_URL,
       blockfrostProjectId: null,
-      intervalSec: 300,
+      intervalSec: 600,
       logLevel: 'info',
       venues: DEFAULT_VENUES,
+      refreshPolicy: 'deepest',
     });
     expect(() => loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: true })).toThrow(
       /BLOCKFROST_PROJECT_ID/,
     );
   });
 
-  it('defaults venues to every Dexter venue except Splash and VyFinance', () => {
-    // VyFinance: Dexter's liquidityPools() is a hardcoded rejection. Splash: Dexter 5.4.10 never
-    // returns a Splash pool from either its own discovery or this repo's bounded alternative (see
-    // venues.ts's header comment) — confirmed on run 50, the first real tick: Splash alone burned
-    // ~24k of 39,781 Blockfrost calls and still contributed zero pools.
-    expect(DEFAULT_VENUES).not.toContain('VyFinance');
-    expect(DEFAULT_VENUES).not.toContain('Splash');
+  it('defaults venues to exactly the six enabledByDefault, discoverable venues', () => {
+    // VyFinance/Splash: excluded because Dexter can't discover them at all (VyFinance's
+    // liquidityPools() is a hardcoded rejection; Splash's Dexter 5.4.10 bug never returns a pool —
+    // see venues.ts's header comment). Minswap v1: excluded because it is `enabledByDefault: false`
+    // — run 50 (2026-09-06, real key, mainnet) measured ~9,600 discovery calls/day for 14 shallow
+    // pools that are never the deepest pool for their token except AGIX (the deepest pool per token
+    // is on Minswap v2 for 19/20 tokens), so refreshing them spends quota the candle pipeline
+    // (which only reads the deepest pool per token) never uses.
+    expect(DEFAULT_VENUES).toEqual(['MinswapV2', 'SundaeSwapV1', 'SundaeSwapV3', 'MuesliSwap', 'WingRiders', 'WingRidersV2']);
     expect(loadConfig(base, { blockfrost: false }).venues).toEqual(DEFAULT_VENUES);
   });
 
@@ -77,5 +81,26 @@ describe('loadConfig', () => {
     expect(VENUE_NAMES).toContain('Splash');
     const c = loadConfig({ ...base, COLLECT_VENUES: 'Splash' }, { blockfrost: false });
     expect(c.venues).toEqual(['Splash']);
+  });
+
+  it('can re-enable Minswap v1 explicitly even though it is excluded by default', () => {
+    const c = loadConfig({ ...base, COLLECT_VENUES: 'Minswap,MinswapV2' }, { blockfrost: false });
+    expect(c.venues).toEqual(['Minswap', 'MinswapV2']);
+  });
+
+  it('defaults COLLECT_REFRESH to "deepest"', () => {
+    expect(loadConfig(base, { blockfrost: false }).refreshPolicy).toBe('deepest');
+  });
+
+  it('treats an empty COLLECT_REFRESH as unset (default "deepest")', () => {
+    expect(loadConfig({ ...base, COLLECT_REFRESH: '' }, { blockfrost: false }).refreshPolicy).toBe('deepest');
+  });
+
+  it('accepts an explicit COLLECT_REFRESH of "all"', () => {
+    expect(loadConfig({ ...base, COLLECT_REFRESH: 'all' }, { blockfrost: false }).refreshPolicy).toBe('all');
+  });
+
+  it('fails closed on an unrecognized COLLECT_REFRESH value', () => {
+    expect(() => loadConfig({ ...base, COLLECT_REFRESH: 'shallow' }, { blockfrost: false })).toThrow(/COLLECT_REFRESH/);
   });
 });

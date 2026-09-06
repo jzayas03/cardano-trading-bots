@@ -7,6 +7,7 @@ export interface Config {
   intervalSec: number;
   logLevel: string;
   venues: DexName[];
+  refreshPolicy: 'deepest' | 'all';
 }
 
 const schema = z.object({
@@ -15,16 +16,32 @@ const schema = z.object({
   // `.optional()` never fires and commands that don't need Blockfrost (migrate/status) fail closed
   // on a blank BLOCKFROST_PROJECT_ID= line in .env, which .env.example ships by design.
   BLOCKFROST_PROJECT_ID: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).optional()),
+  // 600 s (10 minutes): run 50 measured ~10 Blockfrost calls per refreshed pool; at the deepest-only
+  // refresh set (~20 pools, one per token) that's ~29k calls/day at 300 s vs ~14k at 600 s — 600 s
+  // leaves headroom under the 50k/day free quota alongside discovery's own daily cost. See
+  // .env.example for the full arithmetic.
   COLLECT_INTERVAL_SECONDS: z
     .string()
     .optional()
-    .transform((v) => (v === undefined ? 300 : Number(v)))
+    .transform((v) => (v === undefined ? 600 : Number(v)))
     .refine((n) => Number.isInteger(n) && n >= 60, 'COLLECT_INTERVAL_SECONDS must be an integer >= 60'),
   LOG_LEVEL: z.string().optional(),
   // Same '' -> undefined preprocessing as BLOCKFROST_PROJECT_ID: .env.example ships a bare
   // `COLLECT_VENUES=` line so dotenv loads '', which must mean "use the default", not "discover
   // nothing".
   COLLECT_VENUES: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  // Fails closed on anything but 'deepest'/'all' (including a typo or an unrecognized future value)
+  // rather than silently falling back to a default that changes the collector's Blockfrost budget
+  // without anyone noticing. '' (a bare `COLLECT_REFRESH=` line, same shape as .env.example's other
+  // optional knobs) means "use the default", same as unset.
+  COLLECT_REFRESH: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 'deepest' : v))
+    .refine(
+      (v): v is 'deepest' | 'all' => v === 'deepest' || v === 'all',
+      'COLLECT_REFRESH must be "deepest" or "all"',
+    ),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean }): Config {
@@ -50,5 +67,6 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     intervalSec: v.COLLECT_INTERVAL_SECONDS,
     logLevel: v.LOG_LEVEL ?? 'info',
     venues,
+    refreshPolicy: v.COLLECT_REFRESH,
   };
 }

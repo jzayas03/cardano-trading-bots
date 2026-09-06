@@ -20,6 +20,7 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   // retries that outlive their own tick only delay the next one.
   const source = new DexterPoolSource({
     blockfrostProjectId: cfg.blockfrostProjectId as string, log, retryBudgetMs: cfg.intervalSec * 500, venues: cfg.venues,
+    refreshPolicy: cfg.refreshPolicy,
   });
   const state: CollectorState = { lastDiscoveryAt: null };
   const stop = new AbortController();
@@ -27,7 +28,10 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   process.once('SIGINT', () => onSignal('SIGINT'));
   process.once('SIGTERM', () => onSignal('SIGTERM'));
 
-  log.info({ pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues }, 'collector starting');
+  log.info(
+    { pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues, refreshPolicy: cfg.refreshPolicy },
+    'collector starting',
+  );
   // The immediate first tick has no boundary to pin to, so it still derives tickTs from now().
   // Every tick after that writes the exact boundary the loop slept toward (computed below, BEFORE
   // sleeping) instead of re-deriving one from now() on wake — an early wake re-derived from now()
