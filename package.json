@@ -12,7 +12,8 @@
     "lint": "eslint . && npm run typecheck",
     "migrate": "tsx packages/cli/src/main.ts migrate",
     "collect": "tsx packages/cli/src/main.ts collect",
-    "status": "tsx packages/cli/src/main.ts status"
+    "status": "tsx packages/cli/src/main.ts status",
+    "candles": "tsx packages/cli/src/main.ts candles"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

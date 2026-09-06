@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pino from 'pino';
+import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
 import { migrateCommand } from './commands/migrate.js';
 import { statusCommand } from './commands/status.js';
@@ -19,8 +20,10 @@ async function main(): Promise<void> {
       return collectCommand(log, { once: rest.includes('--once') });
     case 'status':
       return statusCommand(log);
+    case 'candles':
+      return candlesCommand(log, { ticker: rest[0] });
     default:
-      console.error('usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status>');
+      console.error('usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]>');
       process.exitCode = 2;
   }
 }
