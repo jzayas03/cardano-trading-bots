@@ -64,6 +64,17 @@ export async function statusCommand(log: Logger): Promise<void> {
     console.table(perDex.rows.map((r) => ({ dex: r.dex, pools: Number(r.pools), tick: r.tick_ts.toISOString() })));
     console.log(`ticks missing in last 24h (approx): ${gaps.rows[0]?.missing_ticks ?? 'n/a'}`);
 
+    // `runs` is already ordered newest-first; find the latest discovery tick that actually recorded
+    // per-venue counts (a refresh tick, or a row from before migration 0005, carries null instead).
+    const latestDiscovery = runs.find((r) => r.discoveryCalls && Object.keys(r.discoveryCalls).length > 0);
+    if (latestDiscovery?.discoveryCalls) {
+      const topVenues = Object.entries(latestDiscovery.discoveryCalls)
+        .sort(([, a], [, b]) => b - a)
+        .map(([venue, calls]) => ({ venue, calls }));
+      console.log(`\ntop venues by calls (discovery tick ${latestDiscovery.tickTs.toISOString()}):`);
+      console.table(topVenues);
+    }
+
     const paperRepo = new PgRunRepo(db);
     const running = await paperRepo.listRunning();
     const universe = await loadUniverse();

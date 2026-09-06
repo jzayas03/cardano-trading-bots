@@ -45,13 +45,31 @@ describe.skipIf(!PG_ENABLED)('PgSnapshotRepo', () => {
       expect(again).toBe(0); // same pool, same tick: idempotent
       await repo.finishRun(runId, new Date('2026-09-05T15:05:09Z'), {
         poolsAttempted: 2, poolsFailed: 0, poolsWritten: 2, providerCalls: 3, discovered: true, errors: [],
+        discoveryCalls: { SundaeSwapV3: 3 },
       });
       const runs = await repo.lastRuns(5);
       expect(runs).toHaveLength(1);
-      expect(runs[0]).toMatchObject({ id: runId, poolsWritten: 2, providerCalls: 3, discovered: true });
+      expect(runs[0]).toMatchObject({
+        id: runId, poolsWritten: 2, providerCalls: 3, discovered: true, discoveryCalls: { SundaeSwapV3: 3 },
+      });
       expect(runs[0]?.finishedAt).toEqual(new Date('2026-09-05T15:05:09Z'));
       const stored = await db.query<{ reserve_quote: string }>('SELECT reserve_quote FROM pool_snapshots ORDER BY pool_id');
       expect(stored.rows[0]?.reserve_quote).toBe('52331970594');
+    });
+  });
+
+  it('round-trips a null discoveryCalls (refresh tick) as null, not as JSON "null" or an empty object', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      const repo = new PgSnapshotRepo(db);
+      const tick = new Date('2026-09-05T15:10:00Z');
+      const runId = await repo.startRun(tick, tick);
+      await repo.finishRun(runId, tick, {
+        poolsAttempted: 0, poolsFailed: 0, poolsWritten: 0, providerCalls: 1, discovered: false, errors: [],
+        discoveryCalls: null,
+      });
+      const runs = await repo.lastRuns(1);
+      expect(runs[0]?.discoveryCalls).toBeNull();
     });
   });
 

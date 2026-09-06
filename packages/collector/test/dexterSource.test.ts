@@ -330,7 +330,11 @@ describe('DefaultPoolFetcher bounded Splash discovery', () => {
     ]);
     const splashClient = new FakeSplashClient(['addr1', 'addr2'], utxosFor, poolForUtxo);
     const fetcher = new DefaultPoolFetcher({
+      // Splash is `discovery: 'unsupported'` in venues.ts (Dexter never returns its pools — see that
+      // file's header comment), so discoveryOverride forces it onto the bounded path under test here,
+      // independent of that fact.
       url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000, splashClient,
+      discoveryOverride: { Splash: 'per-token-address' },
     });
 
     const pools = await fetcher.discoverVenue('Splash', tokenPairs);
@@ -354,6 +358,7 @@ describe('DefaultPoolFetcher bounded Splash discovery', () => {
     };
     const fetcher = new DefaultPoolFetcher({
       url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000, splashClient,
+      discoveryOverride: { Splash: 'per-token-address' },
     });
     const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['Splash'], fetcher });
 

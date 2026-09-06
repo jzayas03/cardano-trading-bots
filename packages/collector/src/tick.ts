@@ -1,11 +1,22 @@
 import type { Pair } from '@ctb/universe';
 import type { RunError, RunSummary, SnapshotRepo } from './repo.js';
 import { bucketTick, poolIdOf, poolToSnapshot } from './snapshot.js';
-import type { PoolSource, SourceResult } from './source.js';
+import type { DiscoveryCallsSource, PoolSource, SourceResult } from './source.js';
 import type { Logger, SnapshotRow } from './types.js';
 
 export interface CollectorState {
   lastDiscoveryAt: Date | null;
+}
+
+/** True when `source` also implements `DiscoveryCallsSource` (currently only `DexterPoolSource`).
+ *  Checked structurally, not via `PoolSource` itself, so every existing `PoolSource` fake keeps
+ *  working unchanged — see the doc comment on `DiscoveryCallsSource` in source.ts. */
+function hasDiscoveryCalls(source: PoolSource): source is PoolSource & DiscoveryCallsSource {
+  // `PoolSource` and `DiscoveryCallsSource` share no property, so TS's "weak type" check (TS2559)
+  // refuses a direct `Partial<DiscoveryCallsSource>` assignment as a likely typo; routing through
+  // `unknown` is the standard way to structurally probe for an optional capability like this one.
+  const maybe = source as unknown as Partial<DiscoveryCallsSource>;
+  return typeof maybe.lastDiscoveryCalls === 'function';
 }
 
 /**
@@ -46,7 +57,9 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   const runId = await d.repo.startRun(tickTs, startedAt);
   d.source.resetProviderCalls();
   const errors: RunError[] = [];
-  const summary: RunSummary = { poolsAttempted: 0, poolsFailed: 0, poolsWritten: 0, providerCalls: 0, discovered: false, errors };
+  const summary: RunSummary = {
+    poolsAttempted: 0, poolsFailed: 0, poolsWritten: 0, providerCalls: 0, discovered: false, discoveryCalls: null, errors,
+  };
 
   const finish = async (): Promise<RunSummary> => {
     summary.providerCalls = d.source.providerCalls();
@@ -78,6 +91,10 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   if (stale) {
     summary.discovered = true;
     d.state.lastDiscoveryAt = startedAt;
+    // Null stays on a refresh tick (discovery didn't run) and on a discover tick against a PoolSource
+    // that doesn't track this (e.g. an older test fake) — only a discover tick against a capable
+    // source (DexterPoolSource in production) gets the real per-venue counts.
+    if (hasDiscoveryCalls(d.source)) summary.discoveryCalls = d.source.lastDiscoveryCalls();
   }
   errors.push(...result.failures);
 

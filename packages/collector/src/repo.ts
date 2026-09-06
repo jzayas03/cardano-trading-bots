@@ -13,6 +13,10 @@ export interface RunSummary {
   poolsWritten: number;
   providerCalls: number;
   discovered: boolean;
+  /** Provider calls spent per venue on this tick's discovery, from a `DiscoveryCallsSource`-capable
+   *  `PoolSource` (see source.ts). Null on a refresh tick (discovery didn't run) or when the source
+   *  in use doesn't track this. */
+  discoveryCalls: Record<string, number> | null;
   errors: RunError[];
 }
 
@@ -84,8 +88,11 @@ export class PgSnapshotRepo implements SnapshotRepo {
   async finishRun(runId: number, finishedAt: Date, s: RunSummary): Promise<void> {
     await this.db.query(
       `UPDATE collector_runs SET finished_at = $2, pools_attempted = $3, pools_failed = $4, pools_written = $5,
-         provider_calls = $6, discovered = $7, errors = $8::jsonb WHERE id = $1`,
-      [runId, finishedAt, s.poolsAttempted, s.poolsFailed, s.poolsWritten, s.providerCalls, s.discovered, JSON.stringify(s.errors)],
+         provider_calls = $6, discovered = $7, errors = $8::jsonb, discovery_calls = $9::jsonb WHERE id = $1`,
+      [
+        runId, finishedAt, s.poolsAttempted, s.poolsFailed, s.poolsWritten, s.providerCalls, s.discovered,
+        JSON.stringify(s.errors), s.discoveryCalls === null ? null : JSON.stringify(s.discoveryCalls),
+      ],
     );
   }
 
@@ -93,11 +100,13 @@ export class PgSnapshotRepo implements SnapshotRepo {
     const res = await this.db.query<{
       id: string; tick_ts: Date; started_at: Date; finished_at: Date | null; pools_attempted: number; pools_failed: number;
       pools_written: number; provider_calls: number; discovered: boolean; errors: RunError[];
+      discovery_calls: Record<string, number> | null;
     }>('SELECT * FROM collector_runs ORDER BY id DESC LIMIT $1', [limit]);
     return res.rows.map((r) => ({
       id: Number(r.id), tickTs: r.tick_ts, startedAt: r.started_at, finishedAt: r.finished_at,
       poolsAttempted: r.pools_attempted, poolsFailed: r.pools_failed, poolsWritten: r.pools_written,
       providerCalls: r.provider_calls, discovered: r.discovered, errors: r.errors,
+      discoveryCalls: r.discovery_calls ?? null,
     }));
   }
 }

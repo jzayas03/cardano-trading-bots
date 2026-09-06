@@ -18,3 +18,14 @@ export interface PoolSource {
   resetProviderCalls(): void;
   knownPoolCount(): number;
 }
+
+/**
+ * Optional capability some `PoolSource` implementations expose: per-venue provider-call counts from
+ * the most recent `discover()` (currently only `DexterPoolSource`, which tracks real Blockfrost calls
+ * via its counting provider). Deliberately NOT part of `PoolSource` itself, so every existing
+ * `PoolSource` fake in the test suite needs no changes — `tick.ts` checks for this structurally
+ * instead of widening the required interface.
+ */
+export interface DiscoveryCallsSource {
+  lastDiscoveryCalls(): Record<string, number>;
+}

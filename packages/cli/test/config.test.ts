@@ -42,8 +42,13 @@ describe('loadConfig', () => {
     );
   });
 
-  it('defaults venues to every Dexter venue except VyFinance', () => {
+  it('defaults venues to every Dexter venue except Splash and VyFinance', () => {
+    // VyFinance: Dexter's liquidityPools() is a hardcoded rejection. Splash: Dexter 5.4.10 never
+    // returns a Splash pool from either its own discovery or this repo's bounded alternative (see
+    // venues.ts's header comment) — confirmed on run 50, the first real tick: Splash alone burned
+    // ~24k of 39,781 Blockfrost calls and still contributed zero pools.
     expect(DEFAULT_VENUES).not.toContain('VyFinance');
+    expect(DEFAULT_VENUES).not.toContain('Splash');
     expect(loadConfig(base, { blockfrost: false }).venues).toEqual(DEFAULT_VENUES);
   });
 
@@ -66,5 +71,11 @@ describe('loadConfig', () => {
     expect(VENUE_NAMES).toContain('VyFinance');
     const c = loadConfig({ ...base, COLLECT_VENUES: 'VyFinance' }, { blockfrost: false });
     expect(c.venues).toEqual(['VyFinance']);
+  });
+
+  it('can include Splash explicitly even though it is excluded by default', () => {
+    expect(VENUE_NAMES).toContain('Splash');
+    const c = loadConfig({ ...base, COLLECT_VENUES: 'Splash' }, { blockfrost: false });
+    expect(c.venues).toEqual(['Splash']);
   });
 });
