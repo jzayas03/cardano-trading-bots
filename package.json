@@ -1,0 +1,25 @@
+{
+  "name": "cardano-trading-bots",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "test": "vitest run",
+    "test:pg": "RUN_PG_TESTS=1 vitest run",
+    "test:live": "RUN_LIVE_TESTS=1 vitest run packages/collector/test/dexterSource.live.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint . && npm run typecheck",
+    "migrate": "tsx packages/cli/src/main.ts migrate",
+    "collect": "tsx packages/cli/src/main.ts collect",
+    "status": "tsx packages/cli/src/main.ts status"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.0.0",
+    "vitest": "^3.0.0"
+  }
+}

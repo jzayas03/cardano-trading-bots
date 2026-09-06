@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ctb_postgres
+    environment:
+      POSTGRES_USER: ctb
+      POSTGRES_PASSWORD: ctb_local_only
+      POSTGRES_DB: ctb
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ctb -d ctb"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+volumes:
+  pgdata: {}
