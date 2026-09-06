@@ -320,7 +320,9 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
         // and, with shouldFallbackToApi false, resolves with an empty array rather than rejecting —
         // so a broken venue is otherwise indistinguishable from a venue with genuinely zero pools.
         // Record it as a venue failure until it is verified good, rather than silently under-counting.
-        if (kept.length === 0) {
+        // But skip this check if bounded-discovery queries failed: the query failures are the root cause.
+        const partialFailures = this.fetcher.partialFailures?.(venue) ?? 0;
+        if (kept.length === 0 && partialFailures === 0) {
           const failure: RunError = {
             scope: `discover:${venue}`,
             message: 'returned no pools (Dexter maps on-chain errors to an empty result); treat as venue failure until verified',
@@ -331,9 +333,12 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
         // Bounded-discovery venues query one address/token pair at a time; a query failing must not
         // drop the pools other queries already found, but it also must not vanish silently — report
         // it as one venue-scoped RunError, same shape as any other discovery failure.
-        const partialFailures = this.fetcher.partialFailures?.(venue) ?? 0;
         if (partialFailures > 0) {
-          const failure: RunError = { scope: `discover:${venue}`, message: `${partialFailures} address/token queries failed` };
+          let message = `${partialFailures} address/token queries failed`;
+          if (kept.length === 0) {
+            message += '; no pools returned';
+          }
+          const failure: RunError = { scope: `discover:${venue}`, message };
           failures.push(failure);
           this.log.warn({ venue, partialFailures, calls }, failure.message);
         }

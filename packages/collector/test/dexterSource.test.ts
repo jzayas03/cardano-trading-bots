@@ -370,4 +370,26 @@ describe('DefaultPoolFetcher bounded Splash discovery', () => {
     // was found.
     expect(result.failures).toEqual([{ scope: 'discover:Splash', message: '1 address/token queries failed' }]);
   });
+
+  it('reports one failure when every address/token query fails (all queries failed, no pools found)', async () => {
+    const { log } = makeLog();
+    const splashClient: SplashDiscoveryClient = {
+      addresses: async () => ['addr1', 'addr2'],
+      utxos: async () => { throw new Error('blockfrost 502'); },
+      poolFromUtxo: async () => undefined,
+    };
+    const fetcher = new DefaultPoolFetcher({
+      url: 'https://example.invalid', projectId: 'unit-test', log, retryBudgetMs: 60_000, splashClient,
+      discoveryOverride: { Splash: 'per-token-address' },
+    });
+    const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['Splash'], fetcher });
+
+    const result = await source.discover([PAIR1]);
+
+    expect(result.pools).toEqual([]);
+    // 2 addresses x 1 token = 2 failing queries; should report EXACTLY ONE failure mentioning the failed query count.
+    // Bug: without the fix, this reports TWO failures: one "returned no pools" and one "2 address/token queries failed".
+    expect(result.failures).toEqual([{ scope: 'discover:Splash', message: expect.stringMatching(/2.*address.*token.*queries failed/) }]);
+    expect(result.failures.length).toBe(1);
+  });
 });
