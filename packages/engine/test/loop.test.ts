@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runEngine, type Candle, type Executor, type FillResult, type Intent, type Strategy, type WorkingPool } from '../src/index.js';
+import { runEngine, type Candle, type EquityPoint, type Executor, type FillResult, type Intent, type OrderRecord, type Strategy, type WorkingPool } from '../src/index.js';
 
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const c = (i: number, close: string): Candle => ({
@@ -221,5 +221,144 @@ describe('runEngine warmup and zero-intent warning', () => {
     const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log, initialWarnings: ['x'] });
     expect(r.summary.warnings[0]).toBe('x');
     expect(r.summary.warnings).toEqual(['x']); // this run traded, so no zero-intent warning is added after it
+  });
+});
+
+/**
+ * Finding I6: a resumed paper run restarted with an EMPTY history, so a strategy needing N candles
+ * of warmup was blind for the first N boundaries after every resume — on a 5-minute interval with
+ * `slow=48` that is four hours of a "running" process that structurally cannot emit an intent, and
+ * nothing in the report distinguished it from a strategy that found no signal. `primeHistory` seeds
+ * the loop's history and closes from candles already persisted BEFORE the resume point. They are
+ * context only: they produce no equity point, no decision, and no coverage — they are candles this
+ * run already lived through, being handed back so the indicators are warm.
+ */
+describe('runEngine primeHistory (finding I6)', () => {
+  const sawHistory: number[] = [];
+  const recordingWarmup2: Strategy = {
+    id: 'w2', warmup: 2, defaultParams: {}, warmupFor: () => 2,
+    onCandle: (ctx) => { sawHistory.push(ctx.history.length); return []; },
+  };
+
+  it('lets the FIRST live candle decide when primed with warmup-1 candles', async () => {
+    sawHistory.length = 0;
+    const r = await runEngine({
+      feed: [c(5, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log,
+      primeHistory: [c(4, '1.0')], // warmupFor is 2, so one primed candle is warmup - 1
+    });
+    expect(sawHistory, 'the single live candle already had a full window').toEqual([2]);
+    // Primed candles are context, not observations: one candle was fed, so one equity point exists.
+    expect(r.equity).toHaveLength(1);
+    expect(r.summary.candles).toBe(1);
+    expect(r.summary.coverage.candles).toBe(1);
+    expect(r.summary.coverage.first).toBe(c(5, '1.0').tickTs.toISOString());
+  });
+
+  it('without priming, the same single live candle cannot decide at all', async () => {
+    sawHistory.length = 0;
+    await runEngine({
+      feed: [c(5, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log,
+    });
+    expect(sawHistory).toEqual([]);
+  });
+
+  it('trims primed candles to historyLimit rather than overflowing it', async () => {
+    sawHistory.length = 0;
+    await runEngine({
+      feed: [c(20, '1.0')], strategy: recordingWarmup2, executor: passthrough,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log, historyLimit: 3,
+      primeHistory: Array.from({ length: 10 }, (_, i) => c(i, '1.0')),
+    });
+    expect(sawHistory).toEqual([3]);
+  });
+});
+
+/**
+ * Finding I1(b): the three sinks fired independently — `onOrder` per order, `onEquity` per equity
+ * point — so a paper run wrote each candle's orders and its equity point in SEPARATE autocommit
+ * statements. A crash between them left the database claiming a fill that no equity point reflects,
+ * or an equity point for a candle whose orders were never recorded, and the run's own global
+ * constraint ("every order and every equity point is persisted before the loop moves to the next
+ * candle") could not actually be honoured. `onCandleCommit` hands the caller one candle's whole
+ * settled batch at once, so it can be written in ONE transaction.
+ */
+describe('runEngine onCandleCommit (finding I1b)', () => {
+  it('delivers the candle settled orders and its equity point together, once per candle', async () => {
+    const batches: Array<{ tick: number; seqs: number[]; equity: string | null }> = [];
+    const feed = [c(0, '1.0'), c(1, '1.0'), c(2, '2.0'), c(3, '2.0'), c(4, '4.0'), c(5, '4.0')];
+    const r = await runEngine({
+      feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n },
+      decimals: 0, log, retain: false,
+      sinks: {
+        onCandleCommit: async (b) => {
+          batches.push({ tick: b.candle.tickTs.getUTCMinutes(), seqs: b.orders.map((o) => o.seq), equity: b.equity?.equityLovelace.toString() ?? null });
+        },
+      },
+    });
+    expect(batches).toHaveLength(6); // one per candle, no trailing batch: nothing was left pending
+    expect(batches.map((b) => b.tick)).toEqual([0, 5, 10, 15, 20, 25]);
+    // The buy is decided on candle index 1 and settles on index 2, arriving in THAT candle's batch.
+    expect(batches[2]?.seqs).toEqual([1]);
+    expect(batches[4]?.seqs).toEqual([2]);
+    expect(batches.filter((b) => b.seqs.length === 0)).toHaveLength(4);
+    // Every batch carries its own equity point, so a transaction over it is complete by construction.
+    expect(batches.every((b) => b.equity !== null)).toBe(true);
+    expect(r.summary.filled).toBe(2);
+  });
+
+  it('commits a candle batch AFTER the equity point and BEFORE the decision for that candle', async () => {
+    const seen: string[] = [];
+    const s: Strategy = {
+      id: 'seq', warmup: 1, defaultParams: {}, warmupFor: () => 1,
+      onCandle: (ctx) => { seen.push(`decide ${ctx.candle.tickTs.getUTCMinutes()}`); return []; },
+    };
+    await runEngine({
+      feed: [c(0, '1.0'), c(1, '1.0')], strategy: s, executor: passthrough, initial: { cashLovelace: 1n, positionBase: 0n },
+      decimals: 0, log,
+      sinks: { onCandleCommit: async (b) => { seen.push(`commit ${b.candle.tickTs.getUTCMinutes()}`); } },
+    });
+    expect(seen).toEqual(['commit 0', 'decide 0', 'commit 5', 'decide 5']);
+  });
+
+  it('still delivers leftover pending intents, in a trailing batch with no equity point', async () => {
+    // Global constraint: no order is ever silently dropped. An intent decided on the last candle has
+    // no t+1 to settle against and is recorded rejected — it must still reach the commit sink, or
+    // moving paper.ts off onOrder would have quietly stopped persisting it.
+    const ac = new AbortController();
+    const always: Strategy = { id: 'always', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [{ side: 'buy', amountIn: 1_000_000n, reason: 'x' }] };
+    const batches: Array<{ orders: OrderRecord[]; equity: EquityPoint | null }> = [];
+    let n = 0;
+    const feed = { async *[Symbol.asyncIterator]() { while (n < 100) { const k = c(n++, '1.0'); if (n === 2) ac.abort(); yield k; } } };
+    await runEngine({
+      feed, strategy: always, executor: passthrough, initial: { cashLovelace: 10_000_000_000n, positionBase: 0n },
+      decimals: 0, log, signal: ac.signal,
+      sinks: { onCandleCommit: async (b) => { batches.push({ orders: b.orders, equity: b.equity }); } },
+    });
+    const trailing = batches[batches.length - 1]!;
+    expect(trailing.equity, 'the trailing batch observed no candle, so it has no equity point').toBeNull();
+    expect(trailing.orders.map((o) => o.result)).toEqual([{ status: 'rejected', reason: 'stopped' }]);
+    // Every order the run produced reached the sink exactly once.
+    const all = batches.flatMap((b) => b.orders);
+    expect(new Set(all.map((o) => o.seq)).size).toBe(all.length);
+  });
+
+  it('fires no trailing batch when nothing was left pending', async () => {
+    const quiet: Strategy = { id: 'quiet', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [] };
+    const batches: number[] = [];
+    await runEngine({
+      feed: [c(0, '1.0'), c(1, '1.0')], strategy: quiet, executor: passthrough, initial: { cashLovelace: 1n, positionBase: 0n },
+      decimals: 0, log, sinks: { onCandleCommit: async () => { batches.push(1); } },
+    });
+    expect(batches).toHaveLength(2);
+  });
+
+  it('propagates a commit failure: an unwritable candle must stop the run, not be logged past', async () => {
+    const quiet: Strategy = { id: 'quiet', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [] };
+    await expect(runEngine({
+      feed: [c(0, '1.0'), c(1, '1.0')], strategy: quiet, executor: passthrough, initial: { cashLovelace: 1n, positionBase: 0n },
+      decimals: 0, log, sinks: { onCandleCommit: async () => { throw new Error('commit failed'); } },
+    })).rejects.toThrow('commit failed');
   });
 });

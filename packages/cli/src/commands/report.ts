@@ -78,6 +78,17 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
 }
 
 /**
+ * The same pure computation as `summarizeDay`, named for its other use: the whole-run headline a
+ * paper report prints from its PERSISTED rows. Final-review finding C1 — after a resume,
+ * `runs.summary` describes only the segment whose process wrote it (`finishRun` overwrites the
+ * column wholesale, and that process's `Summarizer` only ever saw its own candles). Verified on
+ * rehearsal run 6: `summary` said 1 intent / 1 filled / 12 candles while `paper_orders` held 2 rows
+ * and `run_equity` held 27. Equity points and orders in, one summary out — an alias rather than a
+ * copy so the day view and the run headline can never drift apart.
+ */
+export const summarizeRun = summarizeDay;
+
+/**
  * Lovelace to ADA with six decimals, in bigint. `Number(BigInt(x)) / 1e6` loses precision above
  * 2^53 lovelace (~9.007 billion ADA) and, more to the point, prints an approximation of a number the
  * whole report exists to make exact (finding M10).
@@ -107,12 +118,17 @@ export function coverageLine(c: RunCoverage | undefined): string {
  * run back — the process that created it AND a later `report <run-id>` — not just the one that
  * happened to set an ad-hoc console line at the end of its own process (finding F3).
  */
-export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit: string }>, ticker: string): void {
+export function printReport(
+  run: RunRow, orders: Array<OrderRecord & { baseUnit: string }>, ticker: string, persistedEquity: EquityPoint[] = [],
+): void {
   if (run.rehearsal) console.log('REHEARSAL — synthetic data — not evidence');
   console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | git ${run.gitSha}`);
   console.log(`data: ${run.dataSource} ${run.dataFrom.toISOString()} -> ${run.dataTo.toISOString()} | fill model: ${run.fillModel}`);
   console.log(`params: ${JSON.stringify(run.params)}`);
-  if (run.mode === 'paper') printPaperStatusLines(run);
+  if (run.mode === 'paper') {
+    printPaperStatusLines(run);
+    printPersistedHeadline(run, persistedEquity, orders);
+  }
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
   console.log(coverageLine(s.coverage));
@@ -131,6 +147,57 @@ export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit:
   if (orders.length > 50) console.log(`... ${orders.length - 50} more orders (query paper_orders where run_id = ${run.id})`);
 }
 
+/** The ISO timestamps `RunRepo.appendResume` has appended to `params.resumes`, or [] on a run that
+ * predates the column or has never been resumed. Read as `unknown[]` and stringified per element —
+ * this is a jsonb blob, not a typed column. */
+function resumesOf(run: RunRow): string[] {
+  const raw = run.params.resumes;
+  return Array.isArray(raw) ? raw.map((x) => String(x)) : [];
+}
+
+/**
+ * Finding I4: the run's own view of its feed, from `params.feedCounters`. A day of `yielded 0` with
+ * a climbing `empty` count is what a dead collector looks like from inside the paper process, and
+ * before this it was visible only in a log file nobody kept. Read defensively — this is a jsonb blob
+ * that a run predating the counters simply will not have, and "not recorded" must not read as zero.
+ */
+export function feedCountersLine(params: Record<string, unknown>): string {
+  const raw = params.feedCounters;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'feed: not recorded (run predates feed counters)';
+  const c = raw as Record<string, unknown>;
+  const n = (k: string): string => (typeof c[k] === 'number' ? String(c[k]) : '?');
+  return `feed: ${n('ticks')} ticks | ${n('built')} built | ${n('yielded')} yielded | ${n('skippedStale')} stale-skipped | ${n('emptyBoundaries')} empty | ${n('tickFailures')} failed`;
+}
+
+/**
+ * Finding C1. `runs.summary` is written by `finishRun` at the end of ONE process's segment, from a
+ * `Summarizer` that only ever ingested that segment's own candles — so on a resumed run it silently
+ * describes the last segment while presenting itself as the run's numbers (rehearsal run 6: summary
+ * said 1 intent / 1 filled / 12 candles over `paper_orders` holding 2 and `run_equity` holding 27).
+ * The headline an operator reads first is therefore recomputed here from the PERSISTED rows — every
+ * equity point and every order the run has ever written, across every segment — and the stored
+ * summary is kept below it, explicitly labelled as the last segment only, next to the resume count
+ * that says how many segments it is missing.
+ */
+function printPersistedHeadline(run: RunRow, equity: EquityPoint[], orders: Array<OrderRecord & { baseUnit: string }>): void {
+  const s = summarizeRun(equity, orders);
+  console.log('summary (from persisted rows) — run_equity + paper_orders, every segment:');
+  console.table([{
+    points: s.points,
+    startAda: s.startEquity !== null ? adaStr(s.startEquity) : '-',
+    endAda: s.endEquity !== null ? adaStr(s.endEquity) : '-',
+    startExecAda: s.startExecutable !== null ? adaStr(s.startExecutable) : '-',
+    endExecAda: s.endExecutable !== null ? adaStr(s.endExecutable) : '-',
+    returnPct: s.returnPct ?? '-',
+    filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
+    feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
+  }]);
+  const resumes = resumesOf(run);
+  console.log(
+    `last segment summary (runs.summary — the segment that last wrote it, NOT the whole run; resumes: ${resumes.length}):`,
+  );
+}
+
 /**
  * A paper run is a long-lived process an operator checks in on mid-flight — `run has no summary
  * (unfinished)` above is not enough to tell whether it is healthy. `resumes` comes from
@@ -141,9 +208,9 @@ function printPaperStatusLines(run: RunRow): void {
   console.log(`heartbeat_at: ${run.heartbeatAt ? run.heartbeatAt.toISOString() : 'never'}`);
   console.log(`last_tick_ts: ${run.lastTickTs ? run.lastTickTs.toISOString() : 'never'}`);
   console.log(`stop_reason: ${run.stopReason ?? 'none'}`);
-  const resumesRaw = run.params.resumes;
-  const resumes = Array.isArray(resumesRaw) ? resumesRaw : [];
-  console.log(`resumes: ${resumes.length}${resumes.length ? ` (last ${String(resumes[resumes.length - 1])})` : ''}`);
+  const resumes = resumesOf(run);
+  console.log(`resumes: ${resumes.length}${resumes.length ? ` (last ${resumes[resumes.length - 1]})` : ''}`);
+  console.log(feedCountersLine(run.params));
 }
 
 /**
@@ -158,8 +225,11 @@ export function printDayReport(
   run: RunRow, ticker: string, from: Date, to: Date, equity: EquityPoint[], orders: Array<OrderRecord & { baseUnit: string }>, now: Date,
 ): void {
   if (run.rehearsal) console.log('REHEARSAL — synthetic data — not evidence');
-  console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | day ${from.toISOString().slice(0, 10)}`);
+  // Finding I3: spec §8 M3 requires the DAILY report to cite the git sha. The non-day report always
+  // did; a reader who only ever saw `--day` output could not tell which code produced the numbers.
+  console.log(`\n=== run ${run.id} | ${run.mode} | ${run.strategyId} | ${ticker} | day ${from.toISOString().slice(0, 10)} | git ${run.gitSha}`);
   console.log(`window: ${from.toISOString()} -> ${to.toISOString()}`);
+  if (run.mode === 'paper') console.log(feedCountersLine(run.params));
   const s = summarizeDay(equity, orders);
   console.table([{
     points: s.points,
@@ -193,7 +263,12 @@ export async function reportCommand(log: Logger, args: string[]): Promise<void> 
       if (value === undefined) throw new Error(USAGE);
       dayArg = value;
       i++;
+      continue;
     }
+    // Finding M2: anything else used to be skipped in silence, so `report 6 --dya 2026-09-06` — or a
+    // stray shell word — produced a confident full-run report instead of the day the operator asked
+    // for. Every other command in this CLI rejects an unknown flag; this one now does too.
+    throw new Error(`unknown argument ${args[i]}\n${USAGE}`);
   }
   // Validate before opening a pool so a malformed --day fails fast without a DB round trip.
   const window = dayArg !== undefined ? dayWindow(dayArg) : null;
@@ -209,7 +284,13 @@ export async function reportCommand(log: Logger, args: string[]): Promise<void> 
       const [equity, orders] = await Promise.all([runs.listEquity(id, window.from, window.to), runs.listOrdersBetween(id, window.from, window.to)]);
       printDayReport(run, ticker, window.from, window.to, equity, orders, new Date());
     } else {
-      printReport(run, await runs.listOrders(id), ticker);
+      // Finding C1: a paper run's headline is recomputed from every persisted row, so a resumed run
+      // is not reported as just its last segment. `new Date(0)` rather than `run.created_at`: on
+      // rehearsal run 6 the first two equity points (18:31:58, the feed's first bucket) predate the
+      // `runs` row itself (18:32:03), so anchoring the window at `created_at` would silently drop
+      // 2 of 27 rows — the very truncation this finding exists to remove.
+      const equity = run.mode === 'paper' ? await runs.listEquity(id, new Date(0), new Date()) : [];
+      printReport(run, await runs.listOrders(id), ticker, equity);
     }
   } finally {
     await db.end();

@@ -221,3 +221,98 @@ describe('reportCommand --day requires a value', () => {
     await expect(reportCommand(noopLog, ['5', '--day'])).rejects.toThrow(/usage: report <run-id>/);
   });
 });
+
+/**
+ * Findings I3 and I4. I3: the `--day` header named the run, mode, strategy, ticker and day but NOT
+ * the commit that produced the numbers, while spec §8 M3 requires the daily report to cite the git
+ * sha — the non-day report already did, so a reader who only ever saw `--day` output could not tell
+ * which code a day's fills came from. I4: the feed counters persisted on the run row are only worth
+ * persisting if a report prints them; a day of `yielded 0` with a climbing `emptyBoundaries` is what
+ * a dead collector looks like from inside the paper process.
+ */
+describe('report headers cite provenance and feed health (findings I3, I4)', () => {
+  const withCounters = (counters: unknown): RunRow => ({
+    id: 11, mode: 'paper', strategyId: 'ma-crossover', params: { feedCounters: counters }, gitSha: 'deadbeefcafe',
+    baseUnit: 'lovelace.TOKEN', dataSource: 'candles', fillModel: 'cpmm_observed',
+    dataFrom: new Date('2026-06-15T00:00:00Z'), dataTo: new Date('2026-06-15T00:00:00Z'),
+    createdAt: new Date('2026-06-15T00:00:00Z'), finishedAt: null, summary: null,
+    status: 'running', heartbeatAt: new Date('2026-06-15T09:05:00.000Z'), lastTickTs: null, stopReason: null, rehearsal: false,
+  });
+  const { from, to } = dayWindow('2026-06-15');
+  const counters = { ticks: 288, built: 280, yielded: 275, skippedStale: 3, emptyBoundaries: 5, tickFailures: 2 };
+
+  const linesFrom = (fn: () => void): string[] => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const table = vi.spyOn(console, 'table').mockImplementation(() => {});
+    try {
+      fn();
+      return log.mock.calls.map((c) => String(c[0]));
+    } finally {
+      table.mockRestore();
+      log.mockRestore();
+    }
+  };
+
+  it('prints the git sha in the --day header (finding I3)', () => {
+    const lines = linesFrom(() => printDayReport(withCounters(counters), 'TOKEN', from, to, [], [], new Date()));
+    expect(lines[0]).toContain('git deadbeefcafe');
+  });
+
+  it('prints the feed counters in the --day report (finding I4)', () => {
+    const lines = linesFrom(() => printDayReport(withCounters(counters), 'TOKEN', from, to, [], [], new Date()));
+    const feed = lines.find((l) => l.startsWith('feed:'));
+    expect(feed).toBeDefined();
+    expect(feed).toContain('288 ticks');
+    expect(feed).toContain('275 yielded');
+    expect(feed).toContain('5 empty');
+    expect(feed).toContain('2 failed');
+  });
+
+  it('prints the feed counters in the non-day paper report too', () => {
+    const lines = linesFrom(() => printReport(withCounters(counters), [], 'TOKEN'));
+    expect(lines.some((l) => l.startsWith('feed:') && l.includes('288 ticks'))).toBe(true);
+  });
+
+  it('says the counters were not recorded rather than printing zeros for a run that predates them', () => {
+    const lines = linesFrom(() => printReport(withCounters(undefined), [], 'TOKEN'));
+    const feed = lines.find((l) => l.startsWith('feed:'));
+    expect(feed).toMatch(/not recorded/);
+  });
+
+  it('is not fooled by a non-object feedCounters value', () => {
+    const lines = linesFrom(() => printReport(withCounters('nonsense'), [], 'TOKEN'));
+    expect(lines.find((l) => l.startsWith('feed:'))).toMatch(/not recorded/);
+  });
+
+  it('prints no feed line for a backtest run, which has no feed', () => {
+    const lines = linesFrom(() => printReport({ ...withCounters(counters), mode: 'backtest' }, [], 'TOKEN'));
+    expect(lines.some((l) => l.startsWith('feed:'))).toBe(false);
+  });
+});
+
+/**
+ * Finding M2: `reportCommand` looped over its arguments looking only for `--day` and ignored
+ * everything else, so `report 6 --dya 2026-09-06`, `report 6 --rehearsal`, or a stray shell word
+ * produced a confident full-run report while silently discarding what the operator asked for. Every
+ * other command in this CLI rejects an unknown flag; this one did not.
+ */
+describe('reportCommand rejects unknown arguments (finding M2)', () => {
+  const noopLog = { error: () => {} } as unknown as Logger;
+
+  it('rejects a misspelled flag rather than reporting something else', async () => {
+    await expect(reportCommand(noopLog, ['5', '--dya', '2026-09-06'])).rejects.toThrow(/unknown argument --dya/);
+  });
+
+  it('rejects a stray positional argument', async () => {
+    await expect(reportCommand(noopLog, ['5', '2026-09-06'])).rejects.toThrow(/unknown argument 2026-09-06/);
+  });
+
+  it('rejects a flag that belongs to another command', async () => {
+    await expect(reportCommand(noopLog, ['5', '--rehearsal'])).rejects.toThrow(/unknown argument --rehearsal/);
+  });
+
+  it('still rejects a run id that is not a positive integer', async () => {
+    await expect(reportCommand(noopLog, ['0'])).rejects.toThrow(/usage: report <run-id>/);
+    await expect(reportCommand(noopLog, ['abc'])).rejects.toThrow(/usage: report <run-id>/);
+  });
+});

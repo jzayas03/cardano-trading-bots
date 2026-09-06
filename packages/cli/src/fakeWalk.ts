@@ -66,16 +66,21 @@ export function fakeWalk(seed: number, steps: number, start: Reserves): Reserves
 }
 
 /**
- * Synthetic data can never be mistaken for real (global constraint). `dev:fake-collector` refuses to
- * run unless BOTH hold: the operator explicitly opted in with `CTB_ALLOW_FAKE_DATA=1`, and the
- * database it is about to write to is on this machine. `new URL` is used (not a string prefix check)
- * so `postgres://user:pass@localhost.evil.example:5433/db` — where `localhost` is a subdomain label,
- * not the host — is correctly rejected.
+ * Synthetic data can never be mistaken for real (global constraint). A tool that produces or
+ * consumes fake data refuses to run unless BOTH hold: the operator explicitly opted in with
+ * `CTB_ALLOW_FAKE_DATA=1`, and the database it is about to touch is on this machine. `new URL` is
+ * used (not a string prefix check) so `postgres://user:pass@localhost.evil.example:5433/db` — where
+ * `localhost` is a subdomain label, not the host — is correctly rejected.
+ *
+ * Finding I7: `who` exists because `paper --rehearsal` reuses this. The consumer needed the same
+ * localhost bound as the producer — it gated only on `CTB_ALLOW_FAKE_DATA`, so the opt-in that is
+ * safe on a laptop would have pointed a synthetic run at a remote database — and the refusal has to
+ * name the command the operator actually typed.
  */
-export function assertFakeAllowed(env: NodeJS.ProcessEnv, databaseUrl: string): void {
-  if (env.CTB_ALLOW_FAKE_DATA !== '1') throw new Error('dev:fake-collector requires CTB_ALLOW_FAKE_DATA=1');
+export function assertFakeAllowed(env: NodeJS.ProcessEnv, databaseUrl: string, who = 'dev:fake-collector'): void {
+  if (env.CTB_ALLOW_FAKE_DATA !== '1') throw new Error(`${who} requires CTB_ALLOW_FAKE_DATA=1`);
   const host = new URL(databaseUrl).hostname;
   if (host !== 'localhost' && host !== '127.0.0.1') {
-    throw new Error(`dev:fake-collector requires a localhost database, got host ${host}`);
+    throw new Error(`${who} requires a localhost database, got host ${host}`);
   }
 }

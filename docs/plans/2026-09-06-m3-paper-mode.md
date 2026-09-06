@@ -778,6 +778,7 @@ echo $! > paper.pid
 ```
 - [ ] **Step 3: Daily, for 7 days**: `npm run report -- <run-id> --day <yesterday UTC>` pasted into the report; `npm run status` heartbeat age; note any `stale t+1` or `no candle at boundary` counts and cross-reference `collector_runs` errors for the same hour.
 - [ ] **Step 4: Restart drill on day 2**: `kill -INT $(cat paper.pid)`; confirm `runs.status = 'finished'` with `stop_reason = 'signal'`; wait one interval; `npm run paper -- ma-crossover SNEK --resume <run-id>`; confirm `paper_orders.seq` continues and `params.resumes` gained a timestamp.
+- [ ] **Step 4b: Crash-recovery drill, same day**: `kill -9` the real node pid (not the `tsx` wrapper); confirm the row is stuck at `status = 'running'` and that `npm run status` shows `STALE (Ns)` once past `2 * intervalSec + graceSec`; confirm `pgrep -fl 'main.ts paper'` is empty; then `npm run paper -- ma-crossover SNEK --resume <run-id>` — it succeeds through the stale-heartbeat path (final-review finding C2), logs `resuming a run whose heartbeat is stale (age Ns)`, and records that sentence as a run warning. A run whose heartbeat is still fresh must be REFUSED. Full procedure: `docs/ops/RUNBOOK-paper.md`.
 - [ ] **Step 5: Acceptance queries**
 ```sql
 SELECT id, status, stop_reason, created_at, finished_at, heartbeat_at, last_tick_ts, params->'resumes' AS resumes FROM runs WHERE mode = 'paper' ORDER BY id;

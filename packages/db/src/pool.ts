@@ -11,9 +11,30 @@ export interface Queryable {
   query<R extends pg.QueryResultRow = pg.QueryResultRow>(text: string, values?: unknown[]): Promise<pg.QueryResult<R>>;
 }
 
-/** One pool per process. `onError` receives idle-client errors so they never crash the process silently. */
+/** Wait this long for a connection before failing. pg's default is 0 — wait forever (finding M4). */
+const CONNECT_TIMEOUT_MS = 10_000;
+/** Cap on one statement, enforced twice: server-side (`statement_timeout`, so the backend actually
+ * cancels the query rather than leaving it running behind an abandoned client) and client-side
+ * (`query_timeout`, so a wedged connection that never answers still rejects locally). */
+const STATEMENT_TIMEOUT_MS = 30_000;
+
+/**
+ * One pool per process. `onError` receives idle-client errors so they never crash the process silently.
+ *
+ * Finding M4: every bound but `max` used to be pg's default, and pg's default connect timeout is
+ * "wait forever". In a long-lived paper run an unbounded await never throws, so the commit sink's
+ * retry never fires and its catch never runs: the run stops writing while `runs.status` still says
+ * `running` and only the heartbeat betrays it. Bounded here so a stuck connection or statement
+ * surfaces as an error something can act on.
+ */
 export function createPool(databaseUrl: string, onError: (err: Error) => void): pg.Pool {
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 5 });
+  const pool = new pg.Pool({
+    connectionString: databaseUrl,
+    max: 5,
+    connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
+    statement_timeout: STATEMENT_TIMEOUT_MS,
+    query_timeout: STATEMENT_TIMEOUT_MS,
+  });
   pool.on('error', onError);
   return pool;
 }

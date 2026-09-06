@@ -20,12 +20,25 @@ const DEFAULT_GRACE_SEC = 60;
  * exported so the STALE rule is unit-testable without a live process or a `Date.now` mock.
  */
 export function heartbeatAgeCell(heartbeatAt: Date | null, params: Record<string, unknown>, now: Date): string {
+  if (!heartbeatAt) return 'STALE';
+  const ageS = Math.round((now.getTime() - heartbeatAt.getTime()) / 1000);
+  // Finding M1: a bare `STALE` said a run had stopped ticking but not for how long, so an operator
+  // could not tell a process that died 30 seconds past the bound from one that died two days ago —
+  // and the second is the one where resuming replays a very different amount of missed history.
+  return isHeartbeatStale(heartbeatAt, params, now) ? `STALE (${ageS}s)` : String(ageS);
+}
+
+/**
+ * The STALE predicate itself, so `status`'s cell and `paper --resume`'s refusal decide liveness from
+ * one bound instead of two that can drift apart (finding C2). A run that has never heartbeated is
+ * stale: it proved nothing about being alive. Params default to the `paper` command's own defaults
+ * for a row that predates them.
+ */
+export function isHeartbeatStale(heartbeatAt: Date | null, params: Record<string, unknown>, now: Date): boolean {
+  if (!heartbeatAt) return true;
   const intervalSec = typeof params.intervalSec === 'number' ? params.intervalSec : DEFAULT_INTERVAL_SEC;
   const graceSec = typeof params.graceSec === 'number' ? params.graceSec : DEFAULT_GRACE_SEC;
-  const staleAfterMs = (2 * intervalSec + graceSec) * 1000;
-  if (!heartbeatAt) return 'STALE';
-  const ageMs = now.getTime() - heartbeatAt.getTime();
-  return ageMs > staleAfterMs ? 'STALE' : String(Math.round(ageMs / 1000));
+  return now.getTime() - heartbeatAt.getTime() > (2 * intervalSec + graceSec) * 1000;
 }
 
 export async function statusCommand(log: Logger): Promise<void> {
