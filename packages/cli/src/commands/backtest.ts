@@ -87,7 +87,7 @@ export function buildRunParams(
   argParams: Record<string, number>,
   cashAda: number,
   depthAda: number | null,
-  costOverrides: Partial<VenueCosts>,
+  costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>,
   maxGapMs: number,
 ): Record<string, unknown> {
   const params = { ...strategyDefaults, ...argParams };
@@ -110,6 +110,9 @@ export function buildRunParams(
       venues: Object.fromEntries(Object.entries(VENUE_COSTS).map(([venue, c]) => [venue, {
         batcherFeeLovelace: c.batcherFeeLovelace.toString(),
         networkFeeLovelace: c.networkFeeLovelace.toString(),
+        basis: c.basis,
+        source: c.source,
+        readAt: c.readAt,
       }])),
     },
   };
@@ -131,7 +134,7 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     if (gitSha === 'unknown') log.warn({}, 'git sha unknown: run provenance is incomplete');
     const fillModel: FillModel = a.source === 'candles' ? { kind: 'cpmm_observed' } : { kind: 'cpmm_synthetic_depth', depthLovelace: ada(a.depthAda ?? 0) };
     const maxGapMs = a.maxGapMin * 60_000;
-    const costOverrides: Partial<VenueCosts> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
+    const costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
     const runId = await runs.createRun({
       mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
       params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs),

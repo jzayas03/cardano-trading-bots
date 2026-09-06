@@ -1,5 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type OrderRecord, type RunCoverage, type RunRow } from '@ctb/engine';
+import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
@@ -38,6 +39,8 @@ export function printReport(run: RunRow, orders: Array<OrderRecord & { baseUnit:
   for (const w of s.warnings ?? []) console.log(`warning: ${w}`);
   console.table([{ candles: s.candles, intents: s.intents, filled: s.filled, rejected: s.rejected, startAda: adaStr(s.startEquityLovelace), endAda: adaStr(s.endEquityLovelace),
     returnPct: s.returnPct, maxDrawdownPct: s.maxDrawdownPct, lovelaceFeesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn }]);
+  const assumed = assumedVenuesTouched(orders);
+  if (assumed.length) console.log(`warning: fills touched venues with ASSUMED costs: ${assumed.join(', ')} (see runs.params.costs.venues)`);
   if (Object.keys(s.rejectReasons).length) console.table(Object.entries(s.rejectReasons).map(([reason, count]) => ({ reason, count })));
   console.table(orders.slice(0, 50).map((o) => ({
     seq: o.seq, intent: o.tsIntent.toISOString(), side: o.intent.side, amountIn: o.intent.amountIn.toString(), status: o.result.status,

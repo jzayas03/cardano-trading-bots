@@ -1,13 +1,17 @@
-import { DEFAULT_COSTS, VENUE_COSTS } from '@ctb/sim-executor';
+import { VENUE_COSTS } from '@ctb/sim-executor';
 import { describe, expect, it } from 'vitest';
 import { buildRunParams } from '../src/commands/backtest.js';
 
 /**
  * Review finding (Task 10, fix round 1): `backtestCommand` used to record `runs.params.costs`
  * with re-hardcoded literals (`?? 2_000_000n` / `?? 200_000n`) instead of the shared
- * `DEFAULT_COSTS` from `@ctb/sim-executor` — a change to the shared default would silently
+ * `VENUE_COSTS` table from `@ctb/sim-executor` — a change to a venue's fee would silently
  * drift from what got recorded in run provenance. `buildRunParams` is the extracted pure
  * function so this is testable without a database.
+ *
+ * Task 1: every venue now carries its own `basis`/`source`/`readAt` (there is no single shared
+ * default the whole table shares any more — each row's provenance is its own), so a run's
+ * recorded `venues` map must carry those three fields per venue too, not just the two fee amounts.
  */
 describe('buildRunParams', () => {
   /**
@@ -15,30 +19,28 @@ describe('buildRunParams', () => {
    * charges — it charges from the per-venue table, with the run's overrides applied on top. A run
    * over a multi-venue window recorded a cost model it never used.
    */
-  it('records the whole venue cost table, not a single flat pair', () => {
+  it('records the whole venue cost table, with provenance, not a single flat pair', () => {
     const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, {}, 900_000);
-    const costs = params.costs as { overrides: Record<string, string>; venues: Record<string, Record<string, string>> };
+    const costs = params.costs as { overrides: Record<string, string>; venues: Record<string, { batcherFeeLovelace: string; networkFeeLovelace: string; basis: string; source: string; readAt: string }> };
     expect(costs.overrides).toEqual({});
     expect(Object.keys(costs.venues).sort()).toEqual(Object.keys(VENUE_COSTS).sort());
     for (const [venue, c] of Object.entries(VENUE_COSTS)) {
       expect(costs.venues[venue], venue).toEqual({
         batcherFeeLovelace: c.batcherFeeLovelace.toString(),
         networkFeeLovelace: c.networkFeeLovelace.toString(),
+        basis: c.basis,
+        source: c.source,
+        readAt: c.readAt,
       });
     }
-    // The table's own values are the shared defaults, not literals re-typed here.
-    expect(costs.venues.MinswapV2).toEqual({
-      batcherFeeLovelace: DEFAULT_COSTS.batcherFeeLovelace.toString(),
-      networkFeeLovelace: DEFAULT_COSTS.networkFeeLovelace.toString(),
-    });
   });
 
   it('records only what --batcher-ada / --network-ada actually overrode, beside the table', () => {
     const params = buildRunParams({ fast: 12, slow: 48 }, {}, 1000, null, { batcherFeeLovelace: 1_500_000n }, 900_000);
-    const costs = params.costs as { overrides: Record<string, string>; venues: Record<string, Record<string, string>> };
+    const costs = params.costs as { overrides: Record<string, string>; venues: Record<string, { batcherFeeLovelace: string }> };
     expect(costs.overrides, 'only the overridden leg is recorded as an override').toEqual({ batcherFeeLovelace: '1500000' });
     expect(costs.venues.Splash?.batcherFeeLovelace, 'the table is recorded unchanged; the override wins over it at fill time')
-      .toBe(DEFAULT_COSTS.batcherFeeLovelace.toString());
+      .toBe(VENUE_COSTS.Splash.batcherFeeLovelace.toString());
   });
 
   it('records the stale-fill bound the run used', () => {

@@ -1,35 +1,64 @@
-import { isDexName, VENUE_NAMES, type DexName } from '@ctb/collector';
+import { isDexName, type DexName } from '@ctb/collector';
+import type { FillResult } from '@ctb/engine';
 
 /**
- * ASSUMPTION (Plan 2, 2026-09-06): every venue is modelled with a 2 ADA batcher/agent/scooper fee and a
- * 0.2 ADA network fee. Real fees differ per DEX and change; Task 11 checks each venue's published fee and
- * records the values actually used in runs.params. Override per run with --batcher-ada / --network-ada.
+ * Per-venue fixed costs of one swap, with provenance. Batcher/agent/scooper fees were read from each
+ * venue's own documentation on 2026-09-06 (docs/ops/2026-09-06-m2-report.md §1). A venue whose docs do
+ * not state a number is `assumed` at 2 ADA and is named in every report it touches. The network fee is an
+ * estimate (0.2 ADA) everywhere; `basis` describes the batcher fee. Lowering a fee makes reported results
+ * better, which is exactly why a value with no source is not allowed here (costsProvenance.guard).
  */
-export interface VenueCosts { batcherFeeLovelace: bigint; networkFeeLovelace: bigint }
+export interface VenueCosts {
+  batcherFeeLovelace: bigint;
+  networkFeeLovelace: bigint;
+  basis: 'documented' | 'assumed';
+  source: string;
+  readAt: string;
+}
 
-export const DEFAULT_COSTS: VenueCosts = { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: 200_000n };
+const NETWORK = 200_000n;
+const READ_AT = '2026-09-06';
+const MINSWAP_DOC = 'https://docs.minswap.org/courses/how-to-perform-swaps/batcher';
 
-export const VENUE_COSTS: Record<DexName, VenueCosts> = Object.fromEntries(VENUE_NAMES.map((v) => [v, DEFAULT_COSTS])) as Record<DexName, VenueCosts>;
+export const DEFAULT_COSTS: VenueCosts = { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'plan-2 assumption', readAt: READ_AT };
 
-/** The venue half of a `<dex>:<identifier>` pool id, or '' when there is no prefix. */
+export const VENUE_COSTS: Record<DexName, VenueCosts> = {
+  Minswap: { batcherFeeLovelace: 0n, networkFeeLovelace: NETWORK, basis: 'documented', source: MINSWAP_DOC, readAt: READ_AT },
+  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: `${MINSWAP_DOC} (conflicts with the v2 spec on GitHub; on-chain check pending)`, readAt: READ_AT },
+  SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
+  SundaeSwapV3: { batcherFeeLovelace: 1_000_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §4.4.3 (dynamic 0.5-1.0 ADA; upper bound used)', readAt: READ_AT },
+  MuesliSwap: { batcherFeeLovelace: 950_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'https://docs.muesliswap.com', readAt: READ_AT },
+  WingRiders: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },
+  WingRidersV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },
+  VyFinance: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.vyfi.io (amount not stated)', readAt: READ_AT },
+  Splash: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.splash.trade (amount not stated)', readAt: READ_AT },
+};
+
 export function venueOf(poolId: string): string {
   return poolId.split(':')[0] ?? '';
 }
 
-/**
- * Null when the venue prefix is not one we have a cost table for. The executor needs this shape
- * rather than an exception: a pool we cannot cost is one rejected order, counted and reported with
- * every other rejection, not a thrown error that ends the whole run (finding M1).
- */
-export function tryCostsForPoolId(poolId: string, overrides?: Partial<VenueCosts>): VenueCosts | null {
+export function tryCostsForPoolId(poolId: string, overrides?: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>): VenueCosts | null {
   const venue = venueOf(poolId);
   if (!isDexName(venue)) return null;
-  return { ...VENUE_COSTS[venue], ...overrides };
+  const base = VENUE_COSTS[venue];
+  if (!overrides || (overrides.batcherFeeLovelace === undefined && overrides.networkFeeLovelace === undefined)) return base;
+  return { ...base, ...overrides, basis: 'assumed', source: 'cli override', readAt: READ_AT };
 }
 
-/** Throwing variant, for callers configuring a run up front where an unknown venue IS a config error. */
-export function costsForPoolId(poolId: string, overrides?: Partial<VenueCosts>): VenueCosts {
-  const costs = tryCostsForPoolId(poolId, overrides);
-  if (!costs) throw new Error(`unknown venue in pool id ${poolId}`);
-  return costs;
+export function costsForPoolId(poolId: string, overrides?: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>>): VenueCosts {
+  const c = tryCostsForPoolId(poolId, overrides);
+  if (!c) throw new Error(`unknown venue in pool id ${poolId}`);
+  return c;
+}
+
+/** Distinct venues with `basis: 'assumed'` among FILLED orders, sorted; the report names them. */
+export function assumedVenuesTouched(orders: Array<{ result: FillResult }>): string[] {
+  const out = new Set<string>();
+  for (const o of orders) {
+    if (o.result.status !== 'filled') continue;
+    const v = venueOf(o.result.poolId);
+    if (isDexName(v) && VENUE_COSTS[v].basis === 'assumed') out.add(v);
+  }
+  return [...out].sort();
 }
