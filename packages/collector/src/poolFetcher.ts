@@ -18,4 +18,11 @@ export interface PoolFetcher {
   discoverVenue(venue: DexName, tokenPairs: Array<['lovelace', FetcherAsset]>): Promise<LiquidityPoolShape[]>;
   /** The latest on-chain state for one already-known pool, or `undefined` if none came back. */
   poolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined>;
+  /**
+   * Count of address/token queries that failed during the most recent `discoverVenue` call for this
+   * venue, for venues discovered via the bounded per-address/token path (see `VENUES[venue].discovery
+   * === 'per-token-address'` in `venues.ts`, currently only Splash). Optional and 0 by default so a
+   * `PoolFetcher` fake that never implements it (every existing test fake) behaves exactly as before.
+   */
+  partialFailures?(venue: DexName): number;
 }

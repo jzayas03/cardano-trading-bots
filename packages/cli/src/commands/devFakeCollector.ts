@@ -133,6 +133,7 @@ export async function devFakeCollectorCommand(log: Logger, args: string[]): Prom
         poolsWritten: written,
         providerCalls: 0,
         discovered: false,
+        discoveryCalls: null,
         errors: [{ scope: 'fake', message: 'synthetic snapshot from dev:fake-collector' }],
       });
       log.info(

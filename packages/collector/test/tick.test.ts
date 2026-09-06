@@ -27,6 +27,10 @@ class FakeSource implements PoolSource {
     private readonly discoverFailures: RunError[] = [],
     private readonly refreshFailures: RunError[] = [],
     private readonly throwOn?: 'discover' | 'refresh',
+    // Optional capability under test in "carries per-venue discovery call counts...": always present
+    // on this fake (empty object by default) so runTick's structural DiscoveryCallsSource check finds
+    // it on every discover tick, same as the real DexterPoolSource would.
+    private readonly discoveryCallsResult: Record<string, number> = {},
   ) {}
   async discover(): Promise<SourceResult> {
     this.discoverCalls++;
@@ -44,6 +48,7 @@ class FakeSource implements PoolSource {
   providerCalls() { return this.calls; }
   resetProviderCalls() { this.calls = 0; }
   knownPoolCount() { return this.discoverCalls === 0 ? 0 : this.pools.length; }
+  lastDiscoveryCalls() { return this.discoveryCallsResult; }
 }
 
 class FakeRepo implements SnapshotRepo {
@@ -170,6 +175,25 @@ describe('runTick', () => {
     const source = new FakeSource([pool('MinswapV2', 'a')]);
     const repo = new FakeRepo(true);
     await expect(runTick(deps(source, repo))).rejects.toThrow('db down');
+  });
+
+  // DiscoveryCallsSource (source.ts): DexterPoolSource tracks Blockfrost calls per venue on
+  // discover() so a tick's cost is attributable (run 50: Splash alone burned ~24k of 39,781 calls).
+  // A PoolSource fake proves the plumbing without a real counting provider.
+  it('carries per-venue discovery call counts on the run summary from a discover tick, and none on a refresh tick', async () => {
+    const source = new FakeSource(
+      [pool('MinswapV2', 'a'), pool('SundaeSwapV3', 'b')], false, [], [], undefined,
+      { MinswapV2: 20, SundaeSwapV3: 9 },
+    );
+    const repo = new FakeRepo();
+    const state: CollectorState = { lastDiscoveryAt: null };
+    const s1 = await runTick(deps(source, repo, state));
+    expect(s1.discovered).toBe(true);
+    expect(s1.discoveryCalls).toEqual({ MinswapV2: 20, SundaeSwapV3: 9 });
+
+    const s2 = await runTick(deps(source, repo, state)); // known pools > 0, recent discovery: refresh
+    expect(s2.discovered).toBe(false);
+    expect(s2.discoveryCalls).toBeNull();
   });
 });
 
