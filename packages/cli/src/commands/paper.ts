@@ -5,7 +5,7 @@ import {
   type Candle, type EquityPoint, type FeedCounters, type OrderRecord, type Portfolio, type RunRepo, type RunRow, type RunSummaryStats, type Strategy,
 } from '@ctb/engine';
 import { SimExecutor } from '@ctb/sim-executor';
-import { retryWithBackoff } from '@ctb/collector';
+import { retryWithBackoff } from '@ctb/collector/pure';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';

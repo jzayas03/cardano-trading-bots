@@ -10,7 +10,10 @@
     "noEmit": true,
     "types": ["node"],
     "baseUrl": ".",
-    "paths": { "@ctb/*": ["packages/*/src/index.ts"] }
+    "paths": {
+      "@ctb/collector/pure": ["packages/collector/src/pure.ts"],
+      "@ctb/*": ["packages/*/src/index.ts"]
+    }
   },
   "include": ["packages/*/src/**/*.ts", "packages/*/test/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 }

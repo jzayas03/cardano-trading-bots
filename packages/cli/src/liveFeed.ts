@@ -1,5 +1,5 @@
 import { buildCandlesForToken, type CandleRepo, type CandleRow } from '@ctb/candles';
-import { bucketTick, type Logger } from '@ctb/collector';
+import { bucketTick, type Logger } from '@ctb/collector/pure';
 import type { Candle } from '@ctb/engine';
 import type { TokenSpec } from '@ctb/universe';
 

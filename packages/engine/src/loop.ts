@@ -1,5 +1,5 @@
 import { decimalToNumber } from '@ctb/candles';
-import type { Logger } from '@ctb/collector';
+import type { Logger } from '@ctb/collector/pure';
 import { applyFill, equityLovelace } from './portfolio.js';
 import type {
   Candle, EquityPoint, Executor, Intent, OrderRecord, Portfolio, RunCoverage, RunResult, RunSummaryStats, Strategy, WorkingPool,

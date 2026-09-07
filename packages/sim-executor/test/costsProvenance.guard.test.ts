@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VENUE_NAMES } from '@ctb/collector';
+import { VENUE_NAMES } from '@ctb/collector/pure';
 import { VENUE_COSTS } from '../src/index.js';
 
 /** A cost without a source and a date is a guess that will be read as a fact. */

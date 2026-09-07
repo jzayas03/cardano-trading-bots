@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isTransientHttpError, retryWithBackoff } from '../src/index.js';
+import { isTransientHttpError, retryWithBackoff } from '../src/pure.js';
 
 const never = async () => {};
 describe('retryWithBackoff', () => {

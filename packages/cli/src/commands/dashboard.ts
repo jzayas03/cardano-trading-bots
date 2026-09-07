@@ -1,4 +1,4 @@
-import { PgSnapshotRepo } from '@ctb/collector';
+import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createDashboardServer, listen, PgDashboardReads, type DashboardDeps } from '@ctb/dashboard';
 import { createPool, listMigrations } from '@ctb/db';
 import { PgRunRepo } from '@ctb/engine';

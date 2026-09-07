@@ -1,7 +1,7 @@
 import { migrate } from '@ctb/db';
 import { describe, expect, it } from 'vitest';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';
-import { PgSnapshotRepo } from '../src/index.js';
+import { PgSnapshotRepo } from '../src/pure.js';
 
 /**
  * The digest's SQL against a real schema: the UTC-midnight boundary on `started_at`, the 24 h window

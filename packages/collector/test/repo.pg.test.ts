@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { migrate } from '@ctb/db';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';
-import { PgSnapshotRepo, type SnapshotRow } from '../src/index.js';
+import { PgSnapshotRepo, type SnapshotRow } from '../src/pure.js';
 
 const snek = {
   ticker: 'SNEK',
