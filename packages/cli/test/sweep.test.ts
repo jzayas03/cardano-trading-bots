@@ -1,7 +1,7 @@
 import type { RunSummaryStats } from '@ctb/engine';
 import { describe, expect, it } from 'vitest';
 import { backfillAll, parseBackfillFlags } from '../src/commands/backfill.js';
-import { autoDepthLovelace } from '../src/commands/backtest.js';
+import { autoDepthLovelace, runIntervalSecFor, sweepSkipReason } from '../src/commands/backtest.js';
 import { sweepRows } from '../src/compare.js';
 
 const log = { info: () => {}, warn: () => {}, error: () => {} };
@@ -52,5 +52,16 @@ describe('autoDepthLovelace', () => {
     expect(() => parseBackfillFlags(['--spacing-sec'])).toThrow(/non-negative number/);
     expect(() => parseBackfillFlags(['--spacing-sec', 'fast'])).toThrow(/non-negative number/);
     expect(() => parseBackfillFlags(['--bogus'])).toThrow(/unknown flag --bogus/);
+  });
+
+  it('runIntervalSecFor: external history is measured at its own 5-minute interval, local candles at the collector\'s', () => {
+    expect(runIntervalSecFor('candles_external', 600)).toBe(300);
+    expect(runIntervalSecFor('candles', 600)).toBe(600);
+    expect(runIntervalSecFor('candles', 900)).toBe(900);
+  });
+  it('sweepSkipReason: no map, an empty window, or run', () => {
+    expect(sweepSkipReason(false, 0)).toMatch(/run backfill first/);
+    expect(sweepSkipReason(true, 0)).toMatch(/empty in this window/);
+    expect(sweepSkipReason(true, 1)).toBeNull();
   });
 });

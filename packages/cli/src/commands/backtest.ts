@@ -1,4 +1,4 @@
-import { PgCandleRepo, PgExternalRepo } from '@ctb/candles';
+import { EXTERNAL_CANDLE_INTERVAL_SEC, PgCandleRepo, PgExternalRepo } from '@ctb/candles';
 import { createPool } from '@ctb/db';
 import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES } from '@ctb/engine';
 import { SimExecutor, VENUE_COSTS, type FillModel, type VenueCosts } from '@ctb/sim-executor';
@@ -120,6 +120,27 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
 const ada = (n: number): bigint => BigInt(Math.round(n * 1_000_000));
 
 /**
+ * The interval a run's coverage is measured at. External history is 5-minute candles whatever the
+ * collector's interval is; measuring it at the collector's 600 s counted half the expected buckets
+ * and reported every external coverage figure about double (NIGHT read 101.9% on the first
+ * universe sweep, 2026-09-07). Local candles are bucketed at the collector's interval.
+ */
+export function runIntervalSecFor(source: 'candles' | 'candles_external', collectIntervalSec: number): number {
+  return source === 'candles_external' ? EXTERNAL_CANDLE_INTERVAL_SEC : collectIntervalSec;
+}
+
+/**
+ * Why a sweep token is skipped, or null to run it. A pool matched on GeckoTerminal with no OHLCV
+ * rows in the window (USDM on 2026-09-07: a SaturnSwap pool with no history) would otherwise run
+ * every strategy over zero candles and persist three empty runs with a warning each.
+ */
+export function sweepSkipReason(hasMap: boolean, rowsInWindow: number): string | null {
+  if (!hasMap) return 'no external history (run backfill first)';
+  if (rowsInWindow === 0) return 'external history is empty in this window (the matched pool has no OHLCV rows)';
+  return null;
+}
+
+/**
  * `--depth-ada auto`: the token's latest deepest pool's ADA reserve, from our own snapshots — the
  * depth the observed fill model would see today, applied to external history that carries no
  * reserves. Null when the collector has never snapshotted this token; the caller refuses rather
@@ -209,7 +230,12 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     const gridResults: GridInput[] = [];
     for (const token of tokens) {
       // A sweep token with nothing to run on is a row in the skipped table, not the end of the sweep.
-      if (a.source === 'candles_external' && sweep && !(await external.getMap(token.unit))) { skipped.push({ ticker: token.ticker, reason: 'no external history (run backfill first)' }); continue; }
+      if (a.source === 'candles_external' && sweep) {
+        const hasMap = (await external.getMap(token.unit)) !== null;
+        const rows = hasMap ? (await external.readExternal(token.unit, a.from, a.to)).length : 0;
+        const reason = sweepSkipReason(hasMap, rows);
+        if (reason) { skipped.push({ ticker: token.ticker, reason }); continue; }
+      }
       let depthLovelace: bigint | null = null;
       let depthAdaForParams: number | null = null;
       if (a.source === 'candles_external') {
@@ -246,7 +272,7 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
           const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to);
           const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
           const result = await runEngine({ feed, strategy, params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
-            intervalSec: cfg.intervalSec, maxGapMs });
+            intervalSec: runIntervalSecFor(a.source, cfg.intervalSec), maxGapMs });
           await runs.insertOrders(runId, token.unit, result.orders);
           await runs.finishRun(runId, new Date(), result.summary);
           const run = await runs.getRun(runId);
