@@ -378,10 +378,10 @@ describe('@ctb/dashboard one-rule guard', () => {
     return exported;
   }
 
-  it("chart.ts's exported surface stays pinned to exactly {equitySeries, chartHtml} — the one file this guard exempts from the arithmetic scan", () => {
+  it("chart.ts's exported surface stays pinned to exactly {equitySeries, chartHtml, normalisedEquitySeries, multiChartHtml} — the one file this guard exempts from the arithmetic scan", () => {
     const chartFile = FILES.find((f) => relative(SRC, f) === 'chart.ts');
     if (chartFile === undefined) throw new Error('chart.ts not found under src — has it moved? the arithmetic-scan exemption above references it by this exact relative path');
     const exported = collectChartExports(parse(chartFile));
-    expect(exported, "chart.ts exports something beyond {equitySeries, chartHtml} — a new export widens the file's exemption from the one-rule guard's arithmetic scan and needs its own review, not a silent pass-through").toEqual(new Set(['equitySeries', 'chartHtml']));
+    expect(exported, "chart.ts exports something beyond {equitySeries, chartHtml, normalisedEquitySeries, multiChartHtml} — a new export widens the file's exemption from the one-rule guard's arithmetic scan and needs its own review, not a silent pass-through").toEqual(new Set(['equitySeries', 'chartHtml', 'normalisedEquitySeries', 'multiChartHtml']));
   });
 });

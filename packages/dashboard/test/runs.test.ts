@@ -232,7 +232,10 @@ describe('renderRunsList', () => {
     const distinctSummary: RunSummaryStats = { ...backtestSummary, returnPct: 7.77, maxDrawdownPct: -2.22 };
     const run = makeRun({ id: 21, mode: 'backtest', status: 'finished', summary: distinctSummary });
     const html = renderRunsList({ runs: [run], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
-    const columns = ['id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
+    // Task 1 (M4b) prepended a checkbox column ('') for `/compare` selection — the leading empty
+    // header keeps this list in sync with `renderRunsList`'s own `columns` array so the position pin
+    // below still checks the right `<td>` index instead of silently drifting by one.
+    const columns = ['', 'id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
     const cells = [...html.matchAll(/<td>(.*?)<\/td>/gs)].map((m) => m[1]);
     expect(cells).toHaveLength(columns.length);
     expect(cells[columns.indexOf('return %')]).toBe(String(distinctSummary.returnPct));
@@ -309,5 +312,70 @@ describe('renderRunsList', () => {
     const html = renderRunsList({ runs: [paperRun], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
     expect(html).not.toContain('next');
     expect(html).not.toContain('prev');
+  });
+});
+
+/**
+ * Task 1 (M4b): `/compare`'s ENTIRE selection mechanism is a GET form of checkboxes on this list — no
+ * script anywhere. The filter form (`renderFilterForm`, `action="/runs"`) and this new compare form
+ * (`action="/compare"`) are two independent `<form>`s; an HTML parser silently drops an inner `<form>`
+ * when one is nested inside another (forms cannot nest), so the property under test here is not "both
+ * forms are present" (a `toContain` check for each `action=` attribute would pass even if nested) but
+ * that neither one's tag range overlaps the other's.
+ */
+describe('renderRunsList /compare selection form', () => {
+  const runA = makeRun({ id: 5 });
+  const runB = makeRun({ id: 9 });
+
+  /** Counts `<form>`/`</form>` occurrences as a simple depth stack: a `maxDepth` of 1 means no two
+   * `<form>` tags were ever open at the same time anywhere in the document — i.e. every form is a
+   * sibling of every other, never nested inside one. `depth` ending at 0 additionally confirms every
+   * opened form was actually closed (an unbalanced count would otherwise let `maxDepth` read 1 by
+   * accident, e.g. one form open and never closed followed by a second that also never opens). */
+  function formNestingDepth(html: string): { count: number; maxDepth: number; finalDepth: number } {
+    const tagRe = /<\/?form\b[^>]*>/g;
+    let depth = 0;
+    let maxDepth = 0;
+    let count = 0;
+    for (const m of html.matchAll(tagRe)) {
+      if (m[0].startsWith('</')) depth -= 1;
+      else { depth += 1; count += 1; }
+      maxDepth = Math.max(maxDepth, depth);
+    }
+    return { count, maxDepth, finalDepth: depth };
+  }
+
+  it('the filter form and the compare form are siblings — never nested, both fully closed', () => {
+    const html = renderRunsList({ runs: [runA, runB], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
+    const { count, maxDepth, finalDepth } = formNestingDepth(html);
+    expect(count).toBe(2); // exactly the filter form and the compare form — no extra, no fewer
+    expect(maxDepth).toBe(1); // never two <form>s open at once anywhere in the document
+    expect(finalDepth).toBe(0); // both forms are properly closed
+  });
+
+  it('the compare form posts GET to /compare and carries one checkbox named "ids" per row, valued at that row\'s id', () => {
+    const html = renderRunsList({ runs: [runA, runB], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
+    expect(html).toContain('<form method="get" action="/compare">');
+    const checkboxValues = [...html.matchAll(/<input type="checkbox" name="ids" value="(\d+)">/g)].map((m) => m[1]);
+    expect(checkboxValues).toEqual(['5', '9']);
+  });
+
+  it('a "compare selected" submit button appears both above and below the table', () => {
+    const html = renderRunsList({ runs: [runA], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
+    expect([...html.matchAll(/compare selected/g)]).toHaveLength(2);
+  });
+
+  it('a filtered list keeps mode/strategy/ticker/status controls in the filter form only — the compare form carries none of them', () => {
+    const html = renderRunsList({ runs: [runA], tickerOf, tickers: ['TEST'], filter: { mode: 'paper', status: 'running' }, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
+    const forms = [...html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/g)].map((m) => m[0]);
+    expect(forms).toHaveLength(2);
+    const [filterForm, compareForm] = forms as [string, string];
+    expect(filterForm).toContain('action="/runs"');
+    expect(filterForm).toContain('name="mode"');
+    expect(filterForm).toContain('name="status"');
+    expect(compareForm).toContain('action="/compare"');
+    expect(compareForm).not.toContain('name="mode"');
+    expect(compareForm).not.toContain('name="status"');
+    expect(compareForm).toContain('name="ids"');
   });
 });

@@ -94,6 +94,26 @@ function renderPagerLinks(filter: RunFilter, tickerOf: (unit: string) => string,
   return links.length > 0 ? `<p class="pager">${links.join(' &middot; ')}</p>` : '';
 }
 
+/**
+ * `/compare`'s entire selection mechanism (spec's global constraint: "no JavaScript beyond the
+ * vendored chart"): a checkbox per row, all named `ids`, inside a GET form whose action is
+ * `/compare` — ticking boxes and submitting produces exactly the `?ids=1&ids=2&…` shape
+ * `parseCompareIds` (`server.ts`) already accepts, with no script involved at any point.
+ *
+ * This form and `renderFilterForm`'s `<form method="get" action="/runs">` above are SIBLINGS, never
+ * nested — an HTML parser silently drops an inner `<form>` (forms cannot nest), which would either
+ * lose the filter controls or lose the checkboxes depending on which form ended up outermost. Nothing
+ * in `renderRunsList`'s body-building below ever places one form's markup between this form's own
+ * opening and closing tags.
+ */
+function renderCompareForm(columns: string[], rows: Array<Array<string | number | { html: string }>>): string {
+  return `<form method="get" action="/compare">
+<button type="submit">compare selected</button>
+${table(columns, rows)}
+<button type="submit">compare selected</button>
+</form>`;
+}
+
 export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string) => string; tickers: readonly string[]; filter: RunFilter; page: number; pageSize: number; now: Date }): string {
   const { runs, tickerOf, tickers, filter, page, pageSize, now } = input;
 
@@ -106,7 +126,10 @@ export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string)
     // numbers with no indication either one was partial (measured: list -0.09, detail -0.16 for run 6).
     const basis = s ? (resumesOf(r).length > 0 ? 'summary (last segment)' : 'summary') : 'unfinished';
     return [
-      // The only RenderedCell this page builds itself: a plain numeric id, escaped anyway on
+      // A checkbox, not a database value — but built with the row's own id, so it goes through
+      // `escape()` on the same principle every other `RenderedCell` this page builds does.
+      { html: `<input type="checkbox" name="ids" value="${escape(r.id)}">` },
+      // The only OTHER RenderedCell this page builds itself: a plain numeric id, escaped anyway on
       // principle (parked risk — `table()`'s unescaped branch is keyed on shape, not provenance, so
       // nothing that could ever carry a database string is allowed to construct one).
       { html: `<a href="/runs/${escape(r.id)}">${escape(r.id)}</a>` },
@@ -124,10 +147,10 @@ export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string)
     ];
   });
 
-  const columns = ['id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
+  const columns = ['', 'id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
   const body = `
 ${renderFilterForm(filter, tickerOf, tickers)}
-${table(columns, rows)}
+${renderCompareForm(columns, rows)}
 ${renderPagerLinks(filter, tickerOf, page, pageSize, runs.length)}
 <p class="asof">page ${page} (${pageSize} per page) &middot; as of ${escape(now.toISOString())}</p>`;
 
