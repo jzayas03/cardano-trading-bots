@@ -19,9 +19,24 @@ export function escape(s: string | number | bigint | null | undefined): string {
 
 export const REHEARSAL_BANNER = 'REHEARSAL — synthetic data — not evidence';
 
+/**
+ * A pre-rendered HTML fragment, branded so `table()` can tell it apart from a plain cell value and
+ * pass it through untouched instead of escaping it (escaping it a second time would corrupt it, and
+ * `table()` has no other way to know a cell is already safe HTML). The only way to get one from
+ * outside this module is a function that already controls and escapes its own output — `statusWord()`
+ * below — never build one by hand from unescaped external data.
+ */
+export interface RenderedCell {
+  readonly html: string;
+}
+
+function isRenderedCell(c: unknown): c is RenderedCell {
+  return typeof c === 'object' && c !== null && 'html' in c && typeof (c as RenderedCell).html === 'string';
+}
+
 /** The word IS the signal (spec §3, CLAUDE.md UI guardrail); colour is a secondary cue only, never the only one. */
-export function statusWord(word: 'OK' | 'WARN' | 'FAIL' | 'STALE' | 'WATCH' | 'STOP' | 'LOST'): string {
-  return `<span class="status status-${word.toLowerCase()}">${word}</span>`;
+export function statusWord(word: 'OK' | 'WARN' | 'FAIL' | 'STALE' | 'WATCH' | 'STOP' | 'LOST'): RenderedCell {
+  return { html: `<span class="status status-${word.toLowerCase()}">${word}</span>` };
 }
 
 const PAGE_CSS = `
@@ -49,7 +64,10 @@ dd { margin: 0; }
 /** Full document. The rehearsal banner (when present) renders before the title, so it is the first
  * thing on the page regardless of what the caller passes as `body`. */
 export function layout(title: string, body: string, opts: { refreshSec?: number; rehearsal?: boolean } = {}): string {
-  const refreshMeta = opts.refreshSec !== undefined ? `<meta http-equiv="refresh" content="${opts.refreshSec}">` : '';
+  // `opts.refreshSec` is typed as `number`, so this is not reachable today — but every interpolation
+  // in this file goes through `escape()` on principle (Task 5's guard test pins that literally), so a
+  // future loosening of the type (or a caller reaching in with `as`) can't reintroduce an unescaped hole.
+  const refreshMeta = opts.refreshSec !== undefined ? `<meta http-equiv="refresh" content="${escape(opts.refreshSec)}">` : '';
   const banner = opts.rehearsal ? `<div class="banner rehearsal">${escape(REHEARSAL_BANNER)}</div>` : '';
   return `<!doctype html>
 <html lang="en">
@@ -70,10 +88,16 @@ ${body}
 `;
 }
 
-/** Every cell is escaped; an empty `rows` renders `<p class="empty">none</p>` instead of a headers-only table. */
-export function table(columns: string[], rows: Array<Array<string | number | bigint | null | undefined>>): string {
+/**
+ * Every plain cell is escaped; a `RenderedCell` (from `statusWord()`) passes through untouched instead
+ * — this is the type-level fix for the "no page actually uses `table()`" finding: before, `table()`'s
+ * cell type could never carry a pre-rendered `<span>`, so every real page hand-rolled its own
+ * `<table>` markup and the "escaping rides on the type system" property was true of nothing. An empty
+ * `rows` renders `<p class="empty">none</p>` instead of a headers-only table.
+ */
+export function table(columns: string[], rows: Array<Array<string | number | bigint | null | undefined | RenderedCell>>): string {
   if (rows.length === 0) return '<p class="empty">none</p>';
   const thead = `<thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join('')}</tr></thead>`;
-  const tbody = `<tbody>${rows.map((r) => `<tr>${r.map((cell) => `<td>${escape(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  const tbody = `<tbody>${rows.map((r) => `<tr>${r.map((cell) => `<td>${isRenderedCell(cell) ? cell.html : escape(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
   return `<table>${thead}${tbody}</table>`;
 }

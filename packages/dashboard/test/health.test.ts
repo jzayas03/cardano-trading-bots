@@ -44,16 +44,24 @@ describe('renderHealth', () => {
     expect(quotaRow).toContain('status-ok');
   });
 
-  it('shows STOP on the quota row when the projection exceeds the daily quota', () => {
+  // Finding: the badge is now derived ONLY from checkDigestLines' own Check.status (never re-derived
+  // by regexing the digest line's text), so a STOP-level quota projection shows the check's actual
+  // status word FAIL, not a re-derived literal "STOP" — checkDigestLines maps "quota: STOP" to
+  // status 'fail'. The word "STOP" itself is not lost: it is still right there in the adjacent detail
+  // cell, in the digest line's own unmodified text.
+  it('shows FAIL (checkDigestLines\' own verdict) on the quota row when the projection exceeds the daily quota, with STOP still visible in the detail text', () => {
     const digest = digestLines({ ...base, discoveryCallsToday: 6_000, refreshCallsToday: 23_000 }, now);
     const html = renderHealth({ digest, checks: checksAllOk, now });
     const quotaRow = html.split('<tr>').find((r) => r.startsWith('<td>calls since 00:00 UTC</td>'));
     expect(quotaRow).toBeDefined();
-    expect(quotaRow).toContain('>STOP<');
-    expect(quotaRow).toContain('status-stop');
+    expect(quotaRow).toContain('>FAIL<');
+    expect(quotaRow).toContain('status-fail');
+    expect(quotaRow).toContain('quota: STOP');
   });
 
-  it('renders a LOST venues line with LOST in its text, and shows STALE on the collector row', () => {
+  // Same fix: a STALE collector tick maps to checkDigestLines' 'warn' status, so the badge reads WARN,
+  // not a re-derived literal "STALE" — the word "STALE" is still visible in the detail cell's own text.
+  it('renders a LOST venues line with LOST in its text, and shows WARN (checkDigestLines\' own verdict) on the collector row, with STALE still visible in the detail text', () => {
     const lostInput: DigestInput = {
       ...base,
       venuesConfigured: ['MinswapV2', 'MuesliSwap', 'SundaeSwapV3'],
@@ -71,8 +79,9 @@ describe('renderHealth', () => {
     const staleHtml = renderHealth({ digest: staleDigest, checks: checksAllOk, now: staleNow });
     const collectorRow = staleHtml.split('<tr>').find((r) => r.startsWith('<td>collector</td>'));
     expect(collectorRow).toBeDefined();
-    expect(collectorRow).toContain('>STALE<');
-    expect(collectorRow).toContain('status-stale');
+    expect(collectorRow).toContain('>WARN<');
+    expect(collectorRow).toContain('status-warn');
+    expect(collectorRow).toContain('STALE');
   });
 
   it('gives every other digest row (not collector/quota) no status word cell content', () => {

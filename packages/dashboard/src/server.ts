@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunRepo } from '@ctb/engine';
 import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type DigestInput, type ProcessLine } from '@ctb/reports';
-import { escape, layout } from './html.js';
+import { escape, layout, table } from './html.js';
 import { renderHealth } from './pages/health.js';
 import type { DashboardReads } from './reads.js';
 
@@ -20,6 +20,10 @@ export interface DashboardDeps {
   processes: () => ProcessLine[];
   migrations: () => Promise<{ onDisk: string[]; applied: string[] }>;
   fakeRows: () => Promise<{ snapshots: number; candles: number }>;
+  /** `checkEnv(process.env)`, computed once by the CLI command (never inside this package — this
+   *  package never reads `process.env`) and handed in so the health page can show the Blockfrost key
+   *  by length like `doctor` does. */
+  envChecks: () => Check[];
   tickerOf: (unit: string) => string;
   intervalSec: number;
   venues: string[];
@@ -38,6 +42,8 @@ function htmlPage(status: number, body: string): HandlerResult {
   return { status, body, contentType: 'text/html; charset=utf-8' };
 }
 
+/** Used for 400/404, whose message is always a string this file constructed itself — never an
+ * exception's own text (see `internalErrorPage` below, which is the one that must never do that). */
 function errorPage(status: number, path: string, message: string): HandlerResult {
   const body = layout('Error', `<p>Route: ${escape(path)}</p><pre>${escape(message)}</pre>`);
   return htmlPage(status, body);
@@ -51,8 +57,27 @@ function badRequest(path: string, message: string): HandlerResult {
   return errorPage(400, path, message);
 }
 
+/**
+ * A thrown handler error (e.g. a failing database dependency) previously rendered `err.message`
+ * verbatim into the body — a connection string with credentials once ended up on the page this way.
+ * "Secrets are never rendered" is one of this package's three load-bearing properties, so the body
+ * here is a fixed string; the real message goes only to `deps.log.error`, where it already went.
+ */
+function internalErrorPage(path: string): HandlerResult {
+  const body = layout('Error', `<p>Route: ${escape(path)}</p><p>internal error — see the dashboard log</p>`);
+  return htmlPage(500, body);
+}
+
+// uPlot's two vendor files are static for the life of the process; re-reading 51 KB off disk on
+// every request was needless I/O. Cached on first request, per filename.
+const vendorCache = new Map<string, string>();
+
 async function vendorFile(filename: string, contentType: string): Promise<HandlerResult> {
-  const body = await readFile(resolve(VENDOR_DIR, filename), 'utf8');
+  let body = vendorCache.get(filename);
+  if (body === undefined) {
+    body = await readFile(resolve(VENDOR_DIR, filename), 'utf8');
+    vendorCache.set(filename, body);
+  }
   return { status: 200, body, contentType, headers: { 'cache-control': 'max-age=86400' } };
 }
 
@@ -67,6 +92,7 @@ async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
     ...checkProcesses(deps.processes(), process.pid),
     checkMigrations(migrations.onDisk, migrations.applied),
     checkFakeRows(fake.snapshots, fake.candles),
+    ...deps.envChecks(),
   ];
   return htmlPage(200, renderHealth({ digest, checks, now }));
 }
@@ -81,10 +107,7 @@ async function runsHandler(deps: DashboardDeps): Promise<HandlerResult> {
   const rows = runs.map((r) => [
     r.id, r.mode, r.strategyId, deps.tickerOf(r.baseUnit), r.status, r.createdAt.toISOString(), r.rehearsal ? 'REHEARSAL' : '',
   ]);
-  const body = rows.length === 0
-    ? '<p class="empty">none</p>'
-    : `<table><thead><tr><th>id</th><th>mode</th><th>strategy</th><th>ticker</th><th>status</th><th>created</th><th></th></tr></thead>` +
-      `<tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${escape(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const body = table(['id', 'mode', 'strategy', 'ticker', 'status', 'created', ''], rows);
   const rehearsal = runs.some((r) => r.rehearsal);
   return htmlPage(200, layout('Runs', body, { rehearsal }));
 }
@@ -128,22 +151,48 @@ async function route(deps: DashboardDeps, url: URL): Promise<HandlerResult> {
 /** Not yet listening — call `listen()` to bind. */
 export function createDashboardServer(deps: DashboardDeps): http.Server {
   return http.createServer((req, res) => {
-    void handleRequest(deps, req, res);
+    // Defense in depth (Critical 1): `handleRequest` already catches everything it can throw, including
+    // a malformed `req.url` that `new URL()` rejects. This `.catch()` exists so that if a future edit
+    // ever adds code ABOVE that try block, it still cannot repeat the 2026-09-07 crash where an
+    // unhandled rejection from a bad request target (Node forwards `//`, `//%`, `//[`, `/\`,
+    // absolute-form targets with an invalid host, etc. — its own HTTP parser never rejects them) took
+    // the whole process down.
+    handleRequest(deps, req, res).catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      deps.log.error({ err: message, route: req.url ?? '/' }, 'dashboard handler failed outside its own try/catch');
+      if (!res.headersSent) send(res, internalErrorPage(req.url ?? '/'));
+      else res.end();
+    });
   });
 }
 
 async function handleRequest(deps: DashboardDeps, req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
-  if (req.method !== 'GET') {
-    send(res, { status: 405, body: 'method not allowed', contentType: 'text/plain; charset=utf-8' });
-    return;
-  }
+  const raw = req.url ?? '/';
   try {
+    if (req.method !== 'GET') {
+      send(res, { status: 405, body: 'method not allowed', contentType: 'text/plain; charset=utf-8', headers: { allow: 'GET' } });
+      return;
+    }
+    // `new URL('//runs', base)` parses successfully — WHATWG treats a leading `//` as protocol-relative
+    // and reads what follows as a HOST, not a path segment, so `pathname` silently comes back as `/`
+    // and the request would alias the health page instead of 404ing or erroring. Reject any
+    // `//`-prefixed target outright, before `new URL` gets a chance to reinterpret it.
+    if (raw.startsWith('//')) {
+      send(res, badRequest(raw, `malformed request target ${JSON.stringify(raw)}: a '//'-prefixed target is rejected, not reinterpreted as a host`));
+      return;
+    }
+    let url: URL;
+    try {
+      url = new URL(raw, 'http://127.0.0.1');
+    } catch {
+      send(res, badRequest(raw, `malformed request target ${JSON.stringify(raw)}`));
+      return;
+    }
     send(res, await route(deps, url));
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    deps.log.error({ err: message, route: url.pathname }, 'dashboard handler failed');
-    send(res, errorPage(500, url.pathname, message));
+    deps.log.error({ err: message, route: raw }, 'dashboard handler failed');
+    send(res, internalErrorPage(raw));
   }
 }
 

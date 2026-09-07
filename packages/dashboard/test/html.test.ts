@@ -35,6 +35,14 @@ describe('table', () => {
     expect(html).not.toContain('null');
     expect(html).not.toContain('undefined');
   });
+  // Finding: table() previously had no way to carry a pre-rendered <span> (e.g. statusWord()), which
+  // is why no real page used it. A branded RenderedCell ({ html }) must pass through untouched instead
+  // of being escaped a second time.
+  it('passes a branded pre-rendered cell (statusWord()) through untouched, without double-escaping it', () => {
+    const html = table(['status'], [[statusWord('OK')]]);
+    expect(html).toContain('<span class="status status-ok">OK</span>');
+    expect(html).not.toContain('&lt;span');
+  });
 });
 
 describe('layout', () => {
@@ -60,14 +68,16 @@ describe('layout', () => {
 });
 
 describe('statusWord', () => {
+  // Finding: statusWord() now returns a branded RenderedCell ({ html }), not a bare string, so
+  // table() can tell it apart from a plain cell and pass it through unescaped.
   it('contains the literal word and a class named after it, lower-cased', () => {
-    const html = statusWord('STOP');
+    const html = statusWord('STOP').html;
     expect(html).toContain('>STOP<');
     expect(html).toContain('status-stop');
   });
   it('renders every accepted word', () => {
     for (const word of ['OK', 'WARN', 'FAIL', 'STALE', 'WATCH', 'STOP', 'LOST'] as const) {
-      const html = statusWord(word);
+      const html = statusWord(word).html;
       expect(html).toContain(`>${word}<`);
       expect(html).toContain(`status-${word.toLowerCase()}`);
     }

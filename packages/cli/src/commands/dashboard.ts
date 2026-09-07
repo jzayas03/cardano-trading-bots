@@ -2,6 +2,7 @@ import { PgSnapshotRepo } from '@ctb/collector';
 import { createDashboardServer, listen, type DashboardDeps } from '@ctb/dashboard';
 import { createPool, listMigrations } from '@ctb/db';
 import { PgRunRepo } from '@ctb/engine';
+import { checkEnv } from '@ctb/reports';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
@@ -56,6 +57,10 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
       return { onDisk, applied: applied.rows.map((r) => r.filename) };
     },
     fakeRows: () => fakeRowsTotal(db),
+    // `checkEnv` is computed here, in the CLI, and handed to the server as a plain `Check[]` — the
+    // dashboard package itself never reads `process.env` (spec's "secrets never rendered"; the health
+    // page shows the Blockfrost key by length, same as `doctor`).
+    envChecks: () => checkEnv(process.env),
     tickerOf,
     intervalSec: cfg.intervalSec,
     venues: cfg.venues,
