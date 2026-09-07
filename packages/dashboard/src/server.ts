@@ -4,15 +4,16 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunRepo } from '@ctb/engine';
 import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type DigestInput, type ProcessLine } from '@ctb/reports';
-import { escape, layout, table } from './html.js';
+import { escape, layout } from './html.js';
 import { renderHealth } from './pages/health.js';
-import type { DashboardReads } from './reads.js';
+import { renderRunDetail, renderRunsList } from './pages/runs.js';
+import { RUN_MODES, RUN_STATUSES, type DashboardReads, type RunFilter } from './reads.js';
 
 const VENDOR_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../vendor');
 
 export interface DashboardDeps {
-  /** Task 5's `PgDashboardReads`; Task 4 stubs it with `{ listRuns: async () => [] }` in tests and in
-   *  the CLI command (see `commands/dashboard.ts`) until that lands. */
+  /** `PgDashboardReads` in production (see `commands/dashboard.ts`); a literal `{ listRuns: async
+   *  () => [] }` in tests that don't exercise `/runs`. */
   reads: DashboardReads;
   runs: Pick<RunRepo, 'getRun' | 'listOrders' | 'listEquity'>;
   collector: { digestInput(intervalSec: number, venues: string[], now: Date): Promise<DigestInput> };
@@ -25,6 +26,10 @@ export interface DashboardDeps {
    *  by length like `doctor` does. */
   envChecks: () => Check[];
   tickerOf: (unit: string) => string;
+  /** The other direction of `tickerOf`, for `/runs?ticker=`: a pure universe lookup, never a query.
+   *  Undefined for a ticker the universe doesn't recognise, which `/runs` turns into a 400 (a typo'd
+   *  ticker must not silently render as "no filter" — that would show every run instead of none). */
+  unitOf: (ticker: string) => string | undefined;
   intervalSec: number;
   venues: string[];
   now: () => Date;
@@ -97,39 +102,79 @@ async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
   return htmlPage(200, renderHealth({ digest, checks, now }));
 }
 
-/**
- * `/runs`: a bare listing over `DashboardReads.listRuns` — no arithmetic, just the raw run fields.
- * Task 5 replaces this with the full filterable page (spec §4.2); this exists now only so the route
- * table and its status codes (spec §6) can be built and smoke-tested in this task.
- */
-async function runsHandler(deps: DashboardDeps): Promise<HandlerResult> {
-  const runs = await deps.reads.listRuns({}, 200, 0);
-  const rows = runs.map((r) => [
-    r.id, r.mode, r.strategyId, deps.tickerOf(r.baseUnit), r.status, r.createdAt.toISOString(), r.rehearsal ? 'REHEARSAL' : '',
-  ]);
-  const body = table(['id', 'mode', 'strategy', 'ticker', 'status', 'created', ''], rows);
-  const rehearsal = runs.some((r) => r.rehearsal);
-  return htmlPage(200, layout('Runs', body, { rehearsal }));
+const PAGE_SIZE = 50;
+
+/** Thrown only inside `parseRunsQuery` for a bad query value; caught in `runsHandler` and turned
+ * into a 400 that names the accepted values (spec §6, "never a silent default"). */
+class RunsQueryError extends Error {}
+
+function parseEnumParam<T extends string>(raw: string | null, accepted: readonly T[], field: string): T | undefined {
+  if (raw === null || raw === '') return undefined;
+  if (!(accepted as readonly string[]).includes(raw)) {
+    throw new RunsQueryError(`${field} must be one of ${accepted.join(', ')}; got ${JSON.stringify(raw)}`);
+  }
+  return raw as T;
 }
 
-/** `/runs/:id`: a non-integer id is a 400 (spec §6, "never a silent default"); a missing run is a 404. */
+/**
+ * `?mode=&strategy=&ticker=&status=&page=`. `mode`/`status` are validated against the same enums
+ * `PgDashboardReads` accepts; an unrecognised `ticker` is refused rather than silently matching
+ * nothing (a typo must not read as "no filter" — that would show every run instead of none).
+ */
+function parseRunsQuery(deps: DashboardDeps, url: URL): { filter: RunFilter; page: number } {
+  const params = url.searchParams;
+  const mode = parseEnumParam(params.get('mode'), RUN_MODES, 'mode');
+  const status = parseEnumParam(params.get('status'), RUN_STATUSES, 'status');
+  const strategyRaw = params.get('strategy');
+  const strategy = strategyRaw !== null && strategyRaw !== '' ? strategyRaw : undefined;
+  const tickerRaw = params.get('ticker');
+  let unit: string | undefined;
+  if (tickerRaw !== null && tickerRaw !== '') {
+    unit = deps.unitOf(tickerRaw);
+    if (unit === undefined) throw new RunsQueryError(`ticker ${JSON.stringify(tickerRaw)} is not a recognized ticker`);
+  }
+  const pageRaw = params.get('page');
+  let page = 1;
+  if (pageRaw !== null && pageRaw !== '') {
+    const n = Number(pageRaw);
+    if (!Number.isInteger(n) || n < 1) throw new RunsQueryError(`page must be an integer >= 1; got ${JSON.stringify(pageRaw)}`);
+    page = n;
+  }
+  return { filter: { mode, strategy, unit, status }, page };
+}
+
+/** `/runs`: the filterable list (spec §4.2). Every number on the page is `runs.summary`, already
+ * computed once by the engine at finish time — this handler never loads a run's equity or orders
+ * (see `pages/runs.ts`'s file header), so a page of 50 runs is exactly one query. */
+async function runsHandler(deps: DashboardDeps, url: URL, path: string): Promise<HandlerResult> {
+  let query: { filter: RunFilter; page: number };
+  try {
+    query = parseRunsQuery(deps, url);
+  } catch (err) {
+    if (err instanceof RunsQueryError) return badRequest(path, err.message);
+    throw err;
+  }
+  const offset = (query.page - 1) * PAGE_SIZE;
+  const runs = await deps.reads.listRuns(query.filter, PAGE_SIZE, offset);
+  const body = renderRunsList({ runs, tickerOf: deps.tickerOf, filter: query.filter, page: query.page, pageSize: PAGE_SIZE, now: deps.now() });
+  return htmlPage(200, body);
+}
+
+/**
+ * `/runs/:id`: a non-integer id is a 400 (spec §6, "never a silent default"); a missing run is a
+ * 404. Orders and equity are fetched in parallel — `listEquity` from the epoch so a resumed run's
+ * earliest points (which can predate `runs.created_at` — see `report.ts`'s own comment on this) are
+ * never silently dropped.
+ */
 async function runDetailHandler(deps: DashboardDeps, idParam: string, path: string): Promise<HandlerResult> {
   if (!/^\d+$/.test(idParam)) return badRequest(path, `invalid run id ${JSON.stringify(idParam)}: must be a non-negative integer`);
   const id = Number(idParam);
   const run = await deps.runs.getRun(id);
   if (!run) return notFound(path);
-  const body = `<dl>
-    <dt>mode</dt><dd>${escape(run.mode)}</dd>
-    <dt>strategy</dt><dd>${escape(run.strategyId)}</dd>
-    <dt>ticker</dt><dd>${escape(deps.tickerOf(run.baseUnit))}</dd>
-    <dt>status</dt><dd>${escape(run.status)}</dd>
-    <dt>git sha</dt><dd>${escape(run.gitSha)}</dd>
-    <dt>created</dt><dd>${escape(run.createdAt.toISOString())}</dd>
-    <dt>finished</dt><dd>${run.finishedAt ? escape(run.finishedAt.toISOString()) : '-'}</dd>
-    <dt>stop reason</dt><dd>${run.stopReason ? escape(run.stopReason) : '-'}</dd>
-  </dl>
-  <p class="empty">full run detail (equity chart, orders, headline) lands in Task 5.</p>`;
-  return htmlPage(200, layout(`Run #${id}`, body, { rehearsal: run.rehearsal }));
+  const now = deps.now();
+  const [orders, equity] = await Promise.all([deps.runs.listOrders(id), deps.runs.listEquity(id, new Date(0), now)]);
+  const body = renderRunDetail({ run, ticker: deps.tickerOf(run.baseUnit), orders, equity, now });
+  return htmlPage(200, body);
 }
 
 function send(res: ServerResponse, result: HandlerResult): void {
@@ -140,7 +185,7 @@ function send(res: ServerResponse, result: HandlerResult): void {
 async function route(deps: DashboardDeps, url: URL): Promise<HandlerResult> {
   const path = url.pathname;
   if (path === '/') return healthHandler(deps);
-  if (path === '/runs') return runsHandler(deps);
+  if (path === '/runs') return runsHandler(deps, url, path);
   if (path === '/vendor/uPlot.iife.min.js') return vendorFile('uPlot.iife.min.js', 'text/javascript; charset=utf-8');
   if (path === '/vendor/uPlot.min.css') return vendorFile('uPlot.min.css', 'text/css; charset=utf-8');
   const runIdMatch = /^\/runs\/([^/]+)$/.exec(path);

@@ -1,7 +1,8 @@
 import { Socket } from 'node:net';
-import type { RunRow } from '@ctb/engine';
+import type { RunRow, RunSummaryStats } from '@ctb/engine';
 import { checkEnv, type DigestInput } from '@ctb/reports';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { RunFilter } from '../src/reads.js';
 import { createDashboardServer, listen, type DashboardDeps } from '../src/server.js';
 
 /**
@@ -47,8 +48,16 @@ function makeRun(overrides: Partial<RunRow>): RunRow {
   };
 }
 
+const backtestSummary: RunSummaryStats = {
+  candles: 100, intents: 5, filled: 4, rejected: 1,
+  startEquityLovelace: '1000000000', endEquityLovelace: '1032000000', returnPct: 3.2, maxDrawdownPct: 1.1,
+  feesLovelace: '8000000', poolFeesIn: '40000000', rejectReasons: { dust: 1 },
+  coverage: { candles: 100, first: '2026-09-01T00:00:00.000Z', last: '2026-09-05T00:00:00.000Z', expectedBuckets: 100, maxGapMs: 600_000, gapsOverBound: 0 },
+  warnings: [],
+};
+
 const paperRun = makeRun({ id: 1 });
-const backtestRun = makeRun({ id: 2, mode: 'backtest', status: 'finished', finishedAt: new Date('2026-09-05T00:00:00Z'), summary: { returnPct: 3.2 } as unknown as RunRow['summary'] });
+const backtestRun = makeRun({ id: 2, mode: 'backtest', strategyId: 'rsi-mean-reversion', status: 'finished', finishedAt: new Date('2026-09-05T00:00:00Z'), summary: backtestSummary });
 const rehearsalRun = makeRun({ id: 3, rehearsal: true, stopReason: 'operator stop' });
 const runsById = new Map<number, RunRow>([[1, paperRun], [2, backtestRun], [3, rehearsalRun]]);
 
@@ -69,6 +78,7 @@ function makeDeps(): DashboardDeps {
     // vacuously passing on a stub that never touches process.env at all.
     envChecks: () => checkEnv(process.env),
     tickerOf: (unit: string) => (unit === 'testtoken.abcd' ? 'TEST' : unit),
+    unitOf: (ticker: string) => (ticker === 'TEST' ? 'testtoken.abcd' : undefined),
     intervalSec: 600,
     venues: ['MinswapV2', 'SundaeSwapV3'],
     now: () => new Date('2026-09-07T12:05:00Z'),
@@ -193,6 +203,102 @@ describe('createDashboardServer / listen', () => {
       expect(res.body).not.toContain('<h2>Digest'); // the health page's own section heading
       const healthy = await rawRequest(port, '/');
       expect(healthy.status).toBe(200);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/runs translates ?mode=&strategy=&ticker=&status=&page= into a RunFilter and pagination offset', async () => {
+    const deps = makeDeps();
+    const calls: Array<{ filter: RunFilter; limit: number; offset: number }> = [];
+    deps.reads = { listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return [paperRun]; } };
+    const server = createDashboardServer(deps);
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/runs?mode=paper&strategy=buyAndHold&ticker=TEST&status=running&page=2', url));
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([{ filter: { mode: 'paper', strategy: 'buyAndHold', unit: 'testtoken.abcd', status: 'running' }, limit: 50, offset: 50 }]);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/runs with no query at all filters on nothing and reads page 1', async () => {
+    const deps = makeDeps();
+    const calls: Array<{ filter: RunFilter; limit: number; offset: number }> = [];
+    deps.reads = { listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return []; } };
+    const server = createDashboardServer(deps);
+    const { url } = await listen(server, 0);
+    try {
+      await fetch(new URL('/runs', url));
+      expect(calls).toEqual([{ filter: { mode: undefined, strategy: undefined, unit: undefined, status: undefined }, limit: 50, offset: 0 }]);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it.each([
+    ['mode', 'bogus', 'backtest, paper'],
+    ['status', 'bogus', 'running, finished, aborted'],
+  ])('/runs?%s=%s is refused with 400 naming the accepted values', async (field, value, accepted) => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL(`/runs?${field}=${value}`, url));
+      const body = await res.text();
+      expect(res.status).toBe(400);
+      expect(body).toContain(accepted);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/runs?ticker=NOPE is refused with 400 — an unrecognised ticker must not silently match nothing', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/runs?ticker=NOPE', url));
+      const body = await res.text();
+      expect(res.status).toBe(400);
+      expect(body).toContain('NOPE');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it.each(['0', '-1', 'abc', '1.5'])('/runs?page=%s is refused with 400', async (page) => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL(`/runs?page=${page}`, url));
+      expect(res.status).toBe(400);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/runs/2 (a backtest) says equity is not persisted and shows the runs.summary headline', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/runs/2', url));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('equity is not persisted for backtest runs');
+      expect(body).toContain('rsi-mean-reversion');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/runs/1 (a paper run) does not say equity is not persisted', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/runs/1', url));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).not.toContain('equity is not persisted');
     } finally {
       await new Promise<void>((res) => server.close(() => res()));
     }

@@ -36,6 +36,24 @@ export interface RunningRun {
   id: number; strategyId: string; baseUnit: string; rehearsal: boolean; heartbeatAt: Date | null; lastTickTs: Date | null; createdAt: Date;
 }
 
+/** The raw `SELECT * FROM runs` row shape, before `rowToRun` maps it onto `RunRow`. Exported so a
+ * second caller of the same query — `PgDashboardReads.listRuns` (Task 5) — can type its own result
+ * without re-declaring this shape and drifting from it. */
+export interface RunsRowRaw {
+  id: string; mode: 'backtest' | 'paper'; strategy_id: string; params: Record<string, unknown>; git_sha: string; base_unit: string;
+  data_source: 'candles' | 'candles_external'; fill_model: 'cpmm_observed' | 'cpmm_synthetic_depth'; data_from: Date; data_to: Date; created_at: Date; finished_at: Date | null; summary: RunSummaryStats | null;
+  status: 'running' | 'finished' | 'aborted'; heartbeat_at: Date | null; last_tick_ts: Date | null; stop_reason: string | null; rehearsal: boolean;
+}
+
+/** Pure `snake_case` row -> `camelCase` domain object mapping, extracted out of `getRun` so
+ * `PgDashboardReads.listRuns` (Task 5) can map its own `SELECT * FROM runs` rows the same way
+ * instead of re-deriving the eighteen-field mapping a second time. */
+export function rowToRun(r: RunsRowRaw): RunRow {
+  return { id: Number(r.id), mode: r.mode, strategyId: r.strategy_id, params: r.params, gitSha: r.git_sha, baseUnit: r.base_unit, dataSource: r.data_source,
+    fillModel: r.fill_model, dataFrom: r.data_from, dataTo: r.data_to, createdAt: r.created_at, finishedAt: r.finished_at, summary: r.summary,
+    status: r.status, heartbeatAt: r.heartbeat_at, lastTickTs: r.last_tick_ts, stopReason: r.stop_reason, rehearsal: r.rehearsal };
+}
+
 export interface RunRepo {
   /** Backtests keep the default `status: 'finished'`, written up front and closed by `finishRun`. Paper runs pass `status: 'running'`. */
   createRun(r: NewRun & { rehearsal?: boolean; status?: 'running' | 'finished' }): Promise<number>;
@@ -108,16 +126,9 @@ export class PgRunRepo implements RunRepo {
   }
 
   async getRun(id: number): Promise<RunRow | null> {
-    const res = await this.q.query<{
-      id: string; mode: 'backtest' | 'paper'; strategy_id: string; params: Record<string, unknown>; git_sha: string; base_unit: string;
-      data_source: 'candles' | 'candles_external'; fill_model: 'cpmm_observed' | 'cpmm_synthetic_depth'; data_from: Date; data_to: Date; created_at: Date; finished_at: Date | null; summary: RunSummaryStats | null;
-      status: 'running' | 'finished' | 'aborted'; heartbeat_at: Date | null; last_tick_ts: Date | null; stop_reason: string | null; rehearsal: boolean;
-    }>('SELECT * FROM runs WHERE id = $1', [id]);
+    const res = await this.q.query<RunsRowRaw>('SELECT * FROM runs WHERE id = $1', [id]);
     const r = res.rows[0];
-    if (!r) return null;
-    return { id: Number(r.id), mode: r.mode, strategyId: r.strategy_id, params: r.params, gitSha: r.git_sha, baseUnit: r.base_unit, dataSource: r.data_source,
-      fillModel: r.fill_model, dataFrom: r.data_from, dataTo: r.data_to, createdAt: r.created_at, finishedAt: r.finished_at, summary: r.summary,
-      status: r.status, heartbeatAt: r.heartbeat_at, lastTickTs: r.last_tick_ts, stopReason: r.stop_reason, rehearsal: r.rehearsal };
+    return r ? rowToRun(r) : null;
   }
 
   async insertOrders(runId: number, baseUnit: string, orders: OrderRecord[]): Promise<number> {

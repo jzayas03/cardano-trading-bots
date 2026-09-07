@@ -1,5 +1,5 @@
 import { PgSnapshotRepo } from '@ctb/collector';
-import { createDashboardServer, listen, type DashboardDeps } from '@ctb/dashboard';
+import { createDashboardServer, listen, PgDashboardReads, type DashboardDeps } from '@ctb/dashboard';
 import { createPool, listMigrations } from '@ctb/db';
 import { PgRunRepo } from '@ctb/engine';
 import { checkEnv } from '@ctb/reports';
@@ -33,8 +33,7 @@ export function parseDashboardArgs(args: string[]): { port: number } {
 /**
  * Serves the read-only dashboard on 127.0.0.1 (not configurable — see `@ctb/dashboard`'s `listen`).
  * Connects with the dashboard's own DB URL (`cfg.dashboardDatabaseUrl`: `ctb_dashboard`, SELECT-only,
- * migration 0006), never with `cfg.databaseUrl`. `deps.reads` is a stub until Task 5's
- * `PgDashboardReads` lands — every other dependency is the CLI's own real repo or check.
+ * migration 0006), never with `cfg.databaseUrl`. Every dependency is the CLI's own real repo or check.
  */
 export async function dashboardCommand(log: Logger, args: string[]): Promise<void> {
   const { port } = parseDashboardArgs(args);
@@ -44,10 +43,11 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
   const snapshotRepo = new PgSnapshotRepo(db);
   const universe = await loadUniverse();
   const tickerOf = (unit: string): string => universe.tokens.find((t) => t.unit === unit)?.ticker ?? unit;
+  // The other direction of `tickerOf`, for `/runs?ticker=` — a pure universe lookup, not a query.
+  const unitOf = (ticker: string): string | undefined => universe.tokens.find((t) => t.ticker === ticker)?.unit;
 
   const deps: DashboardDeps = {
-    // TODO(Task 5): replace with PgDashboardReads(db) once it lands in @ctb/dashboard/src/reads.ts.
-    reads: { listRuns: async () => [] },
+    reads: new PgDashboardReads(db),
     runs: runRepo,
     collector: { digestInput: (intervalSec, venues, now) => snapshotRepo.digestInput(intervalSec, venues, now) },
     processes: listProcesses,
@@ -62,6 +62,7 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
     // page shows the Blockfrost key by length, same as `doctor`).
     envChecks: () => checkEnv(process.env),
     tickerOf,
+    unitOf,
     intervalSec: cfg.intervalSec,
     venues: cfg.venues,
     now: () => new Date(),
