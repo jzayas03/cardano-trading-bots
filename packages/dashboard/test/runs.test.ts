@@ -83,6 +83,11 @@ describe('renderRunDetail', () => {
     expect(html).toContain('points');
     expect(html).toMatch(/<td>3<\/td>/); // s.points === 3
     expect(html).toContain('new uPlot(');
+    // IMPORTANT 2 (final review): `new uPlot(` alone proves nothing — both task reports that shipped
+    // this chart asserted exactly that and it was true while the library was never loaded, throwing
+    // `ReferenceError: uPlot is not defined` in a real browser. The page must also reference the
+    // script that DEFINES `uPlot`, or the inline call above has nothing to call.
+    expect(html).toContain('<script src="/vendor/uPlot.iife.min.js"></script>');
     expect(html).toContain('dust');
     expect(html).not.toContain(REHEARSAL_BANNER);
   });
@@ -102,6 +107,8 @@ describe('renderRunDetail', () => {
     expect(html).toMatch(/<td>1\.1<\/td>/); // maxDrawdownPct
     expect(html).toContain('no trades taken'); // summary.warnings
     expect(html).toContain('dust'); // rejectReasons
+    // IMPORTANT 2 (final review): a backtest never has a chart — it must not pay for uPlot's script.
+    expect(html).not.toContain('uPlot.iife.min.js');
   });
 
   it('an unfinished run (no summary) renders "unfinished"', () => {
@@ -121,6 +128,29 @@ describe('renderRunDetail', () => {
     expect(html).toContain('summary (from persisted rows)'); // the headline is still shown
   });
 
+  /**
+   * CRITICAL 1 (final review). Measured on rehearsal run 6 (one resume, 27 persisted equity points,
+   * 2 fills): `report 6` printed the persisted-rows headline (return -0.16) AND, below it, the stored
+   * `runs.summary` table (return -0.09) under the heading naming it the last segment only — while
+   * `/runs/6` showed ONLY the persisted headline (-0.16), so the list's own number (-0.09, which is
+   * `runs.summary.returnPct`, the same field `/runs`'s `basis: summary (last segment)` row reads) never
+   * appeared anywhere on the page the list links to. This fixture reproduces that shape with distinct,
+   * hand-picked numbers on each side (persisted: -2, from `equity3`/`orders2`; segment: 3.2, from
+   * `backtestSummary`) so a regression that drops either table, or a future edit that lets one number
+   * silently overwrite the other, fails this test instead of only showing up on a live resumed run.
+   */
+  it('a resumed paper run renders BOTH the persisted-rows headline and the last-segment runs.summary table, with distinct numbers', () => {
+    const run = makeRun({ id: 6, mode: 'paper', status: 'finished', summary: backtestSummary, params: { resumes: ['2026-09-06T18:32:00.000Z'] } });
+    const html = renderRunDetail({ run, ticker: 'TEST', orders: orders2, equity: equity3, now: new Date('2026-09-07T12:00:00Z') });
+    // The persisted-rows headline: summarizeRun(equity3, orders2) has a whole-run return of -2%.
+    expect(html).toContain('summary (from persisted rows)');
+    expect(html).toMatch(/<td>-2<\/td>/);
+    // The last-segment runs.summary table, under the CLI's own heading wording, with its OWN number
+    // (3.2, distinct from the persisted -2) and the resume count.
+    expect(html).toContain('last segment summary (runs.summary — the segment that last wrote it, NOT the whole run; resumes: 1)');
+    expect(html).toMatch(/<td>3\.2<\/td>/);
+  });
+
   it('a finished paper run (summary present) does not render "unfinished"', () => {
     const run = makeRun({ id: 14, mode: 'paper', status: 'finished', summary: backtestSummary });
     const html = renderRunDetail({ run, ticker: 'TEST', orders: orders2, equity: equity3, now: new Date('2026-09-07T12:00:00Z') });
@@ -136,12 +166,15 @@ describe('renderRunDetail', () => {
     const html = renderRunDetail({ run, ticker: 'TEST', orders: [], equity: [equity3[0]!], now: new Date('2026-09-07T12:00:00Z') });
     expect(html).toContain('not enough persisted points to chart');
     expect(html).not.toContain('new uPlot(');
+    // IMPORTANT 2 (final review): no chart on this page, so no reason to load its 51 KB script.
+    expect(html).not.toContain('uPlot.iife.min.js');
   });
 
   it('a paper run with zero equity points also explains why there is no chart', () => {
     const run = makeRun({ id: 16, mode: 'paper' });
     const html = renderRunDetail({ run, ticker: 'TEST', orders: [], equity: [], now: new Date('2026-09-07T12:00:00Z') });
     expect(html).toContain('not enough persisted points to chart');
+    expect(html).not.toContain('uPlot.iife.min.js');
   });
 
   // Finding M5 (review round 1): the `<pre>` block around `run.params` was already escaped in the
@@ -180,6 +213,30 @@ describe('renderRunsList', () => {
     expect(html).toContain('1.1'); // maxDrawdownPct
     expect(html).toContain('4/5'); // filled/intents
     expect(html).toContain('summary'); // basis
+  });
+
+  /**
+   * IMPORTANT 4 (final review). The final reviewer swapped `return %` and `max DD %` on this list —
+   * no arithmetic changed, no import changed — and every existing test here still passed, because they
+   * only ever asserted the two numbers appeared SOMEWHERE on the page (the test right above this one:
+   * `toContain('3.2')`/`toContain('1.1')`), which is true regardless of which column each one landed
+   * in. This test instead reads the actual `<td>` cell at each column's own POSITION (via the column
+   * header order `renderRunsList` itself defines) and pins it to the summary field that column claims
+   * to show, using two distinctive values (7.77 and -2.22, neither of which appears elsewhere in this
+   * fixture) so a swap of the two columns fails here even though the guard tests (which check
+   * provenance — that a number came from `@ctb/reports`/`runs.summary` — not placement) would stay
+   * green. Proved red by swapping `s.returnPct`/`s.maxDrawdownPct` in `renderRunsList`'s row array and
+   * confirming this test (and only this test) failed, then restoring the file byte-exact.
+   */
+  it('pins the return % cell to summary.returnPct and the max DD % cell to summary.maxDrawdownPct, by column position', () => {
+    const distinctSummary: RunSummaryStats = { ...backtestSummary, returnPct: 7.77, maxDrawdownPct: -2.22 };
+    const run = makeRun({ id: 21, mode: 'backtest', status: 'finished', summary: distinctSummary });
+    const html = renderRunsList({ runs: [run], tickerOf, tickers: ['TEST'], filter: {}, page: 1, pageSize: 50, now: new Date('2026-09-07T12:00:00Z') });
+    const columns = ['id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
+    const cells = [...html.matchAll(/<td>(.*?)<\/td>/gs)].map((m) => m[1]);
+    expect(cells).toHaveLength(columns.length);
+    expect(cells[columns.indexOf('return %')]).toBe(String(distinctSummary.returnPct));
+    expect(cells[columns.indexOf('max DD %')]).toBe(String(distinctSummary.maxDrawdownPct));
   });
 
   it('an unfinished run in the list reads "unfinished" for basis and "-" for its numbers', () => {

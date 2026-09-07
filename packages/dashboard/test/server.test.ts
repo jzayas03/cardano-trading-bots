@@ -284,6 +284,22 @@ describe('createDashboardServer / listen', () => {
     }
   });
 
+  // IMPORTANT 3 (final review): the identical defect as Finding M1 above, on the run-id path this time.
+  // `999999999999999999999` (23 digits) is all-digits, so it passed `/^\d+$/`, but `Number(...)` gives
+  // `1e+21` — far past `Number.isSafeInteger` — which reached Postgres as a bigint parameter and got a
+  // 500 (`invalid input syntax for type bigint: "1e+21"`), not the 400 every other bad parameter here
+  // gets.
+  it('/runs/999999999999999999999 (oversized id) is refused with 400, not a 500 from Postgres', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/runs/999999999999999999999', url));
+      expect(res.status).toBe(400);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
   it('/runs/2 (a backtest) says equity is not persisted and shows the runs.summary headline', async () => {
     const server = createDashboardServer(makeDeps());
     const { url } = await listen(server, 0);

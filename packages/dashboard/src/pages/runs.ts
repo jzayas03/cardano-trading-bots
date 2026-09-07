@@ -6,18 +6,23 @@
  * read off the row it already has). The detail page is where a paper run's headline is recomputed
  * from its persisted rows with `summarizeRun` (finding C1, `@ctb/reports`): a resumed run's
  * `runs.summary` reflects only its last segment, and an operator reading one run's page needs the
- * whole thing.
+ * whole thing — so the detail page shows BOTH: the persisted-rows headline (the whole run) and, right
+ * below it, the same `runs.summary` table the list's `basis` column is quietly reading from, under the
+ * identical heading `report <id>` prints (CRITICAL 1, final review) — so an operator who lands on this
+ * page from the list can always find the number the list showed them.
  */
 import { STRATEGIES, type EquityPoint, type OrderRecord, type RunRow, type RunSummaryStats } from '@ctb/engine';
 import { adaStr, coverageLine, feedCountersLine, resumesOf, summarizeRun } from '@ctb/reports';
 // Critical 2 (review round 1): `report <id>` prints `assumedVenuesTouched(orders)` as a warning — a
 // fill against a venue with no documented batcher fee had its cost ASSUMED, and an operator reading
 // only the dashboard page had no way to know that. Imported straight from `@ctb/sim-executor`, the
-// same package `printReport` imports it from — never re-exported through `@ctb/reports`, which
-// imports `@ctb/candles` (and so `pg`) and is required to stay free of a database driver
-// (`@ctb/reports`'s own Task 1 guard pins that). `@ctb/dashboard` already depends on `pg` directly
-// (via `@ctb/db`, for `PgDashboardReads`/`PgRunRepo`), so this import adds nothing new to ITS own
-// dependency graph — only `@ctb/reports`'s purity would have been at risk.
+// same package `printReport` imports it from — never re-exported through `@ctb/reports`, which is
+// required to stay free of a database driver (`@ctb/reports`'s own Task 1 guard pins that it never
+// imports `@ctb/candles`, the package that actually depends on `pg`). It is `@ctb/sim-executor` — not
+// `@ctb/candles` directly, and not `@ctb/reports` — that pulls `pg` into `@ctb/dashboard`'s graph here
+// (`@ctb/sim-executor` depends on `@ctb/candles`, which depends on `pg`). `@ctb/dashboard` already
+// depends on `pg` directly (via `@ctb/db`, for `PgDashboardReads`/`PgRunRepo`), so this import adds
+// nothing new to ITS own dependency graph — only `@ctb/reports`'s purity would have been at risk.
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { chartHtml, equitySeries } from '../chart.js';
 import { escape, layout, table } from '../html.js';
@@ -219,11 +224,37 @@ function renderPersistedHeadline(equity: EquityPoint[], orders: Array<OrderRecor
   };
 }
 
+/** Row shape shared by the backtest headline and the paper run's `runs.summary` segment table below
+ * (CRITICAL 1, final review): both tables read the same `RunSummaryStats`, just under a different
+ * heading depending on which page/section is asking. */
+function summaryStatsRow(s: RunSummaryStats): Array<string | number> {
+  return [s.candles, s.intents, s.filled, s.rejected, adaStr(s.startEquityLovelace), adaStr(s.endEquityLovelace),
+    s.returnPct, s.maxDrawdownPct, adaStr(s.feesLovelace), s.poolFeesIn];
+}
+
 /** The backtest headline: `runs.summary`, columns matching `printReport`'s `console.table`. */
 function renderBacktestHeadline(s: RunSummaryStats): { html: string; rejectReasons: Record<string, number> } {
-  const row = [s.candles, s.intents, s.filled, s.rejected, adaStr(s.startEquityLovelace), adaStr(s.endEquityLovelace),
-    s.returnPct, s.maxDrawdownPct, adaStr(s.feesLovelace), s.poolFeesIn];
-  return { html: `<section><h2>summary</h2>${table(BACKTEST_HEADLINE_COLUMNS, [row])}</section>`, rejectReasons: s.rejectReasons };
+  return { html: `<section><h2>summary</h2>${table(BACKTEST_HEADLINE_COLUMNS, [summaryStatsRow(s)])}</section>`, rejectReasons: s.rejectReasons };
+}
+
+/**
+ * CRITICAL 1 (final review): `/runs`'s `basis` column reads `runs.summary` — the segment that LAST
+ * wrote it, not the whole run, for a resumed run (finding I4) — while this detail page showed only the
+ * persisted-rows headline above (the whole run, via `summarizeRun`). Measured on run 6 (one resume):
+ * the list read -0.09, this page read -0.16, and neither page showed the other's number, so an
+ * operator had nowhere to reconcile them. `report <id>`'s `printPersistedHeadline` already solves this
+ * by printing the stored `runs.summary` table right below the persisted headline, under a heading that
+ * names exactly what it is; this renders the identical table under the identical heading text, so
+ * `/runs`, `/runs/:id`, and `report <id>` read as one system for the same run. Returns '' when the run
+ * has no `runs.summary` yet (a paper run just started, or resumed but not yet re-finished) — nothing to
+ * show below the persisted headline in that case, matching the CLI, which only prints this heading
+ * when `run.summary` is set.
+ */
+function renderSegmentSummary(run: RunRow): string {
+  if (!run.summary) return '';
+  const resumes = resumesOf(run);
+  const heading = `last segment summary (runs.summary — the segment that last wrote it, NOT the whole run; resumes: ${resumes.length})`;
+  return `<section><h2>${escape(heading)}</h2>${table(BACKTEST_HEADLINE_COLUMNS, [summaryStatsRow(run.summary)])}</section>`;
 }
 
 function renderRejectReasons(reasons: Record<string, number>): string {
@@ -284,6 +315,9 @@ export function renderRunDetail(input: { run: RunRow; ticker: string; orders: Ar
     const headline = renderPersistedHeadline(equity, orders);
     sections.push(headline.html);
     rejectReasons = headline.rejectReasons;
+    // CRITICAL 1: the stored `runs.summary` table, below the whole-run headline above — see
+    // `renderSegmentSummary`'s own comment for why both are shown.
+    sections.push(renderSegmentSummary(run));
   } else if (run.summary) {
     const headline = renderBacktestHeadline(run.summary);
     sections.push(headline.html);
@@ -292,6 +326,10 @@ export function renderRunDetail(input: { run: RunRow; ticker: string; orders: Ar
   if (!run.summary) sections.push('<p class="empty">run has no summary (unfinished)</p>');
   sections.push(renderRejectReasons(rejectReasons));
 
+  // IMPORTANT 2 (final review): whether THIS page actually renders a chart — mirrors
+  // `renderEquityChart`'s own gate exactly (non-backtest, at least 2 persisted points) — so `layout()`
+  // loads uPlot's script/stylesheet only when the inline `new uPlot(...)` below actually needs them.
+  const hasChart = run.mode !== 'backtest' && equity.length >= 2;
   sections.push(run.mode === 'backtest'
     ? '<p class="empty">equity is not persisted for backtest runs</p>'
     : renderEquityChart(run.id, equity));
@@ -299,5 +337,5 @@ export function renderRunDetail(input: { run: RunRow; ticker: string; orders: Ar
   sections.push(renderOrdersTable(orders));
 
   const body = sections.filter((s) => s.length > 0).join('\n');
-  return layout(`Run #${run.id}`, body, { rehearsal: run.rehearsal });
+  return layout(`Run #${run.id}`, body, { rehearsal: run.rehearsal, chart: hasChart });
 }

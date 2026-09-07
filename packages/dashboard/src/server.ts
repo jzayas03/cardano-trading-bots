@@ -178,10 +178,21 @@ async function runsHandler(deps: DashboardDeps, url: URL, path: string): Promise
  * 404. Orders and equity are fetched in parallel — `listEquity` from the epoch so a resumed run's
  * earliest points (which can predate `runs.created_at` — see `report.ts`'s own comment on this) are
  * never silently dropped.
+ *
+ * IMPORTANT 3 (final review): `/runs/999999999999999999999` (23 digits) passed the `/^\d+$/` shape
+ * check above — it IS all digits — but `Number('999999999999999999999')` is `1e+21`, a float far past
+ * `Number.isSafeInteger`'s ~9e15 ceiling, and reached Postgres as a bigint parameter: `invalid input
+ * syntax for type bigint: "1e+21"`, a 500 instead of the 400 every other bad parameter on this router
+ * gets. The identical defect was already fixed for `?page=` above via `Number.isSafeInteger` plus an
+ * explicit ceiling (`MAX_PAGE`); the run-id path never got the same treatment. A run id has no
+ * business-meaningful ceiling the way a page number does (`MAX_PAGE` exists to name "how big is too
+ * big" explicitly rather than leave it implicit in a bit width) — `Number.isSafeInteger` alone is
+ * enough here, since every real run id is a small, sequentially-assigned integer.
  */
 async function runDetailHandler(deps: DashboardDeps, idParam: string, path: string): Promise<HandlerResult> {
   if (!/^\d+$/.test(idParam)) return badRequest(path, `invalid run id ${JSON.stringify(idParam)}: must be a non-negative integer`);
   const id = Number(idParam);
+  if (!Number.isSafeInteger(id)) return badRequest(path, `invalid run id ${JSON.stringify(idParam)}: too large to be a real run id`);
   const run = await deps.runs.getRun(id);
   if (!run) return notFound(path);
   const now = deps.now();
