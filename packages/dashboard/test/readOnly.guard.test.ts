@@ -1,10 +1,12 @@
 /**
  * Read only (spec §3): every query the dashboard issues is `SELECT`/`WITH` only. This is a runtime
  * guard, not a source-text grep — it records the SQL text every dashboard read path ACTUALLY issues
- * (`PgDashboardReads.listRuns` across every filter combination, and `PgRunRepo.getRun` /
- * `listOrders` / `listEquity`, the three `RunRepo` methods the detail page uses) and asserts each one
- * matches `/^\s*(SELECT|WITH)\b/i` and contains none of `INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|
- * TRUNCATE` anywhere, even inside a string literal.
+ * (`PgDashboardReads.listRuns` across every filter combination; `PgRunRepo.getRun` / `listOrders` /
+ * `listEquity` / `listRunning`, the four `RunRepo` methods the detail/health pages use; and
+ * `PgSnapshotRepo.perVenuePoolCounts` / `missingTicksApprox`, the two `SnapshotRepo` methods the health
+ * page's per-venue table and missing-ticks line now call) and asserts each one matches
+ * `/^\s*(SELECT|WITH)\b/i` and contains none of `INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE`
+ * anywhere, even inside a string literal.
  *
  * Proved red on 2026-09-07 by temporarily adding `DELETE FROM runs` as a second statement `listRuns`
  * issued after its real SELECT — the assertion caught it immediately, both on the "not a SELECT
@@ -45,6 +47,7 @@
  * written as a field is invoked exactly like a callable one written as a method.
  */
 import type pg from 'pg';
+import { PgSnapshotRepo } from '@ctb/collector';
 import { PgRunRepo } from '@ctb/engine';
 import type { Queryable } from '@ctb/db';
 import { describe, expect, it } from 'vitest';
@@ -83,14 +86,26 @@ const FORBIDDEN_KEYWORD = /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\b
 const GENERIC_SAFE_ARGS: readonly unknown[] = [{}, 1, 0];
 
 describe('dashboard read-only guard', () => {
-  it('every SQL statement PgDashboardReads.listRuns and the RunRepo methods the detail page uses issue is SELECT/WITH only', async () => {
+  it('every SQL statement PgDashboardReads.listRuns, the RunRepo methods the detail/health pages use, and the SnapshotRepo methods the health page uses issue is SELECT/WITH only', async () => {
     const rec = new RecordingQueryable();
     const reads = new PgDashboardReads(rec);
     // `PgRunRepo`'s constructor is `(db: Db, q?: Queryable)`; passing the same recorder as both means
-    // `getRun`/`listOrders`/`listEquity` (the only three methods this guard exercises — `insertOrders`,
-    // the one method that branches on `this.q === this.db`, is never called here) route every query
-    // through it.
+    // `getRun`/`listOrders`/`listEquity`/`listRunning` (the four methods this guard exercises —
+    // `insertOrders`, the one method that branches on `this.q === this.db`, is never called here) route
+    // every query through it. `listRunning` was added alongside the health page's "paper runs" section
+    // (`DashboardDeps.runs` widened to include it) — it must be exercised here for the same reason the
+    // other three already are: this guard proves a runtime SQL shape, not a name on a list.
     const runs = new PgRunRepo(rec as unknown as pg.Pool, rec);
+    // `PgSnapshotRepo`'s `perVenuePoolCounts`/`missingTicksApprox` are the two new methods the health
+    // page's `DashboardDeps.collector` now calls (see `server.ts`'s `healthHandler`) — the same shape
+    // as `runs` above: a repo class with both read and write methods, so this guard exercises only the
+    // ones actually reachable from a page rather than reflecting over the whole class (which would also
+    // invoke `startRun`/`insertSnapshots`/`finishRun`/`syncTokens` and fail on their writes).
+    // `digestInput` (the third `collector` method the health page calls) is not exercised here: it
+    // reads `agg.rows[0]!` with a non-null assertion, and this recorder always answers an empty row set,
+    // so calling it here would throw on a `RecordingQueryable`, not on Postgres — `digestInput.pg.test.ts`
+    // already proves its SQL against a real schema instead.
+    const snapshots = new PgSnapshotRepo(rec as unknown as pg.Pool);
 
     await reads.listRuns({}, 10, 0);
     await reads.listRuns({ mode: 'paper' }, 10, 0);
@@ -106,6 +121,10 @@ describe('dashboard read-only guard', () => {
     await runs.getRun(1);
     await runs.listOrders(1);
     await runs.listEquity(1, new Date(0), new Date());
+    await runs.listRunning();
+
+    await snapshots.perVenuePoolCounts();
+    await snapshots.missingTicksApprox(600);
 
     expect(rec.statements.length).toBeGreaterThan(10);
     for (const sql of rec.statements) {

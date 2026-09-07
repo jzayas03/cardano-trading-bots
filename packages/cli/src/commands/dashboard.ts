@@ -56,7 +56,11 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
   const deps: DashboardDeps = {
     reads: new PgDashboardReads(db),
     runs: runRepo,
-    collector: { digestInput: (intervalSec, venues, now) => snapshotRepo.digestInput(intervalSec, venues, now) },
+    collector: {
+      digestInput: (intervalSec, venues, now) => snapshotRepo.digestInput(intervalSec, venues, now),
+      perVenuePoolCounts: () => snapshotRepo.perVenuePoolCounts(),
+      missingTicksApprox: (intervalSec) => snapshotRepo.missingTicksApprox(intervalSec),
+    },
     processes: listProcesses,
     migrations: async () => {
       const onDisk = await listMigrations();

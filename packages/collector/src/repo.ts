@@ -28,6 +28,13 @@ export interface RunRow extends RunSummary {
   finishedAt: Date | null;
 }
 
+/** One row of `status`'s (and now the health page's) per-venue pool table at the newest tick. */
+export interface VenuePoolCount {
+  dex: string;
+  pools: number;
+  tickTs: Date;
+}
+
 export interface SnapshotRepo {
   syncTokens(tokens: TokenSpec[], seed: { seededAt: string; seedSource: string }): Promise<void>;
   startRun(tickTs: Date, startedAt: Date): Promise<number>;
@@ -151,5 +158,29 @@ export class PgSnapshotRepo implements SnapshotRepo {
       venuesConfigured, venuesSinceLastDiscovery: discoveryVenues.rows.map((r) => r.dex), venuesInLastTick: venues.rows.map((r) => r.dex), tokensTotal: Number(a.tokens_total), tokensCoveredInLastTick: Number(a.tokens_covered),
       poolFailures24h: Number(a.failures_24h), venueErrors24h: Number(a.errors_24h), unfinishedRuns: Number(a.unfinished),
     };
+  }
+
+  /** Per-venue pool counts at the newest tick (moved verbatim from `status`'s own inline query, spec
+   *  §4.2: `status` and the dashboard's health page must render the identical numbers from the
+   *  identical call — see `oneRule.guard.test.ts`/`readOnly.guard.test.ts`). */
+  async perVenuePoolCounts(): Promise<VenuePoolCount[]> {
+    const res = await this.db.query<{ dex: string; pools: string; tick_ts: Date }>(
+      `SELECT dex, count(*) AS pools, tick_ts FROM pool_snapshots
+       WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots) GROUP BY dex, tick_ts ORDER BY dex`,
+    );
+    return res.rows.map((r) => ({ dex: r.dex, pools: Number(r.pools), tickTs: r.tick_ts }));
+  }
+
+  /** Approximate count of ticks missed in the last 24h, moved verbatim from `status`'s own inline
+   *  query (same reasoning as `perVenuePoolCounts` above). `null` when the aggregate query returns no
+   *  row at all (should not happen in practice — `t` always produces one aggregate row — but mirrors
+   *  `status`'s own `?? 'n/a'` fallback rather than assuming a row is always present). */
+  async missingTicksApprox(intervalSec: number): Promise<string | null> {
+    const res = await this.db.query<{ missing_ticks: string }>(
+      `WITH t AS (SELECT DISTINCT tick_ts FROM collector_runs WHERE tick_ts > now() - interval '24 hours')
+       SELECT (extract(epoch FROM (now() - (now() - interval '24 hours'))) / $1::int)::int - count(*) AS missing_ticks FROM t`,
+      [intervalSec],
+    );
+    return res.rows[0]?.missing_ticks ?? null;
   }
 }

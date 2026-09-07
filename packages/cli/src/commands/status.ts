@@ -27,15 +27,10 @@ export async function statusCommand(log: Logger, args: string[] = []): Promise<v
   try {
     const repo = new PgSnapshotRepo(db);
     const runs = await repo.lastRuns(10);
-    const perDex = await db.query<{ dex: string; pools: string; tick_ts: Date }>(
-      `SELECT dex, count(*) AS pools, tick_ts FROM pool_snapshots
-       WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots) GROUP BY dex, tick_ts ORDER BY dex`,
-    );
-    const gaps = await db.query<{ missing_ticks: string }>(
-      `WITH t AS (SELECT DISTINCT tick_ts FROM collector_runs WHERE tick_ts > now() - interval '24 hours')
-       SELECT (extract(epoch FROM (now() - (now() - interval '24 hours'))) / $1::int)::int - count(*) AS missing_ticks FROM t`,
-      [cfg.intervalSec],
-    );
+    // Moved onto PgSnapshotRepo (verbatim SQL) so the dashboard's health page can call the exact same
+    // methods and never drift from what this command prints — see @ctb/collector's repo.ts.
+    const perDex = await repo.perVenuePoolCounts();
+    const missingTicks = await repo.missingTicksApprox(cfg.intervalSec);
     // Plain output is intended here: status is an operator command, not a request path.
     if (digest) {
       // The morning screen: the digest lines replace the ten-row run table, everything else stays.
@@ -46,8 +41,8 @@ export async function statusCommand(log: Logger, args: string[] = []): Promise<v
       id: r.id, tick: r.tickTs.toISOString(), finished: r.finishedAt ? 'yes' : 'NO', attempted: r.poolsAttempted,
       written: r.poolsWritten, failed: r.poolsFailed, calls: r.providerCalls, discovered: r.discovered, errors: r.errors.length,
     })));
-    console.table(perDex.rows.map((r) => ({ dex: r.dex, pools: Number(r.pools), tick: r.tick_ts.toISOString() })));
-    console.log(`ticks missing in last 24h (approx): ${gaps.rows[0]?.missing_ticks ?? 'n/a'}`);
+    console.table(perDex.map((r) => ({ dex: r.dex, pools: r.pools, tick: r.tickTs.toISOString() })));
+    console.log(`ticks missing in last 24h (approx): ${missingTicks ?? 'n/a'}`);
 
     // `runs` is already ordered newest-first; find the latest discovery tick that actually recorded
     // per-venue counts (a refresh tick, or a row from before migration 0005, carries null instead).

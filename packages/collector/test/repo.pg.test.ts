@@ -82,4 +82,63 @@ describe.skipIf(!PG_ENABLED)('PgSnapshotRepo', () => {
       await expect(repo.insertSnapshots(runId, [row('SundaeSwapV3:a', tick)])).rejects.toThrow(/pool_snapshots_base_unit_fkey/);
     });
   });
+
+  /**
+   * `perVenuePoolCounts` moved verbatim off `status`'s own former inline query (see `repo.ts`'s
+   * comment on it) — this proves it against a real schema, not just against the recording stand-in
+   * `readOnly.guard.test.ts` uses for its SELECT/WITH shape check. Two dexes at the SAME newest tick,
+   * an older tick with a third, so a wrong `WHERE tick_ts = (SELECT max(tick_ts) ...)` predicate would
+   * either drop a row that belongs or leak in the older one.
+   */
+  it('perVenuePoolCounts counts pools per dex at the newest tick only, ordered by dex', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      const repo = new PgSnapshotRepo(db);
+      await repo.syncTokens([snek], { seededAt: '2026-09-05', seedSource: 'test' });
+      const older = new Date('2026-09-05T15:00:00Z');
+      const newer = new Date('2026-09-05T15:10:00Z');
+      let runId = await repo.startRun(older, older);
+      await repo.insertSnapshots(runId, [row('SundaeSwapV3:old', older)]);
+
+      runId = await repo.startRun(newer, newer);
+      await repo.insertSnapshots(runId, [
+        row('SundaeSwapV3:a', newer), row('SundaeSwapV3:b', newer),
+        { ...row('MinswapV2:x', newer), dex: 'MinswapV2' },
+      ]);
+
+      const perVenue = await repo.perVenuePoolCounts();
+      expect(perVenue).toEqual([
+        { dex: 'MinswapV2', pools: 1, tickTs: newer },
+        { dex: 'SundaeSwapV3', pools: 2, tickTs: newer },
+      ]);
+    });
+  });
+
+  /**
+   * `missingTicksApprox` moved verbatim off `status`'s own former inline query. Offsets are relative
+   * to the ACTUAL test-execution instant (`Date.now()`), not a fixed calendar date, because the query
+   * itself compares against Postgres's own `now()` — there is no `now` parameter to fix (unlike
+   * `digestInput`, which takes one). Three ticks sit hours inside the 24h window and one sits an hour
+   * past it, deliberately far from the boundary so test execution latency can never flip a row across
+   * it. `intervalSec=3600` makes the expected-tick count exactly `86400 / 3600 = 24`, deterministically
+   * — `now() - (now() - interval '24 hours')` is exactly `interval '24 hours'` within one statement
+   * (Postgres evaluates `now()` once per transaction), so this numerator never depends on wall-clock
+   * timing either.
+   */
+  it('missingTicksApprox counts distinct ticks missing from the last 24h', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      const repo = new PgSnapshotRepo(db);
+      const now = Date.now();
+      for (const hoursAgo of [1, 5, 10]) {
+        const tick = new Date(now - hoursAgo * 3_600_000);
+        await repo.startRun(tick, tick);
+      }
+      const outsideWindow = new Date(now - 25 * 3_600_000);
+      await repo.startRun(outsideWindow, outsideWindow);
+
+      const missing = await repo.missingTicksApprox(3600);
+      expect(missing).toBe('21'); // 24 expected ticks - 3 actual distinct ticks inside the 24h window
+    });
+  });
 });

@@ -101,8 +101,15 @@ function makeDeps(): DashboardDeps {
       getRun: async (id: number) => runsById.get(id) ?? null,
       listOrders: async () => [],
       listEquity: async () => [],
+      // No paper run is currently running in this default fixture (the health page's "paper runs"
+      // section is expected to read `(none running)`) — `health.test.ts` covers the non-empty case.
+      listRunning: async () => [],
     },
-    collector: { digestInput: async () => digestFixture },
+    collector: {
+      digestInput: async () => digestFixture,
+      perVenuePoolCounts: async () => [],
+      missingTicksApprox: async () => '0',
+    },
     processes: () => [{ pid: 111, command: '/usr/local/bin/node /repo/packages/cli/src/main.ts collect' }],
     migrations: async () => ({ onDisk: ['0001_init.sql'], applied: ['0001_init.sql'] }),
     fakeRows: async () => ({ snapshots: 0, candles: 0 }),
@@ -389,7 +396,14 @@ describe('createDashboardServer / listen', () => {
   it('returns 500 for a throwing handler dependency without the thrown message appearing in the body (it goes to the log instead)', async () => {
     const deps = makeDeps();
     const secretMessage = 'connect ECONNREFUSED postgres://ctb_dashboard:SUPERSECRETPW@localhost:5433/ctb';
-    deps.collector = { digestInput: async () => { throw new Error(secretMessage); } };
+    // `digestInput` throws before `perVenuePoolCounts`/`missingTicksApprox` are ever awaited
+    // (`healthHandler` calls it first), so these two never run — they exist only so this literal still
+    // satisfies `DashboardDeps.collector`'s three-method shape.
+    deps.collector = {
+      digestInput: async () => { throw new Error(secretMessage); },
+      perVenuePoolCounts: async () => [],
+      missingTicksApprox: async () => null,
+    };
     const loggedErrors: string[] = [];
     deps.log = { info: () => {}, error: (o) => loggedErrors.push(JSON.stringify(o)) };
 
@@ -419,6 +433,7 @@ function makeCompareDeps(): DashboardDeps {
     getRun: async (id: number) => runsById.get(id) ?? null,
     listOrders: async () => [],
     listEquity: async (id: number) => equityById.get(id) ?? [],
+    listRunning: async () => [],
   };
   return deps;
 }
