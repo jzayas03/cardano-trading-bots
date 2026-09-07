@@ -10,6 +10,30 @@ export function bucketTick(at: Date, intervalSec: number): Date {
   return new Date(Math.floor(at.getTime() / ms) * ms);
 }
 
+/**
+ * The timestamp a tick should carry, given the boundary its caller pinned before sleeping and the
+ * moment it actually woke.
+ *
+ * A caller pins the boundary BEFORE sleeping because re-deriving it from `now()` on an EARLY wake
+ * can bucket one interval earlier than the boundary actually slept for (finding F7). That reasoning
+ * holds — but it left the LATE wake unhandled, and a laptop suspends. Measured over 118 ticks on
+ * 2026-09-07: 35 were stamped more than two minutes before the moment they were observed, the worst
+ * by 69 minutes, because the machine slept through several boundaries while the label stayed fixed.
+ *
+ * That label is not cosmetic. Candles are bucketed by it, the paper clock reads candles by it, and
+ * the executor's stale-fill bound compares it to decide whether data is too old to trade against —
+ * so a stale label makes the executor believe data is FRESHER than it is, the exact inverse of what
+ * that bound exists to do.
+ *
+ * The rule: never earlier than the boundary that was slept toward, and never earlier than the bucket
+ * the clock is actually in. Boundaries missed while suspended are simply not collected; backfilling
+ * them would be inventing observations nobody made.
+ */
+export function reconcileTickTs(pinned: Date, now: Date, intervalSec: number): Date {
+  const actual = bucketTick(now, intervalSec);
+  return actual.getTime() > pinned.getTime() ? actual : pinned;
+}
+
 function unitOf(asset: Exclude<PoolAsset, 'lovelace'>): string {
   return asset.policyId + asset.nameHex;
 }

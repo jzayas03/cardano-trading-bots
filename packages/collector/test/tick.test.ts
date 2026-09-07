@@ -169,6 +169,40 @@ describe('runTick', () => {
     expect(repo.rows[0]?.tickTs).toEqual(pinnedTickTs);
   });
 
+  // Punctual wake: now() falls inside the same bucket the loop pinned before sleeping. This is the
+  // overwhelmingly common case on a healthy machine and must be byte-for-byte unchanged by the
+  // late-wake fix below.
+  it('keeps the caller-provided tickTs on a punctual wake (now() is in the same bucket)', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a')]);
+    const repo = new FakeRepo();
+    // fixedNow() = 15:07:41Z buckets to 15:05:00Z, same bucket as the pinned boundary.
+    const pinnedTickTs = new Date('2026-09-05T15:05:00Z');
+    const s = await runTick({ ...deps(source, repo), tickTs: pinnedTickTs });
+    expect(s.poolsWritten).toBe(1);
+    expect(repo.rows[0]?.tickTs).toEqual(pinnedTickTs);
+  });
+
+  // The suspend/resume defect: measured live, 35/118 ticks were labelled more than two minutes
+  // before the moment they were actually observed (worst case 69 minutes) because sleep() overshot
+  // one or more boundaries and the tick still wrote the stale pinned boundary. tick_ts is the label
+  // every downstream reader (candles, the paper clock, the stale-fill bound) keys on, so a stale
+  // label makes data look fresher than it is. The fix: label with the LATER of the intended
+  // boundary and the bucket the clock is actually in now — never backfill the boundaries in between.
+  it('labels a late-wake tick with the bucket it is actually in, not the stale boundary it was pinned to', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a')]);
+    const repo = new FakeRepo();
+    // The loop pinned 15:05:00Z before sleeping, then the machine suspended; by the time the
+    // process actually resumed and ran the tick, real time is 15:41:00Z — 36 minutes and several
+    // 5-minute boundaries past the one it was aiming for.
+    const pinnedTickTs = new Date('2026-09-05T15:05:00Z');
+    const lateNow = () => new Date('2026-09-05T15:41:00Z');
+    const s = await runTick({ ...deps(source, repo), now: lateNow, tickTs: pinnedTickTs });
+    expect(s.poolsWritten).toBe(1);
+    // bucketTick(15:41:00Z, 300s) = 15:40:00Z: the bucket the clock is really in now, not a
+    // backfill of every boundary missed in between.
+    expect(repo.rows[0]?.tickTs).toEqual(new Date('2026-09-05T15:40:00Z'));
+  });
+
   // F16: insertSnapshots is the one thing runTick must NOT swallow — a write failure there means
   // the tick's data never landed, which is worse than a recorded source failure.
   it('propagates a repository failure from insertSnapshots instead of swallowing it', async () => {
