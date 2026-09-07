@@ -1,0 +1,13 @@
+{
+  "name": "@ctb/dashboard",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@ctb/collector": "*",
+    "@ctb/db": "*",
+    "@ctb/engine": "*",
+    "@ctb/reports": "*",
+    "@ctb/universe": "*"
+  }
+}

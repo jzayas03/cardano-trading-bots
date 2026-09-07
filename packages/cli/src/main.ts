@@ -4,6 +4,7 @@ import { backfillCommand } from './commands/backfill.js';
 import { backtestCommand } from './commands/backtest.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
+import { dashboardCommand } from './commands/dashboard.js';
 import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
@@ -40,13 +41,16 @@ async function main(): Promise<void> {
       return paperCommand(log, rest);
     case 'dev:fake-collector':
       return devFakeCollectorCommand(log, rest);
+    case 'dashboard':
+      return dashboardCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
         'backtest <strategy>[,<strategy>...] <TICKER|ALL> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N|auto] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
         'report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <ids>|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...|' +
-        'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]>',
+        'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]|' +
+        'dashboard [--port 3210]>',
       );
       process.exitCode = 2;
   }
