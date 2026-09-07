@@ -3,8 +3,9 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunRepo } from '@ctb/engine';
-import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type DigestInput, type ProcessLine } from '@ctb/reports';
+import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
 import { escape, layout } from './html.js';
+import { renderCompare } from './pages/compare.js';
 import { renderHealth } from './pages/health.js';
 import { renderRunDetail, renderRunsList } from './pages/runs.js';
 import { RUN_MODES, RUN_STATUSES, type DashboardReads, type RunFilter } from './reads.js';
@@ -201,6 +202,73 @@ async function runDetailHandler(deps: DashboardDeps, idParam: string, path: stri
   return htmlPage(200, body);
 }
 
+const MAX_COMPARE_IDS = 12;
+
+/** Thrown only inside `parseCompareIds` for a bad query value; caught in `compareHandler` and turned
+ * into a 400 that names the accepted values (spec §6, "never a silent default") — the same pattern
+ * `RunsQueryError` follows for `/runs`. */
+class CompareQueryError extends Error {}
+
+/**
+ * `/compare` accepts both `?ids=1,2,3` (one query occurrence, comma-joined — what an operator would
+ * type by hand) and `?ids=1&ids=2` (what the checkbox form on `/runs` actually submits, one
+ * `<input name="ids">` per ticked row) — `URLSearchParams.getAll('ids')` returns every OCCURRENCE of
+ * the key in the order it appeared, so splitting each occurrence on `,` and flattening handles both
+ * forms identically while preserving the order the operator selected, never sorting it. Every rule
+ * below names itself in the 400 it throws, mirroring `report --compare`'s own `parseCompareList`.
+ */
+function parseCompareIds(url: URL): number[] {
+  const raw = url.searchParams.getAll('ids');
+  const parts = raw.flatMap((v) => v.split(','));
+  if (parts.length === 0) {
+    throw new CompareQueryError('ids required: /compare?ids=1,2,3 or repeated ?ids=1&ids=2');
+  }
+  const ids: number[] = [];
+  for (const part of parts) {
+    const n = Number(part);
+    if (part.trim() === '' || !Number.isInteger(n) || n <= 0) {
+      throw new CompareQueryError(`ids must be positive integers; got ${JSON.stringify(part)}`);
+    }
+    ids.push(n);
+  }
+  const dup = ids.find((x, i) => ids.indexOf(x) !== i);
+  if (dup !== undefined) throw new CompareQueryError(`run ${dup} listed more than once in ids`);
+  if (ids.length > MAX_COMPARE_IDS) {
+    throw new CompareQueryError(`at most ${MAX_COMPARE_IDS} ids may be compared at once; got ${ids.length}`);
+  }
+  return ids;
+}
+
+/**
+ * `/compare?ids=…` (spec §4.2): several runs' persisted headlines side by side, and a shared equity
+ * chart. Ids are resolved SEQUENTIALLY, in the order given (never `Promise.all` across ids), so the
+ * first missing id is always the one a 404 names, and the operator's own ordering is never disturbed
+ * by whichever read happens to resolve first. For each id, orders and equity are fetched the same way
+ * `runDetailHandler` fetches them for one run — `listEquity` from the epoch, regardless of mode, so a
+ * backtest's empty equity array reaches `compareRunRows` exactly as `report --compare` reads it too.
+ */
+async function compareHandler(deps: DashboardDeps, url: URL, path: string): Promise<HandlerResult> {
+  let ids: number[];
+  try {
+    ids = parseCompareIds(url);
+  } catch (err) {
+    if (err instanceof CompareQueryError) return badRequest(path, err.message);
+    throw err;
+  }
+  const now = deps.now();
+  const inputs: CompareRunInput[] = [];
+  for (const id of ids) {
+    const run = await deps.runs.getRun(id);
+    // Named the same way `report --compare`'s own missing-run error does (`no run ${rid}`), so an
+    // operator who copies an id between the CLI and this page sees the identical wording.
+    if (!run) return errorPage(404, path, `no run ${id}`);
+    const [orders, equity] = await Promise.all([deps.runs.listOrders(id), deps.runs.listEquity(id, new Date(0), now)]);
+    inputs.push({ run, ticker: deps.tickerOf(run.baseUnit), equity, orders });
+  }
+  const body = renderCompare({ inputs, now });
+  return htmlPage(200, body);
+}
+
 function send(res: ServerResponse, result: HandlerResult): void {
   res.writeHead(result.status, { 'content-type': result.contentType, ...result.headers });
   res.end(result.body);
@@ -210,6 +278,7 @@ async function route(deps: DashboardDeps, url: URL): Promise<HandlerResult> {
   const path = url.pathname;
   if (path === '/') return healthHandler(deps);
   if (path === '/runs') return runsHandler(deps, url, path);
+  if (path === '/compare') return compareHandler(deps, url, path);
   if (path === '/vendor/uPlot.iife.min.js') return vendorFile('uPlot.iife.min.js', 'text/javascript; charset=utf-8');
   if (path === '/vendor/uPlot.min.css') return vendorFile('uPlot.min.css', 'text/css; charset=utf-8');
   const runIdMatch = /^\/runs\/([^/]+)$/.exec(path);

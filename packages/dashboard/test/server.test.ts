@@ -1,5 +1,5 @@
 import { Socket } from 'node:net';
-import type { RunRow, RunSummaryStats } from '@ctb/engine';
+import type { EquityPoint, RunRow, RunSummaryStats } from '@ctb/engine';
 import { checkEnv, type DigestInput } from '@ctb/reports';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RunFilter } from '../src/reads.js';
@@ -59,7 +59,25 @@ const backtestSummary: RunSummaryStats = {
 const paperRun = makeRun({ id: 1 });
 const backtestRun = makeRun({ id: 2, mode: 'backtest', strategyId: 'rsi-mean-reversion', status: 'finished', finishedAt: new Date('2026-09-05T00:00:00Z'), summary: backtestSummary });
 const rehearsalRun = makeRun({ id: 3, rehearsal: true, stopReason: 'operator stop' });
-const runsById = new Map<number, RunRow>([[1, paperRun], [2, backtestRun], [3, rehearsalRun]]);
+// A run on a DIFFERENT token — `makeDeps().tickerOf` only maps `testtoken.abcd` to `TEST` and echoes
+// anything else back unchanged — so comparing this run against `paperRun` exercises the mixed-token
+// warning without needing a second universe entry.
+const otherTokenRun = makeRun({ id: 4, baseUnit: 'othertoken.wxyz' });
+const backtestRun5 = makeRun({ id: 5, mode: 'backtest', strategyId: 'grid-a', status: 'finished' });
+const backtestRun6 = makeRun({ id: 6, mode: 'backtest', strategyId: 'grid-b', status: 'finished' });
+const runsById = new Map<number, RunRow>([
+  [1, paperRun], [2, backtestRun], [3, rehearsalRun], [4, otherTokenRun], [5, backtestRun5], [6, backtestRun6],
+]);
+
+const equity3: EquityPoint[] = [
+  { tickTs: new Date('2026-09-01T00:00:00Z'), cashLovelace: 1_000_000_000n, positionBase: 0n, equityLovelace: 1_000_000_000n, equityExecutableLovelace: 1_000_000_000n, price: '0.5' },
+  { tickTs: new Date('2026-09-01T00:10:00Z'), cashLovelace: 500_000_000n, positionBase: 900_000n, equityLovelace: 950_000_000n, equityExecutableLovelace: null, price: '0.5' },
+  { tickTs: new Date('2026-09-01T00:20:00Z'), cashLovelace: 500_000_000n, positionBase: 900_000n, equityLovelace: 980_000_000n, equityExecutableLovelace: 975_000_000n, price: '0.53' },
+];
+/** `/compare`'s route fetches equity for EVERY id regardless of mode (mirroring `runDetailHandler`);
+ * only run 1 (a paper run) and run 3 (rehearsal) have any persisted here, so backtests naturally
+ * exercise the "no run has enough persisted points to chart" path unless paired with one of them. */
+const equityById = new Map<number, EquityPoint[]>([[1, equity3], [3, equity3]]);
 
 function makeDeps(): DashboardDeps {
   return {
@@ -347,6 +365,136 @@ describe('createDashboardServer / listen', () => {
       expect(body).toContain('internal error');
       // The real message still goes exactly where it always did: the log, never the response.
       expect(loggedErrors.some((l) => l.includes('SUPERSECRETPW'))).toBe(true);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+});
+
+/** A deps set whose `runs.listEquity` actually returns `equityById`'s fixture, unlike `makeDeps()`'s
+ * default (which always answers `[]` — sufficient for the `/runs` and `/runs/:id` tests above, but not
+ * for exercising `/compare`'s chart-or-no-chart branch). */
+function makeCompareDeps(): DashboardDeps {
+  const deps = makeDeps();
+  deps.runs = {
+    getRun: async (id: number) => runsById.get(id) ?? null,
+    listOrders: async () => [],
+    listEquity: async (id: number) => equityById.get(id) ?? [],
+  };
+  return deps;
+}
+
+describe('/compare', () => {
+  it('accepts ?ids=1,3 and renders both runs\' rows plus a chart (both have >=2 persisted equity points)', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=1,3', url));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('<td>1</td>');
+      expect(body).toContain('<td>3</td>');
+      expect(body).toContain('new uPlot(');
+      expect(body).toContain('REHEARSAL'); // run 3 is a rehearsal run
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('?ids=1&ids=3 (the checkbox form\'s shape) behaves identically to ?ids=1,3', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const [commaRes, repeatedRes] = await Promise.all([
+        fetch(new URL('/compare?ids=1,3', url)),
+        fetch(new URL('/compare?ids=1&ids=3', url)),
+      ]);
+      expect(repeatedRes.status).toBe(commaRes.status);
+      expect(await repeatedRes.text()).toBe(await commaRes.text());
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('three backtests with no persisted equity render all three rows and the no-equity line, never a chart', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=2,5,6', url));
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('no run in this comparison has enough persisted equity points to chart');
+      expect(body).not.toContain('new uPlot(');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('warns about mixed tokens when the compared runs are on different tickers', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=1,4', url)); // run 1: TEST, run 4: othertoken.wxyz
+      const body = await res.text();
+      expect(res.status).toBe(200);
+      expect(body).toContain('warning: these runs are on different tokens; their returns are not comparable to each other');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('omits the mixed-token warning when every compared run shares one ticker', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=1,3', url)); // both TEST
+      const body = await res.text();
+      expect(body).not.toContain('warning: these runs are on different tokens');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it.each([
+    ['', 'no ids at all'],
+    ['abc', 'a non-integer id'],
+    ['1,0', 'a non-positive id'],
+    ['1,-2', 'a negative id'],
+    ['1,1', 'a repeated id'],
+    [Array.from({ length: 13 }, (_, i) => i + 1).join(','), 'more than 12 ids'],
+  ])('/compare?ids=%s is refused with 400 (%s)', async (idsValue) => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const target = idsValue === '' ? '/compare' : `/compare?ids=${idsValue}`;
+      const res = await fetch(new URL(target, url));
+      expect(res.status).toBe(400);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/compare?ids=999999 (a run that does not exist) is a 404 naming the id', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=999999', url));
+      const body = await res.text();
+      expect(res.status).toBe(404);
+      expect(body).toContain('999999');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('a 404 for a later id in the list still names that id, and does not run past it', async () => {
+    const server = createDashboardServer(makeCompareDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/compare?ids=1,999999', url));
+      const body = await res.text();
+      expect(res.status).toBe(404);
+      expect(body).toContain('999999');
     } finally {
       await new Promise<void>((res) => server.close(() => res()));
     }
