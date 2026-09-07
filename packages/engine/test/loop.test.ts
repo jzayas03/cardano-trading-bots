@@ -165,13 +165,48 @@ describe('runEngine coverage stats', () => {
       expectedBuckets: 16, // 75 minutes / 5 + 1
       maxGapMs: 60 * 60_000,
       gapsOverBound: 1,
+      distinctPools: 1, // every candle here shares the fixture's default poolId 'p'
     });
     expect(r.summary.candles).toBe(5);
   });
 
   it('reports an empty window without inventing a range', async () => {
     const r = await runEngine({ feed: [], strategy: quiet, executor: passthrough, initial: { cashLovelace: 0n, positionBase: 0n }, decimals: 0, log });
-    expect(r.summary.coverage).toEqual({ candles: 0, first: null, last: null, expectedBuckets: 0, maxGapMs: 0, gapsOverBound: 0 });
+    expect(r.summary.coverage).toEqual({ candles: 0, first: null, last: null, expectedBuckets: 0, maxGapMs: 0, gapsOverBound: 0, distinctPools: 0 });
+  });
+});
+
+/**
+ * The candle builder always picks the single deepest pool per tick (`buildCandles`), so when a venue
+ * drops out and the next-deepest is promoted, a run's candle series silently continues on a DIFFERENT
+ * pool: different fee, different depth, a different quote. `pool_id` was on every candle row already —
+ * nothing surfaced it. `distinctPools` on coverage, and a warning naming which, close that gap.
+ */
+describe('runEngine multi-pool coverage and warning', () => {
+  const quiet: Strategy = { id: 'quiet', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [] };
+  const withPool = (i: number, poolId: string): Candle => ({ ...c(i, '1'), poolId });
+
+  it('counts one pool and adds no multi-pool warning when the whole series stayed on it', async () => {
+    const feed = [withPool(0, 'MinswapV2:aaa'), withPool(1, 'MinswapV2:aaa'), withPool(2, 'MinswapV2:aaa')];
+    const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+    expect(r.summary.coverage.distinctPools).toBe(1);
+    expect(r.summary.warnings.some((w) => w.includes('spans'))).toBe(false);
+  });
+
+  it('counts every distinct pool and warns naming them, sorted, when the series splices across venues', async () => {
+    const warned: Array<[unknown, string]> = [];
+    const noisy = { info: () => {}, warn: (o: unknown, msg: string) => { warned.push([o, msg]); }, error: () => {} };
+    const feed = [withPool(0, 'MinswapV2:aaa'), withPool(1, 'WingRidersV2:bbb'), withPool(2, 'MinswapV2:aaa'), withPool(3, 'MinswapV2:aaa'), withPool(4, 'MinswapV2:aaa'), withPool(5, 'MinswapV2:aaa')];
+    const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log: noisy });
+    expect(r.summary.coverage.distinctPools).toBe(2);
+    expect(r.summary.warnings).toEqual(['candle series spans 2 pools: MinswapV2:aaa, WingRidersV2:bbb']);
+    expect(warned.map(([, msg]) => msg)).toContain('candle series spans multiple pools');
+  });
+
+  it('does not count a null poolId as a pool', async () => {
+    const feed = [withPool(0, 'MinswapV2:aaa'), { ...c(1, '1'), poolId: null }];
+    const r = await runEngine({ feed, strategy: quiet, executor: passthrough, initial: { cashLovelace: 0n, positionBase: 0n }, decimals: 0, log });
+    expect(r.summary.coverage.distinctPools).toBe(1);
   });
 });
 

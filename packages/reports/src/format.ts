@@ -20,7 +20,10 @@ export function coverageLine(c: RunCoverage | undefined): string {
   if (!c) return 'coverage: not recorded (run predates coverage stats)';
   const pct = c.expectedBuckets > 0 ? ((c.candles / c.expectedBuckets) * 100).toFixed(1) : '0.0';
   const range = c.first && c.last ? `${c.first} -> ${c.last}` : 'empty window';
-  return `coverage: ${c.candles} of ${c.expectedBuckets} expected buckets (${pct}%) | ${range} | max gap ${Math.round(c.maxGapMs / 60_000)}m | ${c.gapsOverBound} gaps over the stale-fill bound`;
+  // `distinctPools` is absent (not 0, not 1) on a run persisted before this field existed — say so
+  // rather than implying a single-venue series nothing actually checked (same rule `!c` follows above).
+  const pools = typeof c.distinctPools === 'number' ? `${c.distinctPools} pool${c.distinctPools === 1 ? '' : 's'}` : 'not recorded (run predates pool tracking)';
+  return `coverage: ${c.candles} of ${c.expectedBuckets} expected buckets (${pct}%) | ${range} | max gap ${Math.round(c.maxGapMs / 60_000)}m | ${c.gapsOverBound} gaps over the stale-fill bound | ${pools}`;
 }
 
 /** The ISO timestamps `RunRepo.appendResume` has appended to `params.resumes`, or [] on a run that
