@@ -71,6 +71,23 @@ function worstOf(open: Decimal, close: Decimal, isBuy: boolean): Decimal {
   return (isBuy ? o >= cl : o <= cl) ? open : close;
 }
 
+/**
+ * The pool `cpmm_synthetic_depth` pretends exists at one price: `depth` lovelace on the quote side
+ * against the base amount that prices the pool there, at the candle's own fee (or the synthetic
+ * default). One function for both the mark path and the fill path — they used to carry two copies of
+ * this arithmetic, and an equity curve that disagrees with the sell it stands for is exactly the
+ * defect a copy drift would produce (`synthetic mark agrees with the synthetic fill` pins it).
+ * The reasons are worded for a fill against t+1; the mark path discards them.
+ */
+function syntheticPool(depth: bigint, price: Decimal, decimals: number, candle: Pick<Candle, 'poolId' | 'feeBps'>): WorkingPool | { reason: string } {
+  if (depth <= 0n) return { reason: 'synthetic depth must be positive' };
+  const p = decimalToScaled(price);
+  if (p <= 0n) return { reason: 'no price at t+1' };
+  const reserveBase = (depth * 10n ** BigInt(decimals) * SCALE) / (p * 1_000_000n);
+  if (reserveBase <= 0n) return { reason: 'synthetic depth too small for price' };
+  return { poolId: candle.poolId ?? 'synthetic', reserveBase, reserveQuote: depth, feeBps: candle.feeBps ?? SYNTHETIC_FEE_BPS };
+}
+
 export class SimExecutor implements Executor {
   constructor(private readonly o: SimExecutorOptions) {}
 
@@ -166,13 +183,9 @@ export class SimExecutor implements Executor {
       }
       return { poolId: candle.poolId, reserveBase: candle.closeReserveBase, reserveQuote: candle.closeReserveQuote, feeBps: candle.feeBps };
     }
-    const depth = this.o.fillModel.depthLovelace;
-    if (depth <= 0n) return null;
-    const p = decimalToScaled(candle.close);
-    if (p <= 0n) return null;
-    const reserveBase = (depth * 10n ** BigInt(this.o.decimals) * SCALE) / (p * 1_000_000n);
-    if (reserveBase <= 0n) return null;
-    return { poolId: candle.poolId ?? 'synthetic', reserveBase, reserveQuote: depth, feeBps: candle.feeBps ?? SYNTHETIC_FEE_BPS };
+    // A mark has no order to reject, so a pool that cannot be built is simply no mark.
+    const pool = syntheticPool(this.o.fillModel.depthLovelace, candle.close, this.o.decimals, candle);
+    return 'reason' in pool ? null : pool;
   }
 
   private resolvePool(next: Candle, isBuy: boolean): WorkingPool | { reason: string } {
@@ -187,12 +200,6 @@ export class SimExecutor implements Executor {
       return { poolId: next.poolId, reserveBase: next.closeReserveBase, reserveQuote: next.closeReserveQuote, feeBps: next.feeBps };
     }
     const { depthLovelace: depth, price: priceMode = 'close' } = this.o.fillModel;
-    if (depth <= 0n) return { reason: 'synthetic depth must be positive' };
-    const priceDecimal = priceMode === 'worst' ? worstOf(next.open, next.close, isBuy) : next.close;
-    const p = decimalToScaled(priceDecimal);
-    if (p <= 0n) return { reason: 'no price at t+1' };
-    const reserveBase = (depth * 10n ** BigInt(this.o.decimals) * SCALE) / (p * 1_000_000n);
-    if (reserveBase <= 0n) return { reason: 'synthetic depth too small for price' };
-    return { poolId: next.poolId ?? 'synthetic', reserveBase, reserveQuote: depth, feeBps: next.feeBps ?? SYNTHETIC_FEE_BPS };
+    return syntheticPool(depth, priceMode === 'worst' ? worstOf(next.open, next.close, isBuy) : next.close, this.o.decimals, next);
   }
 }

@@ -244,6 +244,33 @@ describe('synthetic worst-of pricing', () => {
   });
 });
 
+describe('synthetic mark agrees with the synthetic fill', () => {
+  // The mark path (`markToMarket`) and the fill path (`fill`) both build the synthetic pool from a
+  // price and a declared depth. If the two ever derived reserves differently, an equity curve would
+  // disagree with the sell it claims to stand for. So: mark a position at candle C, then sell the
+  // whole position against a t+1 candle priced exactly like C; the mark must equal the proceeds net
+  // of fees. Under `close` mode the fill prices at next.close, so open/close are set equal here.
+  const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_synthetic_depth', depthLovelace: RQ }, maxGapMs: FIFTEEN_MIN });
+  const bare = { poolId: null, poolType: null, feeBps: null, closeReserveBase: null, closeReserveQuote: null, tvlLovelace: null, volumeQuote: '1' } as const;
+  const c: Candle = { ...at, ...bare };
+  const c1: Candle = { ...next, ...bare, open: MID, close: MID };
+  const position = { cashLovelace: 0n, positionBase: 1_000_000n };
+  it('marks the position at exactly what a full sell against the same price yields', () => {
+    const mark = ex.markToMarket(position, c);
+    const r = ex.fill({ side: 'sell', amountIn: position.positionBase, reason: 't' }, c, c1, { ...position, cashLovelace: 10_000_000n }) as Extract<FillResult, { status: 'filled' }>;
+    expect(r.status).toBe('filled');
+    expect(mark).toBe(r.amountOut - r.batcherFeeLovelace - r.networkFeeLovelace);
+    expect(mark).toBeGreaterThan(0n);
+  });
+  it('is null for the mark and a rejection for the fill under the same unusable inputs', () => {
+    const zero = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_synthetic_depth', depthLovelace: 0n }, maxGapMs: FIFTEEN_MIN });
+    expect(zero.markToMarket(position, c)).toBeNull();
+    expect(zero.fill({ side: 'sell', amountIn: 1n, reason: 't' }, c, c1, rich)).toEqual({ status: 'rejected', reason: 'synthetic depth must be positive' });
+    expect(ex.markToMarket(position, { ...c, close: '0' })).toBeNull();
+    expect(ex.fill({ side: 'sell', amountIn: 1n, reason: 't' }, c, { ...c1, close: '0', open: '0' }, rich)).toEqual({ status: 'rejected', reason: 'no price at t+1' });
+  });
+});
+
 /**
  * Finding M3: `deviationBps` divides by its reference price with no guard. `midScaled` (the t close)
  * is checked — `no mid price at t` — but `poolMidScaled`, the t+1 pool's own mid used for
