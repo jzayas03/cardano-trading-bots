@@ -1,4 +1,4 @@
-# Runbook: the dashboard (M4a)
+# Runbook: the dashboard (M4a-M4c)
 
 A local, read-only web view of the same database `status` and `report` read: a health board, the
 runs list, and a run's own page, all served from `http://127.0.0.1:3210/`. It costs nothing to run —
@@ -82,10 +82,12 @@ exits on its own; there is no state to flush and nothing to wait for.
   any venue lost since the last discovery — rendered as a status board instead of terminal text,
   plus `doctor`'s own process, migration and rehearsal-data checks below them. Refreshes itself every
   60 seconds so it is safe to leave open. A database error renders an error page rather than a stale
-  or partial board. **It does not yet carry `status --digest`'s trailing `paper runs:` section** (a
-  later milestone's work) — an operator who switches their morning check to this page loses visibility
-  into which paper runs are currently running until that section is added here; run `status --digest`
-  or `status` alongside it if that matters to you today.
+  or partial board. **It does not yet carry `status --digest`'s three trailing sections** (a later
+  milestone's work): the per-venue pool-count table, the `ticks missing in last 24h (approx)` line,
+  and the `paper runs:` table. An operator who switches their morning check to this page loses
+  visibility into per-venue pool distribution, the approximate tick-gap count, and which paper runs
+  are currently running, until those sections are added here; run `status --digest` or `status`
+  alongside it if any of that matters to you today.
 - **`/runs`.** Every run, newest first, 50 to a page. Filter by mode, strategy, ticker or status
   with query parameters; an unrecognized filter value is a 400 naming what is accepted, never a
   silent "show everything." Each row's return %, max DD %, and fill counts come from `runs.summary` —
@@ -178,5 +180,5 @@ they call the exact same code. **If you ever see them disagree, that is a bug in
 data problem to reconcile by hand.** File it and go look at what changed in `@ctb/reports` or in
 which function a page calls, rather than trusting whichever number looks more plausible.
 
-M4a is done when the operator has opened the health page in the morning once instead of running
-`status --digest`, and the two agreed.
+M4a/M4b/M4c are done when the operator has opened the health page in the morning once instead of
+running `status --digest`, and the two agreed.

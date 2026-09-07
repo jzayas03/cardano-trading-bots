@@ -1,4 +1,4 @@
-import type { CompareRunInput } from '@ctb/reports';
+import { COMPARE_REHEARSAL_BANNER, type CompareRunInput } from '@ctb/reports';
 import type { EquityPoint, OrderRecord, RunRow } from '@ctb/engine';
 import { describe, expect, it } from 'vitest';
 import { REHEARSAL_BANNER } from '../src/html.js';
@@ -37,6 +37,39 @@ function input(overrides: Partial<CompareRunInput> & { run: RunRow }): CompareRu
   return { ticker: 'TEST', equity: [], orders: [], ...overrides };
 }
 
+/**
+ * IMPORTANT 2 (final review): `COMPARE_COLUMNS` (the header labels, `pages/compare.ts`) and
+ * `compareTableRows` (the cell builder) are two hand-maintained parallel arrays, eighteen wide. A
+ * reviewer swapped `'returnPct'` and `'feesAda'` in the HEADER array ONLY — the data-cell order was
+ * untouched, so a naive "check the `<td>` at hardcoded index 13" test would have kept passing (the
+ * value AT that position never moved; only its label did) — and the entire 602-test suite passed,
+ * including both guard tests, because nothing here pinned a cell to the column its OWN header claims:
+ * the strongest assertion in this file (`renders compareRunRows as a table` above) is a regex that
+ * matches any numeric cell anywhere on the page. `compareColumnIndex` reads the rendered `<th>` text to
+ * find WHICH index a given column name actually sits at, and `compareRowCellsFor` extracts one run's
+ * row cells by run id — combined (`cellNamed` below), a header swap moves the name to a different
+ * index, and the value found there is a DIFFERENT column's data, so the assertion fails at the swapped
+ * name rather than silently reading the unmoved data. Matches on `<tr><td>${runId}</td>` — the FIRST
+ * cell of the row must equal the id exactly — so a run whose id is a substring of another row's `run`
+ * cell (there is none in this suite, but `id: 1` inside `id: 16` would be a risk with a looser match)
+ * can never be confused for a different row.
+ */
+function compareRowCellsFor(html: string, runId: number): string[] {
+  const rows = [...html.matchAll(/<tr>(.*?)<\/tr>/g)].map((m) => m[1] ?? '');
+  const row = rows.find((r) => r.startsWith(`<td>${runId}</td>`));
+  if (row === undefined) throw new Error(`no <tr> found for run ${runId}`);
+  return [...row.matchAll(/<td>(.*?)<\/td>/g)].map((m) => m[1] ?? '');
+}
+
+function compareColumnIndex(html: string, columnName: string): number {
+  const theadMatch = /<thead><tr>(.*?)<\/tr><\/thead>/.exec(html);
+  if (theadMatch === null) throw new Error('no <thead><tr> found');
+  const headers = [...theadMatch[1]!.matchAll(/<th>(.*?)<\/th>/g)].map((m) => m[1] ?? '');
+  const idx = headers.indexOf(columnName);
+  if (idx === -1) throw new Error(`column ${JSON.stringify(columnName)} not found in header row: ${headers.join(', ')}`);
+  return idx;
+}
+
 describe('renderCompare', () => {
   it('never sorts: the table rows appear in the exact order the ids were listed, even out of numeric order', () => {
     const run7 = makeRun({ id: 7 });
@@ -47,14 +80,20 @@ describe('renderCompare', () => {
     expect(runCells.indexOf(7)).toBeLessThan(runCells.indexOf(6));
   });
 
-  it('renders the REHEARSAL banner when any input run is a rehearsal, and omits it when none are', () => {
+  it('renders the compare-specific REHEARSAL banner when any input run is a rehearsal, and omits it when none are (MINOR, final review)', () => {
+    // MINOR (final review): a mixed comparison used to show the generic single-run `REHEARSAL_BANNER`
+    // ("synthetic data — not evidence"), implying the whole page is synthetic; it now shows
+    // `COMPARE_REHEARSAL_BANNER` ("one or more rows are synthetic data — not evidence"), the exact
+    // wording `report --compare`'s `printCompare` already uses for this same case — and never the
+    // generic single-run wording at all.
     const rehearsalRun = makeRun({ id: 6, rehearsal: true });
     const plainRun = makeRun({ id: 7 });
     const withRehearsal = renderCompare({ inputs: [input({ run: rehearsalRun, equity: equity3, orders: orders2 }), input({ run: plainRun, equity: equity3, orders: orders2 })], now });
-    expect(withRehearsal).toContain(REHEARSAL_BANNER);
+    expect(withRehearsal).toContain(COMPARE_REHEARSAL_BANNER);
+    expect(withRehearsal).not.toContain(REHEARSAL_BANNER);
 
     const withoutRehearsal = renderCompare({ inputs: [input({ run: plainRun, equity: equity3, orders: orders2 })], now });
-    expect(withoutRehearsal).not.toContain(REHEARSAL_BANNER);
+    expect(withoutRehearsal).not.toContain(COMPARE_REHEARSAL_BANNER);
   });
 
   it('the heading names every id, every distinct ticker, and "as of <now>"', () => {
@@ -82,6 +121,23 @@ describe('renderCompare', () => {
     expect(html).toContain('<td>6</td>');
     expect(html).toContain('<td>rows</td>'); // basis: a paper run with persisted equity reads from rows
     expect(html).toMatch(/<td>-?\d+(\.\d+)?<\/td>/); // returnPct cell is numeric
+  });
+
+  it('pins basis, startAda, endAda and returnPct to the column position their OWN header names claim (IMPORTANT 2, final review)', () => {
+    const run6 = makeRun({ id: 6 });
+    const html = renderCompare({ inputs: [input({ run: run6, ticker: 'TEST', equity: equity3, orders: orders2 })], now });
+    const cells = compareRowCellsFor(html, 6);
+    const cellNamed = (columnName: string): string | undefined => cells[compareColumnIndex(html, columnName)];
+    // equity3: first point 1_000_000_000 lovelace, last point 980_000_000 lovelace -> startAda
+    // 1000.000000, endAda 980.000000, returnPct (980-1000)/1000*100 = -2 (summarizeRun's own bigint
+    // basis-point arithmetic, not anything this test recomputes). Looked up by the column's OWN
+    // rendered header name, not a hardcoded index, so a header-only swap (the reviewer's probe) fails
+    // here: the swapped name resolves to a DIFFERENT index whose data cell holds a different column's
+    // value entirely.
+    expect(cellNamed('basis')).toBe('rows');
+    expect(cellNamed('startAda')).toBe('1000.000000');
+    expect(cellNamed('endAda')).toBe('980.000000');
+    expect(cellNamed('returnPct')).toBe('-2');
   });
 
   it('renders a backtest run (no persisted equity) with basis "summary" from runs.summary', () => {

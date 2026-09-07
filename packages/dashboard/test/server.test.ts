@@ -181,6 +181,28 @@ describe('createDashboardServer / listen', () => {
     }
   });
 
+  // IMPORTANT 5 (final review): `/` linked to nothing, `/runs/:id` linked nowhere, `/universe` was
+  // reachable only by typing the path, and an error page had zero links — browser-back was the only
+  // way out of any page. The nav lives in `layout()`, the ONE function every page (including every
+  // error page — `errorPage`/`notFound`/`badRequest` in `server.ts` all route through it) renders
+  // through, so this checks it actually reaches a real HTTP response for a 200, a 404, and a 400 alike.
+  it('every page, including a 404 and a 400, carries links home to /, /runs and /universe', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const paths = ['/', '/runs', '/runs/1', '/universe', '/nope', '/runs/abc'];
+      for (const path of paths) {
+        const res = await fetch(new URL(path, url));
+        const body = await res.text();
+        for (const href of ['href="/"', 'href="/runs"', 'href="/universe"']) {
+          expect(body, `${path} missing ${href}`).toContain(href);
+        }
+      }
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
   it('answers HEAD with 405 too, since only GET is routed', async () => {
     const server = createDashboardServer(makeDeps());
     const { url } = await listen(server, 0);
@@ -487,6 +509,14 @@ describe('/compare', () => {
     ['1,-2', 'a negative id', 'ids must be positive integers; got &quot;-2&quot;'],
     ['1,1', 'a repeated id', 'run 1 listed more than once in ids'],
     [Array.from({ length: 13 }, (_, i) => i + 1).join(','), 'more than 12 ids', 'at most 12 ids may be compared at once; got 13'],
+    // IMPORTANT 1 (final review): `1e21` is a finite, integer-valued `Number` — `Number.isInteger`
+    // said yes — so this used to reach `deps.runs.getRun(1e21)` and Postgres itself rejected the
+    // out-of-range bigint parameter with a 500, not this router's usual 400. `/^\d+$/` rejects the
+    // `e` outright before the value is ever converted to a number.
+    ['1e21', 'an oversized id past bigint range', 'ids must be positive integers; got &quot;1e21&quot;'],
+    // `Number('0x10') === 16` — a WELL-FORMED, valid run id, just not the one the operator typed. This
+    // one was worse than the 500 above: it silently rendered a different run with no error at all.
+    ['0x10', 'a radix-prefixed value silently reinterpreted as a different run', 'ids must be positive integers; got &quot;0x10&quot;'],
   ])('/compare?ids=%s is refused with 400 (%s) naming what is accepted', async (idsValue, _label, expectedMessage) => {
     const server = createDashboardServer(makeCompareDeps());
     const { url } = await listen(server, 0);

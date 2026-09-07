@@ -69,6 +69,13 @@ describe('parseReportArgs --compare', () => {
     expect(() => parseCompareList('3,,4')).toThrow(/needs run ids/);
     expect(() => parseCompareList('3,x')).toThrow(/needs run ids/);
     expect(() => parseCompareList('3,4,3')).toThrow(/listed more than once/);
+    // Final review, IMPORTANT 1: the same shape defect fixed in the dashboard's `parseCompareIds` —
+    // `!Number.isInteger(n)` accepted `1e21` (a finite integer-valued float, reaches Postgres as an
+    // out-of-range bigint) and `0x10` (silently `Number('0x10') === 16`, a DIFFERENT valid run id).
+    expect(() => parseCompareList('1e21')).toThrow(/needs run ids/);
+    expect(() => parseCompareList('0x10')).toThrow(/needs run ids/);
+    expect(() => parseCompareList('+1')).toThrow(/needs run ids/);
+    expect(() => parseCompareList('1.0')).toThrow(/needs run ids/);
     expect(() => parseReportArgs(['--compare'])).toThrow(/--compare needs a value/);
     expect(() => parseReportArgs(['--compare', '--day'])).toThrow(/--compare needs a value/);
     expect(() => parseReportArgs(['--compare', '1,2', '--csv', 'x'])).toThrow(/takes no other flags/);

@@ -230,6 +230,20 @@ class CompareQueryError extends Error {}
  * the key in the order it appeared, so splitting each occurrence on `,` and flattening handles both
  * forms identically while preserving the order the operator selected, never sorting it. Every rule
  * below names itself in the 400 it throws, mirroring `report --compare`'s own `parseCompareList`.
+ *
+ * IMPORTANT 1 (final review): this used to accept a part as long as `Number(part)` was a finite
+ * integer — `!Number.isInteger(n)` — the same shape defect `?page=` and `/runs/:id` were each fixed
+ * for earlier in this file (see `MAX_PAGE`'s comment and `runDetailHandler`'s own IMPORTANT-3 comment).
+ * Measured: `?ids=1e21` reached `deps.runs.getRun(1e21)` and Postgres rejected it with `invalid input
+ * syntax for type bigint: "1e+21"` — a 500, not this router's usual 400 — and `?ids=0x10` silently
+ * parsed as `Number('0x10') === 16` and rendered run 16, a bad parameter reinterpreted as a
+ * DIFFERENT valid run without so much as a 400 to notice by. `+1`, `1.0` and `%201%20` (` 1 `) were
+ * accepted the same way — `Number()` parses all of them fine, `Number.isInteger` doesn't care.
+ * The fix is the same one already proven at `/runs/:id`: a strict `/^\d+$/` shape check (rejects a
+ * sign, a decimal point, an exponent, a radix prefix, and any leading/trailing whitespace outright,
+ * since none of those characters is a digit) BEFORE the numeric conversion, then `Number.isSafeInteger`
+ * on top so a value that passes the shape check but is still too large to be a real run id
+ * (`999999999999999999` — 18 digits, all of them digits) can't reach Postgres as a bigint either.
  */
 function parseCompareIds(url: URL): number[] {
   const raw = url.searchParams.getAll('ids');
@@ -240,7 +254,7 @@ function parseCompareIds(url: URL): number[] {
   const ids: number[] = [];
   for (const part of parts) {
     const n = Number(part);
-    if (part.trim() === '' || !Number.isInteger(n) || n <= 0) {
+    if (!/^\d+$/.test(part) || !Number.isSafeInteger(n) || n <= 0) {
       throw new CompareQueryError(`ids must be positive integers; got ${JSON.stringify(part)}`);
     }
     ids.push(n);

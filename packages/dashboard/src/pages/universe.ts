@@ -11,8 +11,18 @@
  * tell "index + 1" apart from a computed figure by shape alone — it only knows "binary arithmetic
  * between two non-constant operands", and a loop variable plus a literal is exactly that shape.
  * Rather than widen the guard's allowlist for a display index (the previous milestone spent two fix
- * rounds tightening that same allowlist after it became a hole), `buildRanks` below counts up with
- * `rank++` — a `PostfixUnaryExpression`, never a `BinaryExpression`, so the scan has nothing to see.
+ * rounds tightening that same allowlist after it became a hole), an earlier version of `buildRanks`
+ * counted up with `rank++` — a `PostfixUnaryExpression`, never a `BinaryExpression`, so the arithmetic
+ * scan had nothing to see.
+ *
+ * IMPORTANT 3 (final review): that `rank++` was an escape hatch, not a fix, and a reviewer proved it
+ * live — they added a `gainers` count built the identical way (`n++`), rendered it on this page, and
+ * the guard stayed green over a real market figure the dashboard had computed itself. Both halves are
+ * closed now: the guard itself also walks `++`/`--` (see `oneRule.guard.test.ts`'s own header), and
+ * `buildRanks` below no longer does arithmetic of ANY kind — not `+`, not `++`, nothing left for a
+ * scanner to need to see. `RANK_LABELS` is a plain array of numeric literals (nothing computes any of
+ * them), and `buildRanks` is just `RANK_LABELS.slice(0, count)` — `.slice` and the `>` bound check below
+ * are not arithmetic operators, so this function needs no allowlist entry and has no hatch left in it.
  *
  * A token missing from `latest` (no snapshot on the newest tick), from `dayAgo` (no snapshot at or
  * before 24h ago, inside the window), or from `coverage` (never matched to an external pool) renders
@@ -31,19 +41,29 @@ export const UNIVERSE_SORTS = ['rank', 'ticker', 'depth', 'change', 'coverage'] 
 const POOL_ID_DISPLAY_CHARS = 12;
 
 /**
- * `count` 1-based rank labels, built by counting up rather than by `tokens.map((_, i) => i + 1)` —
- * see the file header for why. `while (ranks.length < count)` and `rank++` are the only two moving
- * parts; neither is a `BinaryExpression`, so the one-rule guard's arithmetic scan never visits this
- * function at all.
+ * 1-based rank labels, written out as plain numeric literals — not `i + 1`, not `rank++`, not any
+ * other expression a guard would need to evaluate to know it isn't a financial figure (see the file
+ * header for the escape-hatch history this replaces). Generous past the current 20-token universe
+ * (`packages/universe/universe.json`) so growing it by a few tokens doesn't hit a wall the day someone
+ * does; `buildRanks` throws a clear, actionable message if the universe ever outgrows this list, rather
+ * than silently truncating the rank column.
  */
+const RANK_LABELS: readonly number[] = [
+  1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+  11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+  21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+  31, 32, 33, 34, 35, 36, 37, 38, 39, 40,
+  41, 42, 43, 44, 45, 46, 47, 48, 49, 50,
+];
+
+/** `count` 1-based rank labels, sliced off the literal list above — no arithmetic expression exists
+ * anywhere in this function for the one-rule guard's scan to evaluate. `>` is a comparison, not one of
+ * the arithmetic operators the guard treats as "computing a figure" (see that guard's own header). */
 function buildRanks(count: number): number[] {
-  const ranks: number[] = [];
-  let rank = 1;
-  while (ranks.length < count) {
-    ranks.push(rank);
-    rank++;
+  if (count > RANK_LABELS.length) {
+    throw new Error(`universe has grown to ${count} tokens; RANK_LABELS only covers ${RANK_LABELS.length} — extend the literal list in pages/universe.ts`);
   }
-  return ranks;
+  return RANK_LABELS.slice(0, count);
 }
 
 interface UniverseRow {
@@ -148,7 +168,29 @@ function poolCell(poolId: string): RenderedCell {
   return { html: `<span title="${escape(poolId)}">${escape(short)}</span>` };
 }
 
-const COLUMNS = ['rank', 'ticker', 'venue', 'pool', 'depth ADA', 'price ADA/token', '24h change %', 'ext rows', 'ext first', 'ext last', 'note'];
+/**
+ * A sortable header links to its own `?sort=` value (final review, IMPORTANT 5's "while you are
+ * there" note) — sorting previously required hand-editing the URL. Only a header with a real entry in
+ * `UNIVERSE_SORTS` is a link; the rest (venue, pool, price, ext first/last, note — none of which this
+ * page can sort by) render as plain text, exactly as before this change.
+ */
+function sortHeader(label: string, sort: (typeof UNIVERSE_SORTS)[number]): RenderedCell {
+  return { html: `<a href="/universe?sort=${escape(sort)}">${escape(label)}</a>` };
+}
+
+const COLUMNS: Array<string | RenderedCell> = [
+  sortHeader('rank', 'rank'),
+  sortHeader('ticker', 'ticker'),
+  'venue',
+  'pool',
+  sortHeader('depth ADA', 'depth'),
+  'price ADA/token',
+  sortHeader('24h change %', 'change'),
+  sortHeader('ext rows', 'coverage'),
+  'ext first',
+  'ext last',
+  'note',
+];
 
 function tickerCell(ticker: string): RenderedCell {
   return { html: `<a href="/runs?ticker=${escape(ticker)}">${escape(ticker)}</a>` };
@@ -194,7 +236,7 @@ function explanatoryLine(latest: TokenSnapshot[]): string {
   if (tickTs === undefined) {
     return 'no collector snapshot has been recorded yet — depth, price and 24h change cannot be shown for any token.';
   }
-  return `newest collector tick: ${tickTs.toISOString()} — depth and price are the deepest pool (by ADA reserve) per token AT that tick; 24h change compares against the newest tick at or before 24 hours earlier, degrading to the nearest older tick (within a 26h window) rather than showing nothing on a missed collection.`;
+  return `newest collector tick: ${tickTs.toISOString()} — depth and price are the deepest pool (by pool TVL) per token AT that tick; 24h change compares against the newest tick at or before 24 hours earlier, degrading to the nearest older tick (within a 26h window) rather than showing nothing on a missed collection.`;
 }
 
 export function renderUniverse(input: {

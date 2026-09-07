@@ -62,11 +62,6 @@
  * arithmetic, reviewed one entry at a time).
  *
  * WHAT THIS STILL DOES NOT COVER (read before assuming the gap list is empty):
- *   - `++` / `--` (pre/post increment and decrement) are not `BinaryExpression` nodes in the TS AST,
- *     so a hand-rolled running total built with `total++` would not be caught by this scan. No
- *     instance exists in this package today; if one is ever added, it needs its own check (a
- *     `PrefixUnaryExpression`/`PostfixUnaryExpression` walk keyed on `++`/`--`), which this guard does
- *     not currently do.
  *   - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`) are not treated as arithmetic here, matching
  *     both prior rounds — spec §4.1's concern is financial figures, and nothing in this package has a
  *     legitimate reason to bit-shift a lovelace amount, so this is an intentional non-goal, not an
@@ -93,8 +88,9 @@
  *     binary operator, so nothing here inspects its arguments for "is this a financial figure".
  *   - Unary negation of an already-computed figure is not caught either — `const netLoss = -pnl;` is a
  *     `PrefixUnaryExpression` with operator `-` and a single operand, never a `BinaryExpression`, so it
- *     falls outside this walk entirely. This is the same family as the already-noted `++`/`--` gap: a
- *     unary AST shape this scan does not look at, not a binary one it looks at and misjudges.
+ *     falls outside the arithmetic walk entirely (the separate `++`/`--` walk added in round 7 below
+ *     only matches the `PlusPlusToken`/`MinusMinusToken` operators, not plain unary `-`/`+`) — a unary
+ *     AST shape this scan does not look at, not one it looks at and misjudges.
  *   - A helper defined in a SIBLING package (e.g. a new function added to `@ctb/engine` or a brand-new
  *     workspace package) and imported into `packages/dashboard/src` would defeat spec §4.1's actual
  *     invariant — the dashboard would still be "computing" a figure, just one line removed — while
@@ -131,6 +127,19 @@
  * green again with seven entries, none of them touched; reintroducing the raw subtraction in
  * `server.ts` (without a matching allowlist entry) turns it red again, proving this file's own scan —
  * not a since-removed allowlist entry — is what would catch a regression back to the old shape.
+ *
+ * Round 7 (final review, IMPORTANT 3): this file used to say, of `++`/`--`, "No instance exists in
+ * this package today; if one is ever added, it needs its own check" — a statement that stopped being
+ * true the moment `pages/universe.ts`'s `buildRanks` started counting a rank with `rank++` specifically
+ * BECAUSE this scan never looked at increment/decrement nodes (see that file's own header for the full
+ * story). A reviewer proved the hole was live, not hypothetical: they added a `gainers` count built the
+ * identical way (`n++`), rendered it on the page, and this guard stayed green over a real market figure
+ * the dashboard had computed itself. `findArithmeticViolations` now also walks
+ * `PrefixUnaryExpression`/`PostfixUnaryExpression` nodes for the `++`/`--` operators, routed through the
+ * SAME `violations`/`allowedHits`/`ALLOWED_ARITHMETIC` machinery the `BinaryExpression` walk already
+ * uses (so a legitimate future counter, if one is ever needed, gets the identical one-line, cardinality-
+ * pinned review path — nothing new to learn). `buildRanks` itself no longer uses `++` at all, so no
+ * allowlist entry was needed to make this guard green again.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -207,6 +216,26 @@ const ARITHMETIC_OPERATOR_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.AsteriskAsteriskEqualsToken,
 ]);
 
+/** The two increment/decrement operators (round 7, IMPORTANT 3). `++`/`--` are `PrefixUnaryExpression`/
+ * `PostfixUnaryExpression` nodes, never `BinaryExpression`s, so they need their own operator-kind check
+ * rather than a `BinaryExpression`'s `operatorToken` — see `isIncrementOrDecrement` below. */
+const INCREMENT_DECREMENT_OPERATOR_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.PlusPlusToken,
+  ts.SyntaxKind.MinusMinusToken,
+]);
+
+/** True for `x++`, `++x`, `x--`, `--x` — the shape a running total or a rank counter is built with,
+ * closing the blind spot `pages/universe.ts`'s `buildRanks` exploited (round 7, IMPORTANT 3). Neither
+ * `ts.isPrefixUnaryExpression` nor `ts.isPostfixUnaryExpression` narrows `.operator` to just these two
+ * kinds on its own — a prefix `-x`/`+x` is the SAME node kind with a different `.operator` value, which
+ * is exactly why `isNumericConstant` above has to check `.operator` itself rather than relying on the
+ * node type alone. */
+function isIncrementOrDecrement(node: ts.Node): node is ts.PrefixUnaryExpression | ts.PostfixUnaryExpression {
+  if (ts.isPrefixUnaryExpression(node)) return INCREMENT_DECREMENT_OPERATOR_KINDS.has(node.operator);
+  if (ts.isPostfixUnaryExpression(node)) return INCREMENT_DECREMENT_OPERATOR_KINDS.has(node.operator);
+  return false;
+}
+
 /**
  * True when `node` is a numeric constant: a plain numeric or bigint literal (`2`, `1_000_000n`), or a
  * unary-signed one (`-1`, `+2`), optionally parenthesised (`(1)`). `2 * 3` is a constant expression,
@@ -227,22 +256,28 @@ function isNumericConstant(node: ts.Expression): boolean {
 /**
  * Walks the whole AST (`ts.forEachChild` recurses into every nesting depth — arrow function bodies,
  * call arguments, ternaries, a template literal's `${...}` holes — the same way the parser itself
- * does). Returns the exact text of every arithmetic `BinaryExpression` that is neither a numeric
- * constant on both sides nor on the reviewed allowlist (`violations`), alongside the allowlist KEY
- * (`${rel}::${exprText}`) of every node that WAS let through by the allowlist (`allowedHits`) — the
- * latter is how the `it` below tallies occurrences per entry and enforces `count`.
+ * does). Returns the exact text of every arithmetic `BinaryExpression`, and (round 7, IMPORTANT 3)
+ * every `++`/`--` `PrefixUnaryExpression`/`PostfixUnaryExpression`, that is neither a numeric constant
+ * on both sides (increments have no "both sides" — they are never let through on that basis) nor on the
+ * reviewed allowlist (`violations`), alongside the allowlist KEY (`${rel}::${exprText}`) of every node
+ * that WAS let through by the allowlist (`allowedHits`) — the latter is how the `it` below tallies
+ * occurrences per entry and enforces `count`. Both node shapes share the identical
+ * `isAllowed`/`ALLOWED_ARITHMETIC`/`count` machinery, so a legitimate future `x++` needs the same kind
+ * of reviewed, cardinality-pinned entry a `BinaryExpression` already does — nothing new to learn.
  */
 function findArithmeticViolations(sourceFile: ts.SourceFile, rel: string): { violations: string[]; allowedHits: string[] } {
   const violations: string[] = [];
   const allowedHits: string[] = [];
+  function record(exprText: string): void {
+    if (isAllowed(rel, exprText)) allowedHits.push(`${rel}::${exprText}`);
+    else violations.push(exprText);
+  }
   function visit(node: ts.Node): void {
     if (ts.isBinaryExpression(node) && ARITHMETIC_OPERATOR_KINDS.has(node.operatorToken.kind)) {
       const bothConstant = isNumericConstant(node.left) && isNumericConstant(node.right);
-      if (!bothConstant) {
-        const exprText = node.getText(sourceFile);
-        if (isAllowed(rel, exprText)) allowedHits.push(`${rel}::${exprText}`);
-        else violations.push(exprText);
-      }
+      if (!bothConstant) record(node.getText(sourceFile));
+    } else if (isIncrementOrDecrement(node)) {
+      record(node.getText(sourceFile));
     }
     ts.forEachChild(node, visit);
   }

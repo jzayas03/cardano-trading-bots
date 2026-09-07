@@ -83,6 +83,22 @@ export interface DashboardReads {
 const MIN_LIMIT = 1;
 const MAX_LIMIT = 500;
 
+/**
+ * MINOR (final review): spec §4.3 says "no page issues a query without a `LIMIT` except the digest's
+ * own aggregates" — `latestSnapshotsPerToken`, `snapshotsAt` and `externalCoverageAll` below are none
+ * of those (they are `/universe`'s reads, not the digest's), yet none of them carried a literal
+ * `LIMIT`. They are still STRUCTURALLY bounded without one: `DISTINCT ON (base_unit)` caps the first
+ * two to one row per distinct `base_unit` in `pool_snapshots`, and `GROUP BY m.base_unit` caps the
+ * third to one row per distinct `base_unit` in `external_pool_map` — both tables' row counts track the
+ * 20-token universe (`packages/universe/universe.json`), not request volume. A literal `LIMIT` doesn't
+ * change what any of the three can return today, but it satisfies the spec's own wording literally
+ * rather than resting on an argument a future reader has to re-derive from the schema, and gives each
+ * query a hard ceiling if this package is ever pointed at a database whose `base_unit` cardinality has
+ * grown far past any conceivable token universe. Chosen generously (50x the current universe size, not
+ * tuned to it) so ordinary growth of the token list never needs this constant revisited.
+ */
+const UNIVERSE_QUERY_LIMIT = 1000;
+
 interface TokenSnapshotRaw {
   base_unit: string;
   dex: string;
@@ -170,7 +186,8 @@ export class PgDashboardReads implements DashboardReads {
     const res = await this.q.query<TokenSnapshotRaw>(
       `${TOKEN_SNAPSHOT_SELECT}
       WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots)
-      ORDER BY base_unit, tvl_lovelace DESC, pool_id`,
+      ORDER BY base_unit, tvl_lovelace DESC, pool_id
+      LIMIT ${UNIVERSE_QUERY_LIMIT}`,
     );
     return res.rows.map(rowToTokenSnapshot);
   }
@@ -193,7 +210,8 @@ export class PgDashboardReads implements DashboardReads {
     const res = await this.q.query<TokenSnapshotRaw>(
       `${TOKEN_SNAPSHOT_SELECT}
       WHERE tick_ts <= $1 AND tick_ts >= $1 - ($2 * interval '1 millisecond')
-      ORDER BY base_unit, tick_ts DESC, tvl_lovelace DESC, pool_id`,
+      ORDER BY base_unit, tick_ts DESC, tvl_lovelace DESC, pool_id
+      LIMIT ${UNIVERSE_QUERY_LIMIT}`,
       [at, withinMs],
     );
     return res.rows.map(rowToTokenSnapshot);
@@ -215,7 +233,8 @@ export class PgDashboardReads implements DashboardReads {
          FROM external_pool_map m
          LEFT JOIN candles_external ce
            ON ce.base_unit = m.base_unit AND ce.source = m.source AND ce.external_pool_id = m.external_pool_id
-        GROUP BY m.base_unit`,
+        GROUP BY m.base_unit
+        LIMIT ${UNIVERSE_QUERY_LIMIT}`,
     );
     return res.rows.map((r) => ({ unit: r.unit, rows: Number(r.rows), first: r.first, last: r.last }));
   }

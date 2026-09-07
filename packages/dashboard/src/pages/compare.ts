@@ -10,7 +10,7 @@
  * Order is the order the operator listed the ids in — never sorted, and never re-derived from
  * `compareRunRows`' own return value, which could tempt a re-sort by run id.
  */
-import { compareRunRows, MIXED_TOKENS_WARNING, type CompareRunInput, type CompareRunRow } from '@ctb/reports';
+import { compareRunRows, COMPARE_REHEARSAL_BANNER, MIXED_TOKENS_WARNING, type CompareRunInput, type CompareRunRow } from '@ctb/reports';
 import { multiChartHtml, normalisedEquitySeries } from '../chart.js';
 import { escape, layout, table } from '../html.js';
 
@@ -66,5 +66,10 @@ export function renderCompare(input: { inputs: CompareRunInput[]; now: Date }): 
   }
 
   const body = sections.join('\n');
-  return layout(`Compare ${ids.join(',')}`, body, { rehearsal, chart: series.length > 0 });
+  // MINOR (final review): the shared `REHEARSAL_BANNER` ("REHEARSAL — synthetic data — not evidence")
+  // reads as "the whole page is synthetic," which is wrong on a mixed comparison of one rehearsal run
+  // and one real one — only SOME of the rows are. `COMPARE_REHEARSAL_BANNER` is the exact wording
+  // `report --compare`'s `printCompare` already uses for this same case (see `@ctb/reports`'s own
+  // comment on the constant), so the CLI and this page agree.
+  return layout(`Compare ${ids.join(',')}`, body, { rehearsal, rehearsalText: COMPARE_REHEARSAL_BANNER, chart: series.length > 0 });
 }
