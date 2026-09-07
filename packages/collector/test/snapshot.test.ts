@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucketTick, poolIdOf, poolToSnapshot, type PoolLike } from '../src/pure.js';
+import { bucketTick, poolIdOf, poolToSnapshot, reconcileTickTs, type PoolLike } from '../src/pure.js';
 
 const SNEK = { policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', nameHex: '534e454b' };
 const ctx = { tickTs: new Date('2026-09-05T15:00:00Z'), blockHeight: 12_345_678, observedAt: new Date('2026-09-05T15:00:07Z') };
@@ -68,5 +68,37 @@ describe('bucketTick', () => {
 describe('poolIdOf', () => {
   it('joins dex and identifier', () => {
     expect(poolIdOf({ dex: 'MinswapV2', identifier: 'abc' })).toBe('MinswapV2:abc');
+  });
+});
+
+/**
+ * The pure rule behind the late-wake fix, exercised directly. `runTick`'s own tests cover it in
+ * context; these pin the boundaries of the rule itself, including the early-wake case that the
+ * caller-pins-before-sleeping design exists to protect (finding F7).
+ */
+describe('reconcileTickTs', () => {
+  const INTERVAL = 600;
+  const at = (h: number, m: number, s = 0): Date => new Date(Date.UTC(2026, 8, 7, h, m, s));
+
+  it('keeps the pinned boundary when the wake is punctual or still inside its bucket', () => {
+    expect(reconcileTickTs(at(4, 0), at(4, 0, 0), INTERVAL)).toEqual(at(4, 0));
+    expect(reconcileTickTs(at(4, 0), at(4, 0, 1), INTERVAL)).toEqual(at(4, 0));
+    expect(reconcileTickTs(at(4, 0), at(4, 9, 59), INTERVAL)).toEqual(at(4, 0));
+  });
+
+  it('never moves the label EARLIER than the pinned boundary, however early the wake', () => {
+    expect(reconcileTickTs(at(4, 0), new Date(at(4, 0).getTime() - 1), INTERVAL)).toEqual(at(4, 0));
+    expect(reconcileTickTs(at(4, 0), at(3, 55), INTERVAL)).toEqual(at(4, 0));
+    expect(reconcileTickTs(at(4, 0), at(1, 0), INTERVAL)).toEqual(at(4, 0));
+  });
+
+  it('moves it forward to the bucket the clock is in when the wake is late', () => {
+    // the measured shape: pinned 04:00, woke 04:10:26
+    expect(reconcileTickTs(at(4, 0), at(4, 10, 26), INTERVAL)).toEqual(at(4, 10));
+    expect(reconcileTickTs(at(4, 30), at(4, 42, 23), INTERVAL)).toEqual(at(4, 40));
+  });
+
+  it('does not backfill boundaries missed while suspended (worst measured case: 69 minutes)', () => {
+    expect(reconcileTickTs(at(4, 0), at(5, 9, 20), INTERVAL)).toEqual(at(5, 0));
   });
 });

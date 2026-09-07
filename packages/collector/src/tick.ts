@@ -1,6 +1,6 @@
 import type { Pair } from '@ctb/universe';
 import type { RunError, RunSummary, SnapshotRepo } from './repo.js';
-import { bucketTick, poolIdOf, poolToSnapshot } from './snapshot.js';
+import { bucketTick, poolIdOf, poolToSnapshot, reconcileTickTs } from './snapshot.js';
 import type { DiscoveryCallsSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, SnapshotRow } from './types.js';
 
@@ -48,7 +48,8 @@ export interface TickDeps {
    * about to sleep toward BEFORE sleeping and passes it back in here; if the tick were instead
    * bucketed from `now()` after an early wake, it could land one bucket EARLIER than the boundary
    * actually slept for. Omitted for the immediate (non-boundary) first tick, which still derives
-   * from `now()`.
+   * from `now()`. Reconciled here against the clock, so a boundary that went stale while the caller
+   * was suspended is moved FORWARD to the bucket the tick is really in — see `reconcileTickTs`.
    */
   tickTs?: Date;
 }
@@ -59,7 +60,10 @@ export interface TickDeps {
  */
 export async function runTick(d: TickDeps): Promise<RunSummary> {
   const startedAt = d.now();
-  const tickTs = d.tickTs ?? bucketTick(startedAt, d.intervalSec);
+  // A caller-pinned boundary is reconciled against the clock: it may be stale if the caller's sleep
+  // overshot (a suspended machine), and `reconcileTickTs` never moves it earlier. Applied here
+  // rather than in the collect loop so every caller of runTick gets it, not just that one.
+  const tickTs = d.tickTs ? reconcileTickTs(d.tickTs, startedAt, d.intervalSec) : bucketTick(startedAt, d.intervalSec);
   const runId = await d.repo.startRun(tickTs, startedAt);
   d.source.resetProviderCalls();
   const errors: RunError[] = [];
