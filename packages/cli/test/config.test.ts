@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_VENUES, VENUE_NAMES } from '@ctb/collector';
-import { loadConfig } from '../src/config.js';
+import { deriveDashboardUrl, loadConfig } from '../src/config.js';
 
 const base = { DATABASE_URL: 'postgres://ctb:x@localhost:5433/ctb' };
+const dashboardDatabaseUrl = deriveDashboardUrl(base.DATABASE_URL);
 
 describe('loadConfig', () => {
   it('applies defaults', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
-      databaseUrl: base.DATABASE_URL, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
+      databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
       venues: DEFAULT_VENUES, refreshPolicy: 'deepest',
     });
   });
@@ -33,6 +34,7 @@ describe('loadConfig', () => {
     // fail closed and name the variable, exactly as when it's unset.
     expect(loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: false })).toEqual({
       databaseUrl: base.DATABASE_URL,
+      dashboardDatabaseUrl,
       blockfrostProjectId: null,
       intervalSec: 600,
       logLevel: 'info',
@@ -102,5 +104,32 @@ describe('loadConfig', () => {
 
   it('fails closed on an unrecognized COLLECT_REFRESH value', () => {
     expect(() => loadConfig({ ...base, COLLECT_REFRESH: 'shallow' }, { blockfrost: false })).toThrow(/COLLECT_REFRESH/);
+  });
+
+  it('derives dashboardDatabaseUrl from DATABASE_URL when DASHBOARD_DATABASE_URL is unset', () => {
+    expect(loadConfig(base, { blockfrost: false }).dashboardDatabaseUrl).toBe(
+      'postgres://ctb_dashboard:ctb_dashboard_local_only@localhost:5433/ctb',
+    );
+  });
+
+  it('treats an empty DASHBOARD_DATABASE_URL as unset (derives it)', () => {
+    expect(loadConfig({ ...base, DASHBOARD_DATABASE_URL: '' }, { blockfrost: false }).dashboardDatabaseUrl).toBe(
+      dashboardDatabaseUrl,
+    );
+  });
+
+  it('an explicit DASHBOARD_DATABASE_URL wins over the derived one', () => {
+    const explicit = 'postgres://someone:else@otherhost:9999/otherdb';
+    expect(loadConfig({ ...base, DASHBOARD_DATABASE_URL: explicit }, { blockfrost: false }).dashboardDatabaseUrl).toBe(
+      explicit,
+    );
+  });
+});
+
+describe('deriveDashboardUrl', () => {
+  it('swaps in the ctb_dashboard credentials, leaving host/port/database untouched', () => {
+    expect(deriveDashboardUrl('postgres://ctb:ctb_local_only@localhost:5433/ctb')).toBe(
+      'postgres://ctb_dashboard:ctb_dashboard_local_only@localhost:5433/ctb',
+    );
   });
 });
