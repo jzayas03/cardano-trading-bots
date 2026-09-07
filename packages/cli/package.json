@@ -8,6 +8,7 @@
     "@ctb/collector": "*",
     "@ctb/db": "*",
     "@ctb/engine": "*",
+    "@ctb/reports": "*",
     "@ctb/sim-executor": "*",
     "@ctb/universe": "*",
     "dotenv": "^16.4.0",

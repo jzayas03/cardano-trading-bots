@@ -1,5 +1,8 @@
 import { z } from 'zod';
 import { DEFAULT_VENUES, isDexName, type DexName } from '@ctb/collector';
+import { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';
+
+export { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';
 
 export interface Config {
   databaseUrl: string;
@@ -43,9 +46,6 @@ const schema = z.object({
       'COLLECT_REFRESH must be "deepest" or "all"',
     ),
 });
-
-/** The collector's default boundary; `status` and `paper` fall back to it for a run row that carries no interval of its own. */
-export const DEFAULT_COLLECT_INTERVAL_SEC = 600;
 
 export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean }): Config {
   const parsed = schema.safeParse(env);
