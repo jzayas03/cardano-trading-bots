@@ -6,6 +6,7 @@ export { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';
 
 export interface Config {
   databaseUrl: string;
+  dashboardDatabaseUrl: string;
   blockfrostProjectId: string | null;
   intervalSec: number;
   logLevel: string;
@@ -13,8 +14,19 @@ export interface Config {
   refreshPolicy: 'deepest' | 'all';
 }
 
+/** DATABASE_URL with the read-only role's credentials; everything else (host, port, database) identical. */
+export function deriveDashboardUrl(databaseUrl: string): string {
+  const u = new URL(databaseUrl);
+  u.username = 'ctb_dashboard';
+  u.password = 'ctb_dashboard_local_only';
+  return u.toString();
+}
+
 const schema = z.object({
   DATABASE_URL: z.string().min(1, 'DATABASE_URL is required'),
+  // Leave unset (or blank, same '' -> undefined preprocessing as the other optional knobs below) to
+  // derive it from DATABASE_URL with the ctb_dashboard user (migration 0006).
+  DASHBOARD_DATABASE_URL: z.preprocess((v) => (v === '' ? undefined : v), z.string().url().optional()),
   // dotenv sets an unset-but-present `KEY=` line to '', not undefined; without this preprocess
   // `.optional()` never fires and commands that don't need Blockfrost (migrate/status) fail closed
   // on a blank BLOCKFROST_PROJECT_ID= line in .env, which .env.example ships by design.
@@ -66,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
   }
   return {
     databaseUrl: v.DATABASE_URL,
+    dashboardDatabaseUrl: v.DASHBOARD_DATABASE_URL ?? deriveDashboardUrl(v.DATABASE_URL),
     blockfrostProjectId: v.BLOCKFROST_PROJECT_ID ?? null,
     intervalSec: v.COLLECT_INTERVAL_SECONDS,
     logLevel: v.LOG_LEVEL ?? 'info',
