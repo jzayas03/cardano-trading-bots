@@ -5,7 +5,7 @@ import { heartbeatAgeCell, isHeartbeatStale } from '@ctb/reports';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
-import { digestLines, type DigestInput, utcMidnight } from '../digest.js';
+import { digestLines } from '../digest.js';
 
 export { heartbeatAgeCell, isHeartbeatStale };
 
@@ -18,48 +18,6 @@ export function parseStatusArgs(args: string[]): { digest: boolean } {
     else throw new Error(`unknown argument ${a}\n${USAGE}`);
   }
   return out;
-}
-
-/** The digest's inputs, from `collector_runs` only. Exported for the pg test; pure aggregation, no writes. */
-export async function loadDigestInput(db: { query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }> }, intervalSec: number, venuesConfigured: string[], now: Date): Promise<DigestInput> {
-  const last = await db.query<{ tick_ts: Date; finished_at: Date; pools_written: number; pools_failed: number; provider_calls: number; discovered: boolean }>(
-    'SELECT tick_ts, finished_at, pools_written, pools_failed, provider_calls, discovered FROM collector_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1',
-  );
-  const agg = await db.query<{ ticks_24h: string; discovery_calls_today: string; refresh_calls_today: string; failures_24h: string; errors_24h: string; unfinished: string; last_discovery: Date | null; tokens_total: string; tokens_covered: string }>(
-    `SELECT
-       (SELECT count(DISTINCT tick_ts) FROM collector_runs WHERE finished_at IS NOT NULL AND tick_ts > $1::timestamptz - interval '24 hours') AS ticks_24h,
-       -- A refresh tick that retried a lost venue carries that scan's calls in discovery_calls (jsonb
-       -- per venue): count them as one-off discovery cost, not as recurring refresh, or a returning
-       -- MinswapV2 (~3,300 calls) projects as tens of thousands of refresh calls per day.
-       (SELECT coalesce(sum(provider_calls), 0) FROM collector_runs WHERE started_at >= $2::timestamptz AND discovered)
-         + (SELECT coalesce(sum(v.calls), 0) FROM collector_runs r, LATERAL (SELECT sum(value::int) AS calls FROM jsonb_each_text(r.discovery_calls)) v
-            WHERE r.started_at >= $2::timestamptz AND NOT r.discovered AND r.discovery_calls IS NOT NULL) AS discovery_calls_today,
-       (SELECT coalesce(sum(provider_calls), 0) FROM collector_runs WHERE started_at >= $2::timestamptz AND NOT discovered)
-         - (SELECT coalesce(sum(v.calls), 0) FROM collector_runs r, LATERAL (SELECT sum(value::int) AS calls FROM jsonb_each_text(r.discovery_calls)) v
-            WHERE r.started_at >= $2::timestamptz AND NOT r.discovered AND r.discovery_calls IS NOT NULL) AS refresh_calls_today,
-       (SELECT count(*) FROM tokens) AS tokens_total,
-       (SELECT count(DISTINCT base_unit) FROM pool_snapshots WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots)) AS tokens_covered,
-       (SELECT coalesce(sum(pools_failed), 0) FROM collector_runs WHERE tick_ts > $1::timestamptz - interval '24 hours') AS failures_24h,
-       (SELECT coalesce(sum(jsonb_array_length(errors)), 0) FROM collector_runs WHERE tick_ts > $1::timestamptz - interval '24 hours') AS errors_24h,
-       (SELECT count(*) FROM collector_runs WHERE finished_at IS NULL AND started_at > $1::timestamptz - interval '24 hours') AS unfinished,
-       (SELECT max(tick_ts) FROM collector_runs WHERE discovered AND finished_at IS NOT NULL) AS last_discovery`,
-    [now, utcMidnight(now)],
-  );
-  const venues = await db.query<{ dex: string }>('SELECT DISTINCT dex FROM pool_snapshots WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots) ORDER BY dex');
-  // "Since" not "at": a venue lost at discovery and brought back by a later tick's retry has its
-  // snapshots on that later tick, and must stop reading as lost from then on.
-  const discoveryVenues = await db.query<{ dex: string }>(
-    'SELECT DISTINCT dex FROM pool_snapshots WHERE tick_ts >= (SELECT max(tick_ts) FROM collector_runs WHERE discovered AND finished_at IS NOT NULL) ORDER BY dex',
-  );
-  const a = agg.rows[0]!;
-  const l = last.rows[0];
-  return {
-    intervalSec,
-    lastFinished: l ? { tickTs: l.tick_ts, finishedAt: l.finished_at, poolsWritten: l.pools_written, poolsFailed: l.pools_failed, providerCalls: l.provider_calls, discovered: l.discovered } : null,
-    ticksLast24h: Number(a.ticks_24h), discoveryCallsToday: Number(a.discovery_calls_today), refreshCallsToday: Number(a.refresh_calls_today), lastDiscoveryAt: a.last_discovery,
-    venuesConfigured, venuesSinceLastDiscovery: discoveryVenues.rows.map((r) => r.dex), venuesInLastTick: venues.rows.map((r) => r.dex), tokensTotal: Number(a.tokens_total), tokensCoveredInLastTick: Number(a.tokens_covered),
-    poolFailures24h: Number(a.failures_24h), venueErrors24h: Number(a.errors_24h), unfinishedRuns: Number(a.unfinished),
-  };
 }
 
 export async function statusCommand(log: Logger, args: string[] = []): Promise<void> {
@@ -83,7 +41,7 @@ export async function statusCommand(log: Logger, args: string[] = []): Promise<v
       // The morning screen: the digest lines replace the ten-row run table, everything else stays.
       const now = new Date();
       console.log(`=== digest ${now.toISOString()}`);
-      for (const line of digestLines(await loadDigestInput(db, cfg.intervalSec, [...cfg.venues], now), now)) console.log(line);
+      for (const line of digestLines(await repo.digestInput(cfg.intervalSec, [...cfg.venues], now), now)) console.log(line);
     } else console.table(runs.map((r) => ({
       id: r.id, tick: r.tickTs.toISOString(), finished: r.finishedAt ? 'yes' : 'NO', attempted: r.poolsAttempted,
       written: r.poolsWritten, failed: r.poolsFailed, calls: r.providerCalls, discovered: r.discovered, errors: r.errors.length,

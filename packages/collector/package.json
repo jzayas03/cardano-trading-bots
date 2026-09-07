@@ -5,6 +5,7 @@
   "exports": "./src/index.ts",
   "dependencies": {
     "@ctb/db": "*",
+    "@ctb/reports": "*",
     "@ctb/universe": "*",
     "@indigo-labs/dexter": "5.4.10",
     "pg": "^8.13.0"
