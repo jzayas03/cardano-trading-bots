@@ -15,11 +15,20 @@
  *
  * Finding I1 (review round 1): the call list above is hand-written, so a NEW method added to
  * `PgDashboardReads` is simply never called here and the guard stays green — a reviewer proved this
- * by adding `async purgeRuns() { await this.q.query('DELETE FROM runs'); }` to the class. The second
- * `it` below closes that: it enumerates `PgDashboardReads.prototype`'s own method names at runtime and
- * asserts the set is EXACTLY the set this file exercises above. Adding any method — read or write —
- * fails this assertion until its name is added to `EXERCISED_METHODS` *and* a call to it is added
- * above that proves it SELECT/WITH-only; a write method can never clear both bars at once.
+ * by adding `async purgeRuns() { await this.q.query('DELETE FROM runs'); }` to the class. Round 1's
+ * fix added an `EXERCISED_METHODS` set and asserted `PgDashboardReads.prototype`'s own method names
+ * equalled it exactly — but that is a NAME check, not a call. A second review round proved a name-list
+ * can be satisfied without ever running the method: adding `'purgeRuns'` to `EXERCISED_METHODS` (one
+ * word) turned the guard green while `purgeRuns` itself was never invoked, so its `DELETE` never
+ * reached the recorder and the SELECT/WITH check never saw it. The claim in round 1's comment — "a
+ * write method can never clear both bars at once" — was false as written: the two bars were "is its
+ * name in the set" and "is every RECORDED statement clean", and a method that is never called adds no
+ * statement to check, so it can't fail a check it never reaches.
+ *
+ * `EXERCISED_METHODS` is gone. The second `it` below instead REFLECTIVELY INVOKES every one of
+ * `PgDashboardReads.prototype`'s own method names against the recorder, using `GENERIC_SAFE_ARGS`
+ * sliced to each method's declared arity — there is no longer a list a reviewer can edit by hand
+ * without also making the method run.
  */
 import type pg from 'pg';
 import { PgRunRepo } from '@ctb/engine';
@@ -48,8 +57,16 @@ class RecordingQueryable implements Queryable {
 const READ_ONLY_PREFIX = /^\s*(SELECT|WITH)\b/i;
 const FORBIDDEN_KEYWORD = /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\b/i;
 
-/** Every `PgDashboardReads` method this file actually drives through the recorder above. */
-const EXERCISED_METHODS = new Set(['listRuns']);
+/**
+ * One fixed argument list used to invoke EVERY `PgDashboardReads.prototype` method reflectively,
+ * sliced to each method's declared arity (`Function.prototype.length`). Chosen to be exactly what
+ * `listRuns(filter, limit, offset)` needs today (an empty filter object, a positive limit, a zero
+ * offset) and a plausible-enough shape for a future read method (an object for a filter-shaped
+ * parameter, small numbers for anything limit/offset/id-shaped). No runtime reflection can recover a
+ * method's real parameter TYPES, so this is deliberately generic, not tailored — see the note on the
+ * reflective test below for what happens when a method's body cannot tolerate that.
+ */
+const GENERIC_SAFE_ARGS: readonly unknown[] = [{}, 1, 0];
 
 describe('dashboard read-only guard', () => {
   it('every SQL statement PgDashboardReads.listRuns and the RunRepo methods the detail page uses issue is SELECT/WITH only', async () => {
@@ -105,15 +122,56 @@ describe('dashboard read-only guard', () => {
     expect(rec.calls.at(-1)!.values).toEqual([1, 0]);
   });
 
-  it('exercises every PgDashboardReads prototype method (I1) — a method added to the class must be added here, and driven above, before this passes again', () => {
-    const actual = new Set(
-      Object.getOwnPropertyNames(PgDashboardReads.prototype).filter((name) => name !== 'constructor'),
-    );
-    expect(
-      actual,
-      'PgDashboardReads.prototype has a method this guard does not know about — a new method (read or ' +
-        'write) is invisible to the SELECT/WITH check above until it is added to EXERCISED_METHODS and ' +
-        'a call to it is added to the test that drives the recorder',
-    ).toEqual(EXERCISED_METHODS);
+  /**
+   * Finding I1, round 2: reflectively CALLS every `PgDashboardReads.prototype` method — not merely
+   * enumerates its name — against a fresh recorder, then runs the same SELECT/WITH check over every
+   * statement that invocation produced. There is no name-list to satisfy by editing text: a method
+   * only passes by actually running and issuing nothing but SELECT/WITH.
+   *
+   * A method whose body throws (or whose returned promise rejects) when given `GENERIC_SAFE_ARGS` is
+   * NOT skipped — the test fails loudly, by name, with the args that were tried. That failure is the
+   * intended outcome for a method this generic invocation genuinely cannot drive (e.g. one that calls
+   * a string-only method on what should have been a string): it tells whoever added the method to give
+   * it an explicit, correctly-typed call, the same way `listRuns` already gets one in the `it` above —
+   * never to weaken or special-case this test to make the failure go away.
+   */
+  it('reflectively invokes every PgDashboardReads prototype method and asserts everything it issues is SELECT/WITH only (I1) — a method can no longer pass by being named and never called', async () => {
+    const rec = new RecordingQueryable();
+    const reads = new PgDashboardReads(rec);
+    const methodNames = Object.getOwnPropertyNames(PgDashboardReads.prototype).filter((name) => name !== 'constructor');
+    expect(methodNames.length, 'PgDashboardReads has no methods at all — this test would vacuously pass, which is itself a bug').toBeGreaterThan(0);
+
+    // Cast once, to a generic callable-by-name shape — there is no way to type an arbitrary FUTURE
+    // method on this interface, and that is exactly why this test exists.
+    const callable = reads as unknown as Record<string, (...args: unknown[]) => unknown>;
+
+    for (const name of methodNames) {
+      const method = callable[name];
+      if (typeof method !== 'function') throw new Error(`PgDashboardReads.${name} is not callable — the prototype has a non-method own property named ${name}`);
+      const args = GENERIC_SAFE_ARGS.slice(0, method.length);
+      let result: unknown;
+      try {
+        result = method.apply(reads, args);
+      } catch (err) {
+        throw new Error(
+          `PgDashboardReads.${name} threw when invoked generically with ${JSON.stringify(args)} — give it an ` +
+            `explicit, correctly-typed invocation in this test instead of relying on the generic one: ${String(err)}`,
+        );
+      }
+      if (result instanceof Promise) {
+        await result.catch((err: unknown) => {
+          throw new Error(
+            `PgDashboardReads.${name} rejected when invoked generically with ${JSON.stringify(args)} — give it an ` +
+              `explicit, correctly-typed invocation in this test instead of relying on the generic one: ${String(err)}`,
+          );
+        });
+      }
+    }
+
+    expect(rec.statements.length, 'no PgDashboardReads method issued any query — the reflective invocation above found nothing to check').toBeGreaterThan(0);
+    for (const sql of rec.statements) {
+      expect(sql, `not SELECT/WITH: ${sql}`).toMatch(READ_ONLY_PREFIX);
+      expect(sql, `contains a forbidden keyword: ${sql}`).not.toMatch(FORBIDDEN_KEYWORD);
+    }
   });
 });
