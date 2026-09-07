@@ -19,6 +19,8 @@ const RETRY_BASE_MS = 5_000;
 const RETRY_MAX_MS = 60_000;
 /** Widest the adaptive spacing will go: past this a sweep is unusably slow and the limit is something else. */
 export const MAX_SPACING_MS = 30_000;
+/** The candle interval GeckoTerminal history is imported at (`minute?aggregate=5`). A run over it must measure coverage at THIS interval, not the collector's. */
+export const EXTERNAL_CANDLE_INTERVAL_SEC = 300;
 /** How much of the widened spacing survives each success: back to the base in about a dozen clean calls. */
 const SPACING_DECAY = 0.85;
 
