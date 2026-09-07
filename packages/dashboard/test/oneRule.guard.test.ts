@@ -4,51 +4,89 @@
  *
  * Round 1 of this guard keyed on four hardcoded identifier names plus two literal patterns and caught
  * only 1 of 6 realistic violations (see the task-5-fix-1 report for that table). It was replaced with
- * a SHAPE rule: any binary arithmetic operator (`+ - * / %`, including a compound-assignment form
- * like `+=`) sitting between two token-like operands, anywhere in the package outside `chart.ts`
- * (spec's one sanctioned lovelace-to-float conversion), is presumptively a local computation and
- * fails the test — regardless of what anything is named. A short, explicitly commented allowlist
- * covers the handful of genuine index/offset arithmetic sites that are not financial figures.
+ * a SHAPE rule over source TEXT: any binary arithmetic operator sitting between two token-like
+ * operands, anywhere in the package outside `chart.ts`, is presumptively a local computation and
+ * fails the test — regardless of what anything is named.
  *
- * Round 2 of this guard closes four holes a second review proved in that shape rule itself:
+ * Round 2 closed four holes in that text-based shape rule (whole-line allowlist matches, an invisible
+ * line-wrapped operator, false positives on reformatted multi-line SQL, and an unguarded `chart.ts`
+ * export surface) — see that round's report for the details.
  *
- * (a) THE ALLOWLIST EXEMPTED A WHOLE LINE. `isAllowed` matched with `line.includes(needle)`, so once
- *     any allowlisted substring was found anywhere on a line, the ENTIRE line — including anything
- *     else appended to it — was skipped. A reviewer put a fresh violation on the SAME line as an
- *     already-allowlisted one (`const offset = (query.page - 1) * PAGE_SIZE; const returnPct = (end -
- *     start) / start * 100;`) and it passed clean. Fixed by making each allowlist entry the FULL
- *     trimmed line it names, matched by exact equality — not a substring — so appending anything to
- *     an allowlisted line changes what has to match and the line is scanned again.
- * (b) A LINE-WRAPPED OPERATOR WAS INVISIBLE. `const totalFees = feeA +` / `  feeB;` passed, because
- *     the old per-line scan needed a token after the operator on the SAME line — exactly what a
- *     formatter produces when an expression runs long, so this arrives by accident, not evasion.
- *     Fixed by joining a line that ends in a trailing binary operator with the line(s) that follow it
- *     before scanning (see `joinWrappedOperatorLines`).
- * (c) THE GUARD OVER-REPORTED ON ORDINARY MULTI-LINE SQL. Reformatting an existing query across lines
- *     failed the guard, because `SELECT *` reads as `token * token` once the surrounding backtick text
- *     is no longer recognisable as a string. The old preprocessing only stripped a backtick template
- *     that opened AND closed on the same physical line — a multi-line template's literal text reached
- *     the scanner untouched. The natural response (another allowlist entry) would only have widened
- *     hole (a) further, so this is fixed at the root instead: `stripNonCode` now tokenizes the WHOLE
- *     FILE (not line by line) with a small stack-based scanner, so comments, string literals, and
- *     template-literal TEXT are stripped — and a `${...}` expression's own code is kept and still
- *     scanned — regardless of how many lines they span. A `*` inside a SQL string, a `-` inside a CSS
- *     `calc()`, and a `+` inside a message are text, not arithmetic, wherever the enclosing literal
- *     happens to wrap.
- * (d) `chart.ts` WAS EXEMPTED AS A WHOLE FILE WITH NO GUARDRAIL ON WHAT LIVES THERE. The original
- *     defect (a hand-rolled percentage/ratio helper) could be driven straight back through it: define
- *     `export function pctOf(a, b) { return (a - b) / b * 100; }` in `chart.ts` and import it from a
- *     page — the arithmetic scan never looks at that file, so nothing caught it. The file exemption
- *     itself is correct (it is spec's one sanctioned lovelace-to-float conversion site) and stays, but
- *     a new test now pins `chart.ts`'s exported surface to EXACTLY `equitySeries` and `chartHtml`,
- *     so a new export there — the only way anything defined in that file could reach a page — fails
- *     the guard and forces a reviewed conversation about it.
+ * Round 3 (this round) replaces the SCANNING MECHANISM entirely. A regex/tokenizer over source text
+ * can only ever approximate "is this arithmetic" — round 2's own report honestly disclosed two
+ * remaining bypasses:
+ *   - UNSPACED OPERATORS: `const returnPct=(end-start)/start*100;` passed clean, because
+ *     `BINARY_ARITHMETIC` required whitespace around the operator (deliberately, to avoid matching a
+ *     hyphenated CSS property or a SQL wildcard glued to its neighbour — see round 2's own comment on
+ *     that regex). This is not an evasion; it is simply how some people format code, and the repo's
+ *     ESLint config has no spacing rule to stop it.
+ *   - EXPONENTIATION: `a ** b` never matched any of the single-character operator classes.
+ * Patching the regex again would only buy the next bypass. So this round throws the whole text-based
+ * approach away and parses each file with the TypeScript compiler API (`ts.createSourceFile`,
+ * already a devDependency of the repo) instead of pattern-matching its characters.
  *
- * See the task-5-fix-2 report for the full injection-by-injection proof table (all six of round 1's
- * injections, plus one new injection per hole above, each proved red then reverted clean).
+ * WHY THIS REMOVES THE BUG CLASS, NOT JUST THE TWO KNOWN INSTANCES: a parser already knows, natively,
+ * which characters are code and which are a comment, a string, or template-literal text — that is its
+ * job. Every one of round 1 and round 2's bypasses (comments, string/template contents, spacing,
+ * line-wrapping, multi-line template reformatting, and now exponentiation) was a symptom of the same
+ * root cause: a regex or hand-rolled tokenizer trying to reconstruct that knowledge from characters.
+ * Walking the real AST for `BinaryExpression` nodes makes an entire FAMILY of future bypasses
+ * impossible by construction, not just the two this round happens to name:
+ *   - Spacing is irrelevant — the parser doesn't care whether `a-b` or `a - b` was written.
+ *   - `**` is just another `BinaryExpression` operator token, no special-casing needed.
+ *   - A comment, string, or template literal's TEXT is never an expression node in the first place —
+ *     there is nothing to "strip" (round 2's entire `stripNonCode` tokenizer, ~70 lines, is deleted;
+ *     see git history for that machinery if it's ever needed as a reference).
+ *   - A wrapped multi-line expression is one AST node regardless of how many lines the formatter split
+ *     it across — no more `joinWrappedOperatorLines` special case.
+ *   - The scan naturally recurses into every nesting depth (arrow function bodies, call arguments,
+ *     ternaries, template-literal `${...}` holes) via `ts.forEachChild`, the same way the parser itself
+ *     does, so there's no separate "did we remember to look inside a callback" question.
+ *
+ * THE RULE, IN PLAIN LANGUAGE: walk every `.ts` file under `packages/dashboard/src` (except
+ * `chart.ts`, spec's one sanctioned lovelace-to-float conversion site) and look at every binary
+ * arithmetic expression (`+ - * / % **`, and their compound-assignment forms `+= -= *= /= %= **=`).
+ * If BOTH sides are numeric constants (e.g. `2 * 3`), it's a literal computation, not a computed
+ * figure — allowed. Otherwise it's presumptively a local computation and fails the test, unless the
+ * exact expression text is on the short, commented allowlist below (genuine index/pagination
+ * arithmetic, reviewed one entry at a time).
+ *
+ * WHAT THIS STILL DOES NOT COVER (read before assuming the gap list is empty):
+ *   - `++` / `--` (pre/post increment and decrement) are not `BinaryExpression` nodes in the TS AST,
+ *     so a hand-rolled running total built with `total++` would not be caught by this scan. No
+ *     instance exists in this package today; if one is ever added, it needs its own check (a
+ *     `PrefixUnaryExpression`/`PostfixUnaryExpression` walk keyed on `++`/`--`), which this guard does
+ *     not currently do.
+ *   - Bitwise operators (`&`, `|`, `^`, `<<`, `>>`, `>>>`) are not treated as arithmetic here, matching
+ *     both prior rounds — spec §4.1's concern is financial figures, and nothing in this package has a
+ *     legitimate reason to bit-shift a lovelace amount, so this is an intentional non-goal, not an
+ *     oversight.
+ *   - This scan does not use the type checker (no `ts.Program`, just a standalone
+ *     `ts.createSourceFile` per file) — it does not know or care whether an operand is a `number`, a
+ *     `bigint`, or a `string`. That is deliberate, not a gap: string concatenation with `+` on two
+ *     string-typed operands is now VISIBLE to this scan where the old regex might have missed it
+ *     (a bare `+` with no spacing rule around it was exactly round 2's blind spot). Rather than widen
+ *     the guard to special-case strings via the type checker, the fix belongs in the page code — use a
+ *     template literal instead of `+` for string-building. As of this round, `packages/dashboard/src`
+ *     has no `+`-based string concatenation left to fix (checked: every string built in this package
+ *     already uses a template literal), so no page-code change was needed to satisfy this.
+ *   - Round 2's separate assertion ("never divides a lovelace amount by 1_000_000/1e6, or multiplies
+ *     by 100") is REMOVED, not silently — it is a strict subset of the general rule above. That
+ *     assertion existed because the old text-based scan required whitespace around an operator and so
+ *     could miss `x/1_000_000n` if unspaced; the AST walk above has no such blind spot: ANY
+ *     `identifier / 1_000_000n`-shaped expression is already caught by the general "not both operands
+ *     numeric constants" rule, with no separate check needed. Keeping a redundant assertion around
+ *     would only add a second thing to update every time the general rule changes, for zero added
+ *     coverage.
+ *
+ * See the task-5-fix-3 report for the thirteen-probe injection table (all eleven of round 1 and 2's
+ * injections re-proved red under the new mechanism, plus the two round-3-specific bypasses, plus two
+ * over-report checks that must NOT fire), each proved red (or confirmed clean) then reverted
+ * byte-exact.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const SRC = join(import.meta.dirname, '../src');
@@ -67,154 +105,89 @@ const FILES = walk(SRC);
 
 /**
  * Genuine index/offset/pagination arithmetic that is not a financial figure, and so is not something
- * `@ctb/reports` could sensibly own. Each entry's `line` is the FULL trimmed source line it names,
- * matched by exact equality (see hole (a) above) — narrow on purpose, so this list allows exactly the
- * reviewed line it names and nothing merely appended to or resembling it. Adding a new entry here is
- * itself a reviewable change.
+ * `@ctb/reports` could sensibly own. `expr` is the EXACT text of the offending `BinaryExpression` node
+ * (via `node.getText(sourceFile)`) — narrower than round 2's whole-line match, since the AST gives us
+ * the precise sub-expression rather than the line it happens to sit on. Two entries can share a file
+ * and still both be needed for a single source line: `server.ts`'s
+ * `const offset = (query.page - 1) * PAGE_SIZE;` contains TWO arithmetic `BinaryExpression` nodes (the
+ * inner `query.page - 1` and the outer `(query.page - 1) * PAGE_SIZE`), and the walk below visits and
+ * checks both independently. Adding a new entry here is itself a reviewable change.
  */
-const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; line: string; because: string }> = [
-  { file: 'pages/health.ts', line: 'return [line.slice(0, idx), line.slice(idx + 2)];', because: 'string offset past a ": " separator, not a computed figure' },
-  { file: 'pages/runs.ts', line: 'if (page > 1) links.push(`<a href="${escape(runsQueryString(filter, tickerOf, page - 1))}">&larr; prev</a>`);', because: 'M2 pager: the previous page number for the "prev" link, not a financial number' },
-  { file: 'pages/runs.ts', line: 'if (rowsOnPage === pageSize) links.push(`<a href="${escape(runsQueryString(filter, tickerOf, page + 1))}">next &rarr;</a>`);', because: 'M2 pager: the next page number for the "next" link, not a financial number' },
-  { file: 'pages/runs.ts', line: '<dt>resumes</dt><dd>${resumes.length}${resumes.length > 0 ? ` (last ${escape(resumes[resumes.length - 1])})` : \'\'}</dd>', because: 'array index into the resumes list, to show the last one' },
-  { file: 'pages/runs.ts', line: 'const more = orders.length > ORDERS_MAX_ROWS ? `<p>&hellip; ${orders.length - ORDERS_MAX_ROWS} more orders</p>` : \'\';', because: 'count of rows past the display cap, for the "N more orders" line' },
-  { file: 'server.ts', line: 'const offset = (query.page - 1) * PAGE_SIZE;', because: 'SQL OFFSET from a 1-based page number, not a financial number' },
+const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; expr: string; because: string }> = [
+  { file: 'pages/health.ts', expr: 'idx + 2', because: 'string offset past a ": " separator, not a computed figure' },
+  { file: 'pages/runs.ts', expr: 'page - 1', because: 'M2 pager: the previous page number for the "prev" link, not a financial number' },
+  { file: 'pages/runs.ts', expr: 'page + 1', because: 'M2 pager: the next page number for the "next" link, not a financial number' },
+  { file: 'pages/runs.ts', expr: 'resumes.length - 1', because: 'array index into the resumes list, to show the last one' },
+  { file: 'pages/runs.ts', expr: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line' },
+  { file: 'server.ts', expr: 'query.page - 1', because: 'SQL OFFSET from a 1-based page number, not a financial number (the inner term of the next entry)' },
+  { file: 'server.ts', expr: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number' },
 ];
 
-/** Exact match against the FULL trimmed line — see hole (a) in the file header. A line that merely
- * CONTAINS an allowed expression, with anything else added to it, is not a match and gets scanned. */
-function isAllowed(rel: string, rawLine: string): boolean {
-  const trimmed = rawLine.trim();
-  return ALLOWED_ARITHMETIC.some((a) => a.file === rel && a.line === trimmed);
+function isAllowed(rel: string, exprText: string): boolean {
+  return ALLOWED_ARITHMETIC.some((a) => a.file === rel && a.expr === exprText);
+}
+
+/** Every arithmetic operator this guard treats as "computing a figure", plus its compound-assignment
+ * form (`total += x` is the same concern as `total = total + x`, just spelled differently — no known
+ * instance in this package today, but cheap to close off before one exists). Comparison operators
+ * (`< > <= >= === !==`) and bitwise operators are deliberately excluded — see the file header's
+ * "what this still does not cover". */
+const ARITHMETIC_OPERATOR_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
+  ts.SyntaxKind.PlusToken,
+  ts.SyntaxKind.MinusToken,
+  ts.SyntaxKind.AsteriskToken,
+  ts.SyntaxKind.SlashToken,
+  ts.SyntaxKind.PercentToken,
+  ts.SyntaxKind.AsteriskAsteriskToken,
+  ts.SyntaxKind.PlusEqualsToken,
+  ts.SyntaxKind.MinusEqualsToken,
+  ts.SyntaxKind.AsteriskEqualsToken,
+  ts.SyntaxKind.SlashEqualsToken,
+  ts.SyntaxKind.PercentEqualsToken,
+  ts.SyntaxKind.AsteriskAsteriskEqualsToken,
+]);
+
+/**
+ * True when `node` is a numeric constant: a plain numeric or bigint literal (`2`, `1_000_000n`), or a
+ * unary-signed one (`-1`, `+2`), optionally parenthesised (`(1)`). `2 * 3` is a constant expression,
+ * not a computed figure, so a `BinaryExpression` where BOTH sides satisfy this is allowed without
+ * needing an allowlist entry; anything else — a variable, a property access, a function call, a
+ * template literal — on either side means the value is not known at review time, so the expression is
+ * presumptively a local computation.
+ */
+function isNumericConstant(node: ts.Expression): boolean {
+  let n: ts.Expression = node;
+  while (ts.isParenthesizedExpression(n)) n = n.expression;
+  if (ts.isPrefixUnaryExpression(n) && (n.operator === ts.SyntaxKind.MinusToken || n.operator === ts.SyntaxKind.PlusToken)) {
+    return isNumericConstant(n.operand);
+  }
+  return ts.isNumericLiteral(n) || ts.isBigIntLiteral(n);
 }
 
 /**
- * One stack frame of `stripNonCode`'s tokenizer. `code` covers both top-level file code and the code
- * inside a `${...}` template expression — the same rules apply in both places (a string, a nested
- * template, or a comment can open inside an expression exactly as it can anywhere else), so they share
- * one frame kind. `templateExprDepth` is only meaningful for a `code` frame that was pushed BECAUSE of
- * a `${`: it counts unmatched `{`/`}` seen since that point, so an object literal inside the expression
- * (`${ { x: 1 } }`) doesn't make the FIRST `}` look like the end of the expression.
+ * Walks the whole AST (`ts.forEachChild` recurses into every nesting depth — arrow function bodies,
+ * call arguments, ternaries, a template literal's `${...}` holes — the same way the parser itself
+ * does) and returns the exact text of every arithmetic `BinaryExpression` that is neither a numeric
+ * constant on both sides nor on the reviewed allowlist.
  */
-type Frame =
-  | { kind: 'code'; templateExprDepth: number }
-  | { kind: 'template' }
-  | { kind: 'squote' }
-  | { kind: 'dquote' }
-  | { kind: 'lineComment' }
-  | { kind: 'blockComment' };
-
-function currentFrame(stack: readonly Frame[]): Frame {
-  const frame = stack.at(-1);
-  if (frame === undefined) throw new Error('stripNonCode: frame stack underflow — a bug in the tokenizer itself, not in the scanned source');
-  return frame;
-}
-
-/**
- * Replaces every character that is not "real code" — line comments, block comments, single/double-
- * quoted string contents, and backtick template-literal TEXT (but never a `${...}` expression's own
- * code) — with a space, and leaves every newline exactly where it was. Because this runs once over the
- * WHOLE FILE with an explicit stack (not line by line, and not with one-shot regexes), a template
- * literal, block comment, or nested string/template INSIDE a `${...}` expression is stripped correctly
- * no matter how many lines it spans — this is the hole (c) fix: the previous version could only strip
- * a backtick that opened and closed on the same physical line, so a reformatted multi-line SQL
- * template's literal text (`SELECT *`, `runs -` as English, etc.) reached the arithmetic scan unstripped
- * and was flagged as a false positive.
- *
- * What this does NOT cover: a template literal or comment opening and closing entirely within one
- * `${...}` expression is handled (the `code` frame kind is shared), but there is no instance of that
- * in this small, hand-written package today, so it is exercised only incidentally, not by a dedicated
- * test — see "what this guard still does not cover" in the task-5-fix-2 report.
- */
-function stripNonCode(text: string): string {
-  const out: string[] = [];
-  const stack: Frame[] = [{ kind: 'code', templateExprDepth: 0 }];
-
-  for (let i = 0; i < text.length; i++) {
-    const c = text.charAt(i);
-    const next = text.charAt(i + 1);
-    const frame = currentFrame(stack);
-
-    if (c === '\n') {
-      out.push('\n');
-      if (frame.kind === 'lineComment') stack.pop();
-      continue;
-    }
-
-    switch (frame.kind) {
-      case 'code':
-        if (c === '/' && next === '/') { out.push(' ', ' '); i += 1; stack.push({ kind: 'lineComment' }); }
-        else if (c === '/' && next === '*') { out.push(' ', ' '); i += 1; stack.push({ kind: 'blockComment' }); }
-        else if (c === "'") { out.push(' '); stack.push({ kind: 'squote' }); }
-        else if (c === '"') { out.push(' '); stack.push({ kind: 'dquote' }); }
-        else if (c === '`') { out.push(' '); stack.push({ kind: 'template' }); }
-        else if (c === '{') { frame.templateExprDepth += 1; out.push(c); }
-        else if (c === '}' && frame.templateExprDepth > 0) { frame.templateExprDepth -= 1; out.push(c); }
-        else if (c === '}' && stack.length > 1) { out.push(' '); stack.pop(); } // closes a `${...}` expression
-        else out.push(c);
-        break;
-
-      case 'lineComment':
-        out.push(' ');
-        break;
-
-      case 'blockComment':
-        if (c === '*' && next === '/') { out.push(' ', ' '); i += 1; stack.pop(); }
-        else out.push(' ');
-        break;
-
-      case 'squote':
-      case 'dquote': {
-        const quote = frame.kind === 'squote' ? "'" : '"';
-        if (c === '\\') { out.push(' ', next === '\n' ? '\n' : ' '); i += 1; }
-        else if (c === quote) { out.push(' '); stack.pop(); }
-        else out.push(' ');
-        break;
+function findArithmeticViolations(sourceFile: ts.SourceFile, rel: string): string[] {
+  const violations: string[] = [];
+  function visit(node: ts.Node): void {
+    if (ts.isBinaryExpression(node) && ARITHMETIC_OPERATOR_KINDS.has(node.operatorToken.kind)) {
+      const bothConstant = isNumericConstant(node.left) && isNumericConstant(node.right);
+      if (!bothConstant) {
+        const exprText = node.getText(sourceFile);
+        if (!isAllowed(rel, exprText)) violations.push(exprText);
       }
-
-      case 'template':
-        if (c === '\\') { out.push(' ', next === '\n' ? '\n' : ' '); i += 1; }
-        else if (c === '`') { out.push(' '); stack.pop(); }
-        else if (c === '$' && next === '{') { out.push(' ', ' '); i += 1; stack.push({ kind: 'code', templateExprDepth: 0 }); }
-        else out.push(' ');
-        break;
     }
+    ts.forEachChild(node, visit);
   }
-  return out.join('');
+  visit(sourceFile);
+  return violations;
 }
 
-// Requires whitespace around the operator with a token-like character immediately on each side, so a
-// hyphenated CSS property (`max-width`, `border-collapse`, `--fg`) or SQL wildcard glued to its
-// neighbours never matches — every real arithmetic expression in this codebase's own style puts spaces
-// around its operators (see the six round-1 injections). A hand-formatted line that omitted those
-// spaces (`a-b` instead of `a - b`) would still slip past this — a known residual gap, not fixed here
-// (see the report).
-const BINARY_ARITHMETIC = /([\w$)\]])\s+([-+*/%])\s+([\w$(])/;
-// `total += x`-shaped local accumulation — no known instance in this package today, but the same
-// mechanism as the `reduce((a, b) => a + b, ...)` injection above and just as capable of quietly
-// summing fees or returns; cheap to close off before it exists.
-const COMPOUND_ASSIGNMENT = /\w\s*[-+*/%]=/;
-// A cleaned line that ends in "<token> <operator>" is a binary expression a formatter wrapped onto the
-// next line (hole (b)) — the same style this codebase's real arithmetic already uses, just split.
-const TRAILING_BINARY_OPERATOR = /[\w$)\]]\s+[-+*/%]$/;
-
-/**
- * Builds the text actually scanned for line `i`: `cleanedLines[i]` on its own, UNLESS it ends in a
- * trailing binary operator (hole (b)), in which case the following line(s) are appended (space-
- * joined) until the trail stops — so `const totalFees = feeA +` / `  feeB;` is scanned as one unit,
- * exactly as if it had been written on a single line. `rawLabel` mirrors the same join over the RAW
- * (un-stripped) lines, purely for a readable failure message.
- */
-function joinWrappedOperatorLines(rawLines: readonly string[], cleanedLines: readonly string[], startIndex: number): { scanned: string; rawLabel: string } {
-  let scanned = cleanedLines[startIndex] ?? '';
-  let rawLabel = (rawLines[startIndex] ?? '').trim();
-  let j = startIndex;
-  while (TRAILING_BINARY_OPERATOR.test(scanned.trimEnd()) && j + 1 < cleanedLines.length) {
-    j += 1;
-    scanned = `${scanned.trimEnd()} ${(cleanedLines[j] ?? '').trim()}`;
-    rawLabel = `${rawLabel} ${(rawLines[j] ?? '').trim()}`;
-  }
-  return { scanned, rawLabel };
+function parse(file: string): ts.SourceFile {
+  return ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 }
 
 describe('@ctb/dashboard one-rule guard', () => {
@@ -222,35 +195,12 @@ describe('@ctb/dashboard one-rule guard', () => {
     expect(FILES.length).toBeGreaterThan(5);
   });
 
-  it('never contains binary arithmetic between two operands outside chart.ts and the reviewed allowlist', () => {
+  it('never contains binary arithmetic between two non-constant operands outside chart.ts and the reviewed allowlist', () => {
     for (const file of FILES) {
       const rel = relative(SRC, file);
       if (rel === 'chart.ts') continue; // the one sanctioned lovelace->float conversion, itself routed through adaStr — see the export-surface test below
-      const rawText = readFileSync(file, 'utf8');
-      const rawLines = rawText.split('\n');
-      const cleanedLines = stripNonCode(rawText).split('\n');
-      for (let i = 0; i < rawLines.length; i++) {
-        if (isAllowed(rel, rawLines[i] ?? '')) continue;
-        const { scanned, rawLabel } = joinWrappedOperatorLines(rawLines, cleanedLines, i);
-        expect(BINARY_ARITHMETIC.test(scanned), `${rel}: local arithmetic: ${rawLabel}`).toBe(false);
-        expect(COMPOUND_ASSIGNMENT.test(scanned), `${rel}: local compound-assignment arithmetic: ${rawLabel}`).toBe(false);
-      }
-    }
-  });
-
-  it('never divides a lovelace amount by 1_000_000/1e6, or multiplies by 100, outside chart.ts', () => {
-    for (const file of FILES) {
-      const rel = relative(SRC, file);
-      if (rel === 'chart.ts') continue; // the one sanctioned lovelace->float conversion, itself routed through adaStr
-      const rawText = readFileSync(file, 'utf8');
-      const rawLines = rawText.split('\n');
-      const cleanedLines = stripNonCode(rawText).split('\n');
-      for (let i = 0; i < rawLines.length; i++) {
-        if (isAllowed(rel, rawLines[i] ?? '')) continue;
-        const scanned = cleanedLines[i] ?? '';
-        expect(/\/\s*1_000_000\b|\/\s*1e6\b/i.test(scanned), `${rel}: hand lovelace->ADA division: ${(rawLines[i] ?? '').trim()}`).toBe(false);
-        expect(/\*\s*100\b/.test(scanned), `${rel}: hand percent multiplication: ${(rawLines[i] ?? '').trim()}`).toBe(false);
-      }
+      const violations = findArithmeticViolations(parse(file), rel);
+      expect(violations, `${rel}: local arithmetic: ${violations.join(' | ')}`).toEqual([]);
     }
   });
 
@@ -280,13 +230,14 @@ describe('@ctb/dashboard one-rule guard', () => {
   });
 
   /**
-   * Hole (d): `chart.ts` is exempt from the arithmetic scan above because it is spec's one sanctioned
+   * `chart.ts` is exempt from the arithmetic scan above because it is spec's one sanctioned
    * lovelace-to-float conversion site — but that exemption previously came with no guardrail on what
    * ELSE could live in the file. The original defect (a hand-rolled ratio/percentage helper) could be
    * driven straight back through it: define `export function pctOf(a, b) { return (a - b) / b * 100;
-   * }` in `chart.ts`, import it from a page, and the arithmetic scan never sees it. This pins the
-   * file's exported surface to exactly the two exports the spec sanctions, so a new export there fails
-   * loudly and forces a reviewed conversation instead of a silent pass-through.
+   * }` in `chart.ts`, import it from a page, and the arithmetic scan never sees it (this file is
+   * skipped by name, not by content). This pins the file's exported surface to exactly the two exports
+   * the spec sanctions, so a new export there fails loudly and forces a reviewed conversation instead
+   * of a silent pass-through.
    */
   it("chart.ts's exported surface stays pinned to exactly {equitySeries, chartHtml} — the one file this guard exempts from the arithmetic scan", () => {
     const chartFile = FILES.find((f) => relative(SRC, f) === 'chart.ts');
