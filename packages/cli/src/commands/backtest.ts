@@ -8,7 +8,9 @@ import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
 import { externalCandleFeed, localCandleFeed } from '../feeds.js';
 import { printReport } from './report.js';
+import { parseGridArg } from '../grid.js';
 import { compareRows, sweepRows, type SweepInput } from '../compare.js';
+import { gridCombinations, gridRows, gridWarning, type GridInput } from '../grid.js';
 import { parseIsoDate } from './backfill.js';
 
 export interface BacktestArgs {
@@ -21,12 +23,14 @@ export interface BacktestArgs {
   depthAda: number | 'auto' | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
   /** Only meaningful with `--source external` (the synthetic fill model); defaults to `close` so every existing backtest is unchanged. */
   syntheticPrice: 'close' | 'worst';
+  /** `--grid k=v1,v2` (repeatable): the Cartesian product runs once per combination, one strategy and one ticker only. */
+  grid: Record<string, number[]>;
 }
 
 /** Default stale-fill bound: three 5-minute buckets. Sparse external history routinely exceeds it (finding C3). */
 export const DEFAULT_MAX_GAP_MIN = 15;
 
-const USAGE = 'usage: backtest <strategy>[,<strategy>...] <TICKER|ALL> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N|auto] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
+const USAGE = 'usage: backtest <strategy>[,<strategy>...] <TICKER|ALL> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N|auto] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]... [--grid k=v1,v2,...]...';
 
 function num(flag: string, v: string | undefined): number {
   const n = Number(v);
@@ -66,7 +70,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   if (from.getTime() >= to.getTime()) throw new Error(`from must be before to\n${USAGE}`);
-  const out: BacktestArgs = { strategyIds, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close' };
+  const out: BacktestArgs = { strategyIds, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close', grid: {} };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val = rest[i + 1];
@@ -86,6 +90,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
       case '--synthetic-price':
         if (val !== 'close' && val !== 'worst') throw new Error(`--synthetic-price must be close or worst\n${USAGE}`);
         out.syntheticPrice = val; i++; break;
+      case '--grid': out.grid = parseGridArg(val, out.grid); i++; break;
       case '--param': {
         const [k, v] = splitParam(val);
         const n = Number(v);
@@ -97,6 +102,12 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
   }
   // A sweep over 20 tokens of very different size with one hand-typed depth would make every
   // synthetic fill meaningless for most of them, so ALL defaults to each token's own measured depth.
+  if (Object.keys(out.grid).length > 0) {
+    if (out.strategyIds.length > 1) throw new Error(`--grid runs one strategy; list one, not ${out.strategyIds.length}\n${USAGE}`);
+    if (out.ticker === 'ALL') throw new Error(`--grid runs one ticker, not ALL\n${USAGE}`);
+    const clash = Object.keys(out.grid).find((k) => k in out.params);
+    if (clash) throw new Error(`${clash} is both a --param and a --grid axis; pick one\n${USAGE}`);
+  }
   if (out.source === 'candles_external' && out.depthAda === null && out.ticker === 'ALL') out.depthAda = 'auto';
   if (out.source === 'candles_external' && out.depthAda === null) throw new Error(`--depth-ada is required with --source external (declared pool depth in ADA for the synthetic fill model, or auto)\n${USAGE}`);
   if (out.source === 'candles' && out.depthAda !== null) throw new Error(`--depth-ada only applies to --source external; observed reserves are used otherwise\n${USAGE}`);
@@ -193,6 +204,9 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     const costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
     const results: SweepInput[] = [];
     const skipped: Array<{ ticker: string; reason: string }> = [];
+    const combos = gridCombinations(a.grid);
+    const isGrid = Object.keys(a.grid).length > 0;
+    const gridResults: GridInput[] = [];
     for (const token of tokens) {
       // A sweep token with nothing to run on is a row in the skipped table, not the end of the sweep.
       if (a.source === 'candles_external' && sweep && !(await external.getMap(token.unit))) { skipped.push({ ticker: token.ticker, reason: 'no external history (run backfill first)' }); continue; }
@@ -218,31 +232,43 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
       // model; recording them for an observed-reserves run would claim choices never in effect.
       const extra = a.source === 'candles_external' ? { fillModelDetail: { syntheticPrice: a.syntheticPrice, depthBasis: a.depthAda === 'auto' ? 'auto: latest deepest-pool ADA reserve from pool_snapshots' : 'flag' } } : undefined;
       // Sequential on purpose: each run reads the same candles, and one at a time keeps the run ids
-      // in the order the operator listed the strategies.
+      // in the order the operator listed the strategies (and, under --grid, the combinations).
       for (const strategy of strategies) {
-        const runId = await runs.createRun({
-          mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
-          params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, depthAdaForParams, costOverrides, maxGapMs, extra),
-        });
-        console.log(`run id: ${runId} (${token.ticker} ${strategy.id})`);
-        const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to);
-        const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
-        const result = await runEngine({ feed, strategy, params: a.params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
-          intervalSec: cfg.intervalSec, maxGapMs });
-        await runs.insertOrders(runId, token.unit, result.orders);
-        await runs.finishRun(runId, new Date(), result.summary);
-        const run = await runs.getRun(runId);
-        if (!run) throw new Error(`run ${runId} vanished`);
-        // A sweep prints one table at the end; sixty full reports would bury it. `report <id>` has each.
-        if (!sweep) printReport(run, await runs.listOrders(runId), token.ticker);
-        results.push({ ticker: token.ticker, strategyId: strategy.id, runId, summary: result.summary, depthAda: depthAdaForParams });
+        for (const [gridIndex, combo] of combos.entries()) {
+          const params = { ...a.params, ...combo };
+          // Every run of a grid says so on its own row: a reader of one run alone must know it was one of N.
+          const gridExtra = isGrid ? { grid: { size: combos.length, index: gridIndex + 1, axes: Object.keys(a.grid) } } : {};
+          const runId = await runs.createRun({
+            mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
+            params: buildRunParams(strategy.defaultParams, params, a.cashAda, depthAdaForParams, costOverrides, maxGapMs, { ...extra, ...gridExtra }),
+          });
+          console.log(`run id: ${runId} (${token.ticker} ${strategy.id}${isGrid ? ` ${Object.entries(combo).map(([k, v]) => `${k}=${v}`).join(' ')}` : ''})`);
+          const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to);
+          const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
+          const result = await runEngine({ feed, strategy, params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
+            intervalSec: cfg.intervalSec, maxGapMs });
+          await runs.insertOrders(runId, token.unit, result.orders);
+          await runs.finishRun(runId, new Date(), result.summary);
+          const run = await runs.getRun(runId);
+          if (!run) throw new Error(`run ${runId} vanished`);
+          // A sweep or a grid prints one table at the end; dozens of full reports would bury it. `report <id>` has each.
+          if (!sweep && !isGrid) printReport(run, await runs.listOrders(runId), token.ticker);
+          results.push({ ticker: token.ticker, strategyId: strategy.id, runId, summary: result.summary, depthAda: depthAdaForParams });
+          gridResults.push({ combo, runId, summary: result.summary });
+        }
       }
+    }
+    if (isGrid) {
+      const windowLabel = `${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()}`;
+      console.log(`\n=== grid | ${a.strategyIds[0]} | ${a.ticker} | ${windowLabel} | ${combos.length} combinations over ${Object.keys(a.grid).join(', ')}`);
+      console.log(gridWarning(combos.length, windowLabel));
+      console.table(gridRows(gridResults));
     }
     if (sweep) {
       console.log(`\n=== sweep | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | ${results.length} runs over ${tokens.length - skipped.length} of ${tokens.length} tokens | depth: ${a.depthAda === 'auto' ? 'auto (each token\'s latest deepest-pool ADA reserve)' : `${String(a.depthAda)} ADA for every token`}`);
       console.table(sweepRows(results));
       if (skipped.length) { console.log('skipped:'); console.table(skipped); }
-    } else if (results.length > 1) {
+    } else if (!isGrid && results.length > 1) {
       console.log(`\n=== comparison | ${a.ticker} | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | same fill model, costs and --param values for every row`);
       console.table(compareRows(results));
     }
