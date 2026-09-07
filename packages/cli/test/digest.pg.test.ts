@@ -26,27 +26,32 @@ describe.skipIf(!PG_ENABLED)('loadDigestInput', () => {
       await repo.finishRun(id, new Date('2026-09-06T23:51:00Z'), { ...done, poolsFailed: 2, providerCalls: 300, errors: [{ scope: 'discover:X', message: 'm' }] as never[] });
       // today 00:10 UTC discovery: everything. Its snapshots carry MuesliSwap and SundaeSwapV3, not MinswapV2 (lost at discovery).
       id = await repo.startRun(new Date('2026-09-07T00:10:00Z'), new Date('2026-09-07T00:10:01Z'));
-      const snap = (dex: 'MuesliSwap' | 'SundaeSwapV3', tick: Date) => ({
+      const snap = (dex: 'MuesliSwap' | 'SundaeSwapV3' | 'MinswapV2', tick: Date) => ({
         tickTs: tick, dex, poolId: `${dex}:x`, poolAddress: 'addr', baseUnit: `${P}41`, quoteUnit: 'lovelace' as const,
         reserveBase: 1n, reserveQuote: 1n, feeBps: 30, poolType: 'cpmm' as const, tvlLovelace: 2n, blockHeight: 1, observedAt: new Date(tick.getTime() + 1000),
       });
       await repo.insertSnapshots(id, [snap('MuesliSwap', new Date('2026-09-07T00:10:00Z')), snap('SundaeSwapV3', new Date('2026-09-07T00:10:00Z'))]);
       await repo.finishRun(id, new Date('2026-09-07T00:19:00Z'), { ...done, discovered: true, providerCalls: 5_691, discoveryCalls: { MinswapV2: 5_691 } });
+      // today 11:40 UTC refresh tick that retried the lost MinswapV2 and got it back: 3,358 calls of
+      // which 3,300 are the venue scan (discovery_calls) and 58 recurring refresh
+      id = await repo.startRun(new Date('2026-09-07T11:40:00Z'), new Date('2026-09-07T11:40:01Z'));
+      await repo.insertSnapshots(id, [snap('MinswapV2', new Date('2026-09-07T11:40:00Z')), snap('SundaeSwapV3', new Date('2026-09-07T11:40:00Z'))]);
+      await repo.finishRun(id, new Date('2026-09-07T11:41:00Z'), { ...done, providerCalls: 3_358, discoveryCalls: { MinswapV2: 3_300 } });
       // today 11:50 UTC refresh: newest finished
       id = await repo.startRun(new Date('2026-09-07T11:50:00Z'), new Date('2026-09-07T11:50:01Z'));
       await repo.finishRun(id, new Date('2026-09-07T11:51:00Z'), { ...done, providerCalls: 210 });
       // today 12:00 UTC: in flight, never finished -> unfinished only; its calls are still 0
       await repo.startRun(new Date('2026-09-07T12:00:00Z'), new Date('2026-09-07T12:00:01Z'));
 
-      // The newest (refresh) tick holds one venue only: SundaeSwapV3. MuesliSwap was found at discovery but is not refreshed (deepest policy); MinswapV2 was never found.
+      // The newest (refresh) tick holds SundaeSwapV3 only. MuesliSwap was found at discovery but is not refreshed (deepest policy); MinswapV2 was lost at discovery and retried back in at 11:40, so it is NOT lost.
       await repo.insertSnapshots(id, [snap('SundaeSwapV3', new Date('2026-09-07T11:50:00Z'))]);
       const d = await loadDigestInput(db, 600, ['MinswapV2', 'MuesliSwap', 'SundaeSwapV3'], now);
       expect(d.lastFinished).toMatchObject({ tickTs: new Date('2026-09-07T11:50:00Z'), finishedAt: new Date('2026-09-07T11:51:00Z'), poolsWritten: 20, providerCalls: 210, discovered: false });
-      expect(d.ticksLast24h).toBe(3);
-      expect(d.discoveryCallsToday).toBe(5_691);
-      expect(d.refreshCallsToday).toBe(210);
+      expect(d.ticksLast24h).toBe(4);
+      expect(d.discoveryCallsToday).toBe(5_691 + 3_300);
+      expect(d.refreshCallsToday).toBe(210 + 58);
       expect(d.venuesConfigured).toEqual(['MinswapV2', 'MuesliSwap', 'SundaeSwapV3']);
-      expect(d.venuesInLastDiscovery).toEqual(['MuesliSwap', 'SundaeSwapV3']);
+      expect(d.venuesSinceLastDiscovery).toEqual(['MinswapV2', 'MuesliSwap', 'SundaeSwapV3']);
       expect(d.venuesInLastTick).toEqual(['SundaeSwapV3']);
       expect(d.tokensTotal).toBe(2);
       expect(d.tokensCoveredInLastTick).toBe(1);

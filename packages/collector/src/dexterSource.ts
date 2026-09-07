@@ -1,7 +1,7 @@
 import { Asset, BlockfrostProvider, Dexter, type LiquidityPool } from '@indigo-labs/dexter';
 import type { Pair } from '@ctb/universe';
 import type { RunError } from './repo.js';
-import type { DiscoveryCallsSource, PoolSource, SourceResult } from './source.js';
+import type { DiscoveryCallsSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, PoolLike } from './types.js';
 import { discoveryOf, VENUE_NAMES, type DexName } from './venues.js';
 import { collectPoolShapes, collectRefreshedShape, type LiquidityPoolShape } from './poolShape.js';
@@ -263,6 +263,13 @@ export interface DexterPoolSourceOptions {
    *   `packages/cli/src/config.ts`).
    */
   refreshPolicy?: 'deepest' | 'all';
+  /**
+   * Waits between attempts when a venue's discovery returns no pools (or throws a transient error).
+   * Dexter maps an on-chain error to an empty result, and Blockfrost answered a 504 for MinswapV2's
+   * validity-asset address list at 00:20 UTC on 2026-09-07 that a request a minute later did not
+   * get — so one empty answer is a retry, not a verdict. Length + 1 = attempts; default 3 retries.
+   */
+  discoveryRetryDelaysMs?: number[];
 }
 
 /** `shape`'s non-ADA-side token identifier (`policyId + nameHex`), used to group pools by base token
@@ -289,7 +296,7 @@ function adaReserveOf(shape: LiquidityPoolShape): bigint | undefined {
 
 const TIP_TIMEOUT_MS = 10_000;
 
-export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
+export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, RediscoverySource {
   private readonly fetcher: PoolFetcher;
   private readonly defaultFetcher: DefaultPoolFetcher | null;
   private readonly known = new Map<string, LiquidityPoolShape>();
@@ -302,8 +309,11 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
   private readonly sleep?: (ms: number) => Promise<void>;
   /** See `DexterPoolSourceOptions.refreshPolicy`. Default `'all'`. */
   private readonly refreshPolicy: 'deepest' | 'all';
-  /** Blockfrost provider calls spent per venue on the most recent `discover()`. Read by `lastDiscoveryCalls`. */
+  /** Blockfrost provider calls spent per venue on the most recent `discover()`/`rediscover()`. Read by `lastDiscoveryCalls`. */
   private callsByVenue: Record<string, number> = {};
+  private readonly discoveryRetryDelaysMs: number[];
+  /** Venues whose last discovery attempt ended with no pools; `rediscover()` tries exactly these. */
+  private readonly lost = new Set<DexName>();
 
   constructor(opts: DexterPoolSourceOptions) {
     this.url = opts.blockfrostUrl ?? 'https://cardano-mainnet.blockfrost.io/api/v0';
@@ -314,6 +324,7 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
     this.retryBudgetMs = opts.retryBudgetMs ?? 60_000;
     this.sleep = opts.sleep;
     this.refreshPolicy = opts.refreshPolicy ?? 'all';
+    this.discoveryRetryDelaysMs = opts.discoveryRetryDelaysMs ?? [15_000, 30_000, 60_000];
     if (opts.fetcher) {
       this.fetcher = opts.fetcher;
       this.defaultFetcher = null;
@@ -334,21 +345,80 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
   lastDiscoveryCalls(): Record<string, number> { return { ...this.callsByVenue }; }
 
   async discover(pairs: Pair[]): Promise<SourceResult> {
+    this.known.clear();
+    this.lost.clear();
+    this.callsByVenue = {};
+    const result = await this.discoverVenues(this.venues, pairs);
+    if (this.refreshPolicy === 'deepest') this.pruneToDeepestPerToken();
+    return result;
+  }
+
+  lostVenues(): string[] { return [...this.lost]; }
+
+  /**
+   * Discovery for the venues `discover()` (or an earlier `rediscover()`) lost, and only those. The
+   * pools it finds join `known` — re-pruned under `'deepest'`, so a returning venue can displace a
+   * shallower pool that was only "deepest" in its absence — and are returned for the tick to write.
+   * `lastDiscoveryCalls()` afterwards covers just the venues tried here.
+   */
+  async rediscover(pairs: Pair[]): Promise<SourceResult> {
+    const venues = [...this.lost];
+    this.callsByVenue = {};
+    if (venues.length === 0) return { pools: [], failures: [] };
+    const result = await this.discoverVenues(venues, pairs);
+    if (this.refreshPolicy === 'deepest' && result.pools.length > 0) this.pruneToDeepestPerToken();
+    return result;
+  }
+
+  private async discoverVenues(venues: DexName[], pairs: Pair[]): Promise<SourceResult> {
     const tokenPairs: Array<['lovelace', Asset]> = pairs.map((p) => ['lovelace', new Asset(p.base.policyId, p.base.assetNameHex, p.base.decimals)]);
     const failures: RunError[] = [];
     const found: PoolLike[] = [];
-    this.known.clear();
-    const callsByVenue: Record<string, number> = {};
     // One request per venue so a failing venue is attributable instead of vanishing into an empty array.
-    for (const venue of this.venues) {
+    for (const venue of venues) await this.discoverOne(venue, tokenPairs, found, failures);
+    return { pools: found, failures };
+  }
+
+  /**
+   * One venue, up to `discoveryRetryDelaysMs.length + 1` attempts. An attempt is retried when the
+   * venue fetch throws a transient error, or when it returns no pools with no bounded-query failure
+   * to explain it — Dexter's FetchRequest.getLiquidityPools() catches per-venue on-chain errors
+   * internally and resolves with an empty array rather than rejecting, so a broken venue is otherwise
+   * indistinguishable from a venue with genuinely zero pools. Only the final outcome is recorded as
+   * a `discover:<venue>` failure; the venue is then `lost` until `rediscover()` brings it back.
+   */
+  private async discoverOne(venue: DexName, tokenPairs: Array<['lovelace', Asset]>, found: PoolLike[], failures: RunError[]): Promise<void> {
+    const attempts = this.discoveryRetryDelaysMs.length + 1;
+    const sleep = this.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+    let venueCalls = 0;
+    const record = (calls: number): void => { venueCalls += calls; this.callsByVenue[venue] = venueCalls; };
+    for (let attempt = 1; attempt <= attempts; attempt++) {
       const callsBefore = this.providerCalls();
+      const last = attempt === attempts;
+      const delay = this.discoveryRetryDelaysMs[attempt - 1] ?? 0;
       try {
         const pools = await this.fetcher.discoverVenue(venue, tokenPairs);
         const calls = this.providerCalls() - callsBefore;
-        callsByVenue[venue] = calls;
+        record(calls);
         // Per-pool isolation: one malformed pool (e.g. an unexpected empty `address`) must not drop
         // the rest of this venue's list — each pool's mapping is its own try/catch inside collectPoolShapes.
         const { kept, failures: poolFailures } = collectPoolShapes(venue, pools);
+        const partialFailures = this.fetcher.partialFailures?.(venue) ?? 0;
+        if (kept.length === 0 && partialFailures === 0) {
+          if (!last) {
+            this.log.warn({ venue, attempt, calls, retryInMs: delay }, 'venue returned no pools; retrying');
+            await sleep(delay);
+            continue;
+          }
+          const failure: RunError = {
+            scope: `discover:${venue}`,
+            message: `returned no pools on ${attempts} attempts (Dexter maps on-chain errors to an empty result); treat as venue failure until verified`,
+          };
+          failures.push(failure);
+          this.lost.add(venue);
+          this.log.warn({ venue, calls: venueCalls, attempts }, failure.message);
+          return;
+        }
         for (const { id, pool: like, shape } of kept) {
           this.known.set(id, shape);
           found.push(like);
@@ -358,44 +428,33 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource {
           const identifier = failure.scope.slice(`discover:${venue}:`.length);
           this.log.warn({ venue, identifier, err: failure.message }, 'skipping malformed pool');
         }
-        // Dexter's FetchRequest.getLiquidityPools() catches per-venue on-chain errors internally
-        // and, with shouldFallbackToApi false, resolves with an empty array rather than rejecting —
-        // so a broken venue is otherwise indistinguishable from a venue with genuinely zero pools.
-        // Record it as a venue failure until it is verified good, rather than silently under-counting.
-        // But skip this check if bounded-discovery queries failed: the query failures are the root cause.
-        const partialFailures = this.fetcher.partialFailures?.(venue) ?? 0;
-        if (kept.length === 0 && partialFailures === 0) {
-          const failure: RunError = {
-            scope: `discover:${venue}`,
-            message: 'returned no pools (Dexter maps on-chain errors to an empty result); treat as venue failure until verified',
-          };
-          failures.push(failure);
-          this.log.warn({ venue, calls }, failure.message);
-        }
         // Bounded-discovery venues query one address/token pair at a time; a query failing must not
         // drop the pools other queries already found, but it also must not vanish silently — report
         // it as one venue-scoped RunError, same shape as any other discovery failure.
         if (partialFailures > 0) {
           let message = `${partialFailures} address/token queries failed`;
-          if (kept.length === 0) {
-            message += '; no pools returned';
-          }
+          if (kept.length === 0) message += '; no pools returned';
           const failure: RunError = { scope: `discover:${venue}`, message };
           failures.push(failure);
           this.log.warn({ venue, partialFailures, calls }, failure.message);
         }
-        this.log.info({ venue, pools: kept.length, skipped: poolFailures.length, calls }, 'discovered pools');
+        if (kept.length > 0) this.lost.delete(venue);
+        this.log.info({ venue, pools: kept.length, skipped: poolFailures.length, calls: venueCalls, attempt }, 'discovered pools');
+        return;
       } catch (err) {
-        const calls = this.providerCalls() - callsBefore;
-        callsByVenue[venue] = calls;
+        record(this.providerCalls() - callsBefore);
         const message = (err as Error).message ?? String(err);
+        if (!last && isTransientHttpError(err)) {
+          this.log.warn({ venue, attempt, err: message, retryInMs: delay }, 'discovery failed for venue; retrying');
+          await sleep(delay);
+          continue;
+        }
         failures.push({ scope: `discover:${venue}`, message });
-        this.log.warn({ venue, err: message, calls }, 'discovery failed for venue');
+        this.lost.add(venue);
+        this.log.warn({ venue, err: message, calls: venueCalls, attempt }, 'discovery failed for venue');
+        return;
       }
     }
-    this.callsByVenue = callsByVenue;
-    if (this.refreshPolicy === 'deepest') this.pruneToDeepestPerToken();
-    return { pools: found, failures };
   }
 
   /**

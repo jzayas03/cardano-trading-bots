@@ -1,7 +1,7 @@
 import type { Pair } from '@ctb/universe';
 import type { RunError, RunSummary, SnapshotRepo } from './repo.js';
 import { bucketTick, poolIdOf, poolToSnapshot } from './snapshot.js';
-import type { DiscoveryCallsSource, PoolSource, SourceResult } from './source.js';
+import type { DiscoveryCallsSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, SnapshotRow } from './types.js';
 
 export interface CollectorState {
@@ -17,6 +17,12 @@ function hasDiscoveryCalls(source: PoolSource): source is PoolSource & Discovery
   // `unknown` is the standard way to structurally probe for an optional capability like this one.
   const maybe = source as unknown as Partial<DiscoveryCallsSource>;
   return typeof maybe.lastDiscoveryCalls === 'function';
+}
+
+/** Same structural probe for the optional rediscovery capability (only `DexterPoolSource` today). */
+function hasRediscovery(source: PoolSource): source is PoolSource & RediscoverySource {
+  const maybe = source as unknown as Partial<RediscoverySource>;
+  return typeof maybe.lostVenues === 'function' && typeof maybe.rediscover === 'function';
 }
 
 /**
@@ -97,6 +103,22 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
     if (hasDiscoveryCalls(d.source)) summary.discoveryCalls = d.source.lastDiscoveryCalls();
   }
   errors.push(...result.failures);
+
+  // A venue lost at discovery is tried again on every later tick until it returns, instead of
+  // waiting for the next full discovery. Its pools are written with this tick; its per-venue call
+  // counts go on the row so the digest can tell a one-off scan from recurring refresh cost.
+  if (!stale && hasRediscovery(d.source) && d.source.lostVenues().length > 0) {
+    const lost = d.source.lostVenues();
+    try {
+      const again = await d.source.rediscover(d.pairs);
+      result = { pools: [...result.pools, ...again.pools], failures: result.failures };
+      errors.push(...again.failures);
+      if (hasDiscoveryCalls(d.source)) summary.discoveryCalls = d.source.lastDiscoveryCalls();
+      d.log.info({ venues: lost, pools: again.pools.length, stillLost: d.source.lostVenues() }, 'retried lost venues');
+    } catch (err) {
+      errors.push({ scope: 'rediscover', message: (err as Error).message ?? String(err) });
+    }
+  }
 
   const rows: SnapshotRow[] = [];
   summary.poolsAttempted = result.pools.length + result.failures.filter(isPoolFailure).length;

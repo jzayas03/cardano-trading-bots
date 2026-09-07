@@ -29,3 +29,15 @@ export interface PoolSource {
 export interface DiscoveryCallsSource {
   lastDiscoveryCalls(): Record<string, number>;
 }
+
+/**
+ * Optional capability, structural like `DiscoveryCallsSource`: venues that returned no pools at the
+ * last discovery, and a way to try just those again. A venue lost to a transient Blockfrost 504 at
+ * 00:20 UTC on 2026-09-07 (MinswapV2, the deepest pool for 19 of 20 tokens) otherwise stayed out
+ * until the next full discovery 24 hours later.
+ */
+export interface RediscoverySource {
+  lostVenues(): string[];
+  /** Discovers the lost venues only; found pools join the known set (pruned per the refresh policy). */
+  rediscover(pairs: Pair[]): Promise<SourceResult>;
+}
