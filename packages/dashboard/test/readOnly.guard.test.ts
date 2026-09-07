@@ -29,6 +29,20 @@
  * `PgDashboardReads.prototype`'s own method names against the recorder, using `GENERIC_SAFE_ARGS`
  * sliced to each method's declared arity — there is no longer a list a reviewer can edit by hand
  * without also making the method run.
+ *
+ * Round 3 (this round): the prototype walk above only ever looked at
+ * `Object.getOwnPropertyNames(PgDashboardReads.prototype)` — which is exactly where a normal `method()`
+ * lands, but NOT where a class-field arrow lands. `purgeRuns = async (): Promise<void> => { await
+ * this.q.query('DELETE FROM runs'); };` written as a class FIELD (an arrow function assigned as a
+ * property initializer, the same syntax this file itself would use for a small helper) becomes an OWN
+ * PROPERTY of each `PgDashboardReads` INSTANCE, set during the constructor — it is never on
+ * `.prototype` at all, so `Object.getOwnPropertyNames(PgDashboardReads.prototype)` never sees its name,
+ * the reflective loop never calls it, and its `DELETE` never reaches the recorder. The fix enumerates
+ * BOTH surfaces: `Object.getOwnPropertyNames(PgDashboardReads.prototype)` (methods) UNION
+ * `Object.getOwnPropertyNames(new PgDashboardReads(rec))` (instance fields, including arrow-function
+ * ones), filtered to values that are actually callable — so a non-function own property (`q`, the
+ * constructor-assigned `Queryable`) is skipped rather than throwing "not callable", but a callable one
+ * written as a field is invoked exactly like a callable one written as a method.
  */
 import type pg from 'pg';
 import { PgRunRepo } from '@ctb/engine';
@@ -128,26 +142,54 @@ describe('dashboard read-only guard', () => {
    * statement that invocation produced. There is no name-list to satisfy by editing text: a method
    * only passes by actually running and issuing nothing but SELECT/WITH.
    *
+   * Round 3: `.prototype`'s own property names miss a class-field arrow entirely (see the file header)
+   * — `Object.getOwnPropertyNames(reads)` (the INSTANCE, after construction) is unioned in alongside
+   * `.prototype`'s own names, so a write hidden behind `purgeRuns = async () => { … }` is enumerated
+   * and invoked exactly like a write hidden behind `async purgeRuns() { … }` would be. Both sources are
+   * filtered to values that are actually functions — `q` (the constructor-assigned `Queryable`) is a
+   * non-function own instance property and is skipped, not invoked.
+   *
    * A method whose body throws (or whose returned promise rejects) when given `GENERIC_SAFE_ARGS` is
    * NOT skipped — the test fails loudly, by name, with the args that were tried. That failure is the
    * intended outcome for a method this generic invocation genuinely cannot drive (e.g. one that calls
    * a string-only method on what should have been a string): it tells whoever added the method to give
    * it an explicit, correctly-typed call, the same way `listRuns` already gets one in the `it` above —
    * never to weaken or special-case this test to make the failure go away.
+   *
+   * WHAT THIS STILL DOES NOT COVER: `GENERIC_SAFE_ARGS` is one fixed set of arguments. A method that
+   * takes a DIFFERENT branch depending on the actual value of an argument — not merely a different
+   * TYPE, which would throw and get caught by the guard above, but a different runtime VALUE of the
+   * same type this test already supplies — can hide a write on whichever branch `GENERIC_SAFE_ARGS`
+   * never reaches (e.g. `async doThing(mode: string) { if (mode === 'purge') await
+   * this.q.query('DELETE FROM runs'); return this.q.query('SELECT 1'); }` — called with `{}` from
+   * `GENERIC_SAFE_ARGS`, `mode` never equals `'purge'`, the branch with the `SELECT` is the only one
+   * ever exercised, and the test passes green while the `DELETE` branch sits untested). This is the
+   * same family of gap as the already-covered "a method that throws" case: a fixed, generic invocation
+   * can only ever prove the ONE path it happens to take, not every path a method's body can reach.
    */
-  it('reflectively invokes every PgDashboardReads prototype method and asserts everything it issues is SELECT/WITH only (I1) — a method can no longer pass by being named and never called', async () => {
+  it('reflectively invokes every PgDashboardReads prototype method AND instance field (including class-field arrows) and asserts everything it issues is SELECT/WITH only (I1) — a method or field can no longer pass by being named and never called', async () => {
     const rec = new RecordingQueryable();
     const reads = new PgDashboardReads(rec);
-    const methodNames = Object.getOwnPropertyNames(PgDashboardReads.prototype).filter((name) => name !== 'constructor');
-    expect(methodNames.length, 'PgDashboardReads has no methods at all — this test would vacuously pass, which is itself a bug').toBeGreaterThan(0);
 
     // Cast once, to a generic callable-by-name shape — there is no way to type an arbitrary FUTURE
-    // method on this interface, and that is exactly why this test exists.
-    const callable = reads as unknown as Record<string, (...args: unknown[]) => unknown>;
+    // method or field on this interface, and that is exactly why this test exists.
+    const callable = reads as unknown as Record<string, unknown>;
+
+    // `.prototype`'s own names cover a normal `method() {}`. `reads`'s own names (the INSTANCE, after
+    // the constructor has run field initializers) additionally cover a class-field arrow like
+    // `purgeRuns = async () => { … }`, which is an own property of each instance, never of the
+    // prototype — see the file header and round-3 comment above for why both are needed.
+    const prototypeNames = Object.getOwnPropertyNames(PgDashboardReads.prototype).filter((name) => name !== 'constructor');
+    const instanceNames = Object.getOwnPropertyNames(reads);
+    const methodNames = [...new Set([...prototypeNames, ...instanceNames])].filter((name) => typeof callable[name] === 'function');
+    expect(methodNames.length, 'PgDashboardReads has no methods or callable fields at all — this test would vacuously pass, which is itself a bug').toBeGreaterThan(0);
 
     for (const name of methodNames) {
       const method = callable[name];
-      if (typeof method !== 'function') throw new Error(`PgDashboardReads.${name} is not callable — the prototype has a non-method own property named ${name}`);
+      // `methodNames` was already filtered to `typeof === 'function'` above; this re-check is a belt-
+      // and-braces guard against `method` changing shape between the filter and the call (e.g. a
+      // getter with a side effect), not a case expected to fire in practice.
+      if (typeof method !== 'function') throw new Error(`PgDashboardReads.${name} is not callable — found a non-function own property (prototype or instance) named ${name}`);
       const args = GENERIC_SAFE_ARGS.slice(0, method.length);
       let result: unknown;
       try {

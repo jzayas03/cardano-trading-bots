@@ -78,11 +78,34 @@
  *     numeric constants" rule, with no separate check needed. Keeping a redundant assertion around
  *     would only add a second thing to update every time the general rule changes, for zero added
  *     coverage.
+ *   - Arithmetic expressed as a CALL has no `BinaryExpression` node at all and is invisible to this
+ *     scan: `Math.pow(a, b)` computes the same figure `a ** b` would, but is a `CallExpression`, not a
+ *     binary operator, so nothing here inspects its arguments for "is this a financial figure".
+ *   - Unary negation of an already-computed figure is not caught either — `const netLoss = -pnl;` is a
+ *     `PrefixUnaryExpression` with operator `-` and a single operand, never a `BinaryExpression`, so it
+ *     falls outside this walk entirely. This is the same family as the already-noted `++`/`--` gap: a
+ *     unary AST shape this scan does not look at, not a binary one it looks at and misjudges.
+ *   - A helper defined in a SIBLING package (e.g. a new function added to `@ctb/engine` or a brand-new
+ *     workspace package) and imported into `packages/dashboard/src` would defeat spec §4.1's actual
+ *     invariant — the dashboard would still be "computing" a figure, just one line removed — while
+ *     sitting entirely outside this guard's subject (`walk(SRC)` only ever lists files under
+ *     `packages/dashboard/src`). This guard has no way to see across a package boundary; that would
+ *     need its own guard (or a `@ctb/reports`-only allowlist enforced at the import level) and is not
+ *     attempted here.
  *
  * See the task-5-fix-3 report for the thirteen-probe injection table (all eleven of round 1 and 2's
  * injections re-proved red under the new mechanism, plus the two round-3-specific bypasses, plus two
  * over-report checks that must NOT fire), each proved red (or confirmed clean) then reverted
  * byte-exact.
+ *
+ * Round 4 (this round) closed two remaining one-line bypasses, both mechanisms this file added in
+ * earlier rounds rather than the arithmetic walk itself: the `chart.ts` export-surface pin (a regex
+ * over source text, evaded by `export class`/`export let`/`export default`/`export { name }` — see
+ * that test's own comment below for the four-way table) is now an AST walk of the same
+ * `ts.SourceFile`; and `ALLOWED_ARITHMETIC` entries now pin an exact occurrence `count`, closing the
+ * hole where a brand-new computed figure that happened to reuse an already-allowlisted expression's
+ * TEXT passed silently (see that constant's own comment above). See the task-5-fix-4 report for both
+ * injection tables.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -112,15 +135,27 @@ const FILES = walk(SRC);
  * `const offset = (query.page - 1) * PAGE_SIZE;` contains TWO arithmetic `BinaryExpression` nodes (the
  * inner `query.page - 1` and the outer `(query.page - 1) * PAGE_SIZE`), and the walk below visits and
  * checks both independently. Adding a new entry here is itself a reviewable change.
+ *
+ * `count` pins how many times THIS exact (file, expr) pair is expected to appear in `src` today (every
+ * entry below is 1). Without it, the allowlist exempted an expression's TEXT everywhere it appears in
+ * its file, not the one reviewed call site: a SECOND, brand-new `orders.length - ORDERS_MAX_ROWS`
+ * added anywhere in `pages/runs.ts` (plausible drift, e.g. `const trimmedFees = orders.length -
+ * ORDERS_MAX_ROWS;`) reused the same text as the reviewed "N more orders" line and passed clean,
+ * because `isAllowed` only ever checked membership, never cardinality. The count check below (in the
+ * `it` that walks `FILES`) tallies every occurrence this scan actually allows through and asserts the
+ * total for each entry equals `count` exactly — a second occurrence of the same text makes the tally 2
+ * against an expected 1, which fails and forces a human to add a distinct, separately-reviewed entry
+ * (or, for the rare legitimate case of the same figure needed twice, to bump `count` by hand after
+ * confirming the new site).
  */
-const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; expr: string; because: string }> = [
-  { file: 'pages/health.ts', expr: 'idx + 2', because: 'string offset past a ": " separator, not a computed figure' },
-  { file: 'pages/runs.ts', expr: 'page - 1', because: 'M2 pager: the previous page number for the "prev" link, not a financial number' },
-  { file: 'pages/runs.ts', expr: 'page + 1', because: 'M2 pager: the next page number for the "next" link, not a financial number' },
-  { file: 'pages/runs.ts', expr: 'resumes.length - 1', because: 'array index into the resumes list, to show the last one' },
-  { file: 'pages/runs.ts', expr: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line' },
-  { file: 'server.ts', expr: 'query.page - 1', because: 'SQL OFFSET from a 1-based page number, not a financial number (the inner term of the next entry)' },
-  { file: 'server.ts', expr: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number' },
+const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; expr: string; because: string; count: number }> = [
+  { file: 'pages/health.ts', expr: 'idx + 2', because: 'string offset past a ": " separator, not a computed figure', count: 1 },
+  { file: 'pages/runs.ts', expr: 'page - 1', because: 'M2 pager: the previous page number for the "prev" link, not a financial number', count: 1 },
+  { file: 'pages/runs.ts', expr: 'page + 1', because: 'M2 pager: the next page number for the "next" link, not a financial number', count: 1 },
+  { file: 'pages/runs.ts', expr: 'resumes.length - 1', because: 'array index into the resumes list, to show the last one', count: 1 },
+  { file: 'pages/runs.ts', expr: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line', count: 1 },
+  { file: 'server.ts', expr: 'query.page - 1', because: 'SQL OFFSET from a 1-based page number, not a financial number (the inner term of the next entry)', count: 1 },
+  { file: 'server.ts', expr: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number', count: 1 },
 ];
 
 function isAllowed(rel: string, exprText: string): boolean {
@@ -167,23 +202,27 @@ function isNumericConstant(node: ts.Expression): boolean {
 /**
  * Walks the whole AST (`ts.forEachChild` recurses into every nesting depth — arrow function bodies,
  * call arguments, ternaries, a template literal's `${...}` holes — the same way the parser itself
- * does) and returns the exact text of every arithmetic `BinaryExpression` that is neither a numeric
- * constant on both sides nor on the reviewed allowlist.
+ * does). Returns the exact text of every arithmetic `BinaryExpression` that is neither a numeric
+ * constant on both sides nor on the reviewed allowlist (`violations`), alongside the allowlist KEY
+ * (`${rel}::${exprText}`) of every node that WAS let through by the allowlist (`allowedHits`) — the
+ * latter is how the `it` below tallies occurrences per entry and enforces `count`.
  */
-function findArithmeticViolations(sourceFile: ts.SourceFile, rel: string): string[] {
+function findArithmeticViolations(sourceFile: ts.SourceFile, rel: string): { violations: string[]; allowedHits: string[] } {
   const violations: string[] = [];
+  const allowedHits: string[] = [];
   function visit(node: ts.Node): void {
     if (ts.isBinaryExpression(node) && ARITHMETIC_OPERATOR_KINDS.has(node.operatorToken.kind)) {
       const bothConstant = isNumericConstant(node.left) && isNumericConstant(node.right);
       if (!bothConstant) {
         const exprText = node.getText(sourceFile);
-        if (!isAllowed(rel, exprText)) violations.push(exprText);
+        if (isAllowed(rel, exprText)) allowedHits.push(`${rel}::${exprText}`);
+        else violations.push(exprText);
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
-  return violations;
+  return { violations, allowedHits };
 }
 
 function parse(file: string): ts.SourceFile {
@@ -196,11 +235,26 @@ describe('@ctb/dashboard one-rule guard', () => {
   });
 
   it('never contains binary arithmetic between two non-constant operands outside chart.ts and the reviewed allowlist', () => {
+    const allowedHitCounts = new Map<string, number>();
     for (const file of FILES) {
       const rel = relative(SRC, file);
       if (rel === 'chart.ts') continue; // the one sanctioned lovelace->float conversion, itself routed through adaStr — see the export-surface test below
-      const violations = findArithmeticViolations(parse(file), rel);
+      const { violations, allowedHits } = findArithmeticViolations(parse(file), rel);
       expect(violations, `${rel}: local arithmetic: ${violations.join(' | ')}`).toEqual([]);
+      for (const hit of allowedHits) allowedHitCounts.set(hit, (allowedHitCounts.get(hit) ?? 0) + 1);
+    }
+    // Every allowlist entry is pinned to a specific NUMBER of occurrences (see the comment on
+    // `ALLOWED_ARITHMETIC` above) — a second, unreviewed instance of the same text passes the
+    // per-node `isAllowed` check above (it can't tell "the reviewed site" from "a new site that
+    // happens to reuse the same text"), but fails HERE, because the tally no longer matches what was
+    // reviewed.
+    for (const allowed of ALLOWED_ARITHMETIC) {
+      const key = `${allowed.file}::${allowed.expr}`;
+      const actual = allowedHitCounts.get(key) ?? 0;
+      expect(
+        actual,
+        `${key}: expected exactly ${allowed.count} occurrence(s) (reviewed site: ${allowed.because}) but found ${actual} — a new occurrence of this exact allowlisted text is not automatically reviewed; add a distinct, separately-reviewed allowlist entry, or bump \`count\` only after confirming the new site by hand`,
+      ).toBe(allowed.count);
     }
   });
 
@@ -238,20 +292,71 @@ describe('@ctb/dashboard one-rule guard', () => {
    * skipped by name, not by content). This pins the file's exported surface to exactly the two exports
    * the spec sanctions, so a new export there fails loudly and forces a reviewed conversation instead
    * of a silent pass-through.
+   *
+   * Round 4 (this round) replaces a `^export\s+(?:async\s+)?(?:function|const)\s+…` SOURCE-TEXT regex
+   * with a walk of the same `ts.SourceFile` the arithmetic scan above already parses — the identical
+   * lesson as round 3's rewrite of that scan, applied to this one. The regex matched only one export
+   * SHAPE (`export function name`/`export const name` at the start of a line) and a reviewer defeated
+   * it four ways, all still exporting real, callable, un-reviewed surface from the file:
+   *   - `function pctOf(){…}` defined plainly, then re-exported via a separate `export { pctOf };` —
+   *     the regex only looks at the declaration site, never at a bare `export { … }` specifier list.
+   *   - `export class Pct { static of(a,b){ return ((a-b)/b)*100; } }` — a class, not a `function`/
+   *     `const`, so the regex's own alternation excludes it by construction.
+   *   - `export let scaleFactor = 100;` — `let`, not `const`; one keyword outside the regex's alternation.
+   *   - `export default function pctOf(){…}` — the regex requires a name to immediately follow
+   *     `function`/`const`, but a default export's runtime-visible name is `default`, not the
+   *     function's own identifier, and the regex has no `default` branch at all.
+   *   - `export * from './somewhere.js'` (not exercised by the injection table below, but the same
+   *     family) evades it too — nothing about a re-export matches `function`/`const` at all.
+   * A parenthesized `expr` sub-tree with more branches added to the regex only buys the NEXT bypass —
+   * the identical trap round 3's header called out for the arithmetic scanner. `collectChartExports`
+   * below instead reads the export surface off `ts.SourceFile.statements` directly, covering every
+   * export FORM the language has: an exported `FunctionDeclaration`/`ClassDeclaration` (recording
+   * `default` when the node also carries the `default` modifier, since that is the name a consumer
+   * actually imports), an exported `VariableStatement`'s declared identifiers (`const`/`let`/`var`
+   * alike — the AST does not care which keyword introduced it), a bare `export { name }` /
+   * `export { local as name }` specifier list (recording the EXPORTED name, i.e. `.name`, not
+   * `.propertyName`), `export default <expr>;` (an `ExportAssignment`, recorded as `default`), and
+   * `export * from '...'` / `export * as ns from '...'` (an `ExportDeclaration` with no
+   * `exportClause` — its real names live in another module and are not resolvable without a full
+   * `ts.Program`/type checker, so it is recorded as a single non-matching sentinel that fails the
+   * exact-set comparison below rather than being silently skipped).
    */
+  function hasModifier(node: ts.Node, kind: ts.SyntaxKind): boolean {
+    return ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((m) => m.kind === kind);
+  }
+
+  function collectChartExports(sourceFile: ts.SourceFile): Set<string> {
+    const exported = new Set<string>();
+    for (const stmt of sourceFile.statements) {
+      const isDefault = hasModifier(stmt, ts.SyntaxKind.DefaultKeyword);
+      if ((ts.isFunctionDeclaration(stmt) || ts.isClassDeclaration(stmt)) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
+        exported.add(isDefault ? 'default' : (stmt.name?.text ?? 'default'));
+      } else if (ts.isVariableStatement(stmt) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
+        for (const decl of stmt.declarationList.declarations) {
+          if (ts.isIdentifier(decl.name)) exported.add(decl.name.text);
+        }
+      } else if (ts.isExportAssignment(stmt)) {
+        exported.add('default'); // `export default <expr>;`
+      } else if (ts.isExportDeclaration(stmt)) {
+        if (stmt.exportClause !== undefined && ts.isNamedExports(stmt.exportClause)) {
+          for (const spec of stmt.exportClause.elements) exported.add(spec.name.text);
+        } else {
+          // `export * from '...'` / `export * as ns from '...'` — the real names come from whatever
+          // module is re-exported and are not knowable from this file's own AST. Record a sentinel
+          // that can never equal a real export name, so this fails the exact-set check below instead
+          // of silently passing through an unreviewed re-export.
+          exported.add('*(re-export — names not statically known from this file)');
+        }
+      }
+    }
+    return exported;
+  }
+
   it("chart.ts's exported surface stays pinned to exactly {equitySeries, chartHtml} — the one file this guard exempts from the arithmetic scan", () => {
     const chartFile = FILES.find((f) => relative(SRC, f) === 'chart.ts');
     if (chartFile === undefined) throw new Error('chart.ts not found under src — has it moved? the arithmetic-scan exemption above references it by this exact relative path');
-    const text = readFileSync(chartFile, 'utf8');
-    const exported = new Set<string>();
-    // Matches a top-level `export function`/`export const` declaration's name. Deliberately does NOT
-    // match `export interface`/`export type` — a type carries no runtime computation, so it is not
-    // part of the surface this test is pinning.
-    const exportRe = /^export\s+(?:async\s+)?(?:function|const)\s+([A-Za-z_$][\w$]*)/gm;
-    for (const m of text.matchAll(exportRe)) {
-      const name = m[1];
-      if (name) exported.add(name);
-    }
+    const exported = collectChartExports(parse(chartFile));
     expect(exported, "chart.ts exports something beyond {equitySeries, chartHtml} — a new export widens the file's exemption from the one-rule guard's arithmetic scan and needs its own review, not a silent pass-through").toEqual(new Set(['equitySeries', 'chartHtml']));
   });
 });
