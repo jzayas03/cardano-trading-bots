@@ -12,6 +12,8 @@ export interface Config {
   logLevel: string;
   venues: DexName[];
   refreshPolicy: 'deepest' | 'all';
+  /** Lovelace floor for a pool to stay in the refresh set; 0n disables it. */
+  minDepthLovelace: bigint;
 }
 
 /** DATABASE_URL with the read-only role's credentials; everything else (host, port, database) identical. */
@@ -57,6 +59,13 @@ const schema = z.object({
       (v): v is 'deepest' | 'all' => v === 'deepest' || v === 'all',
       'COLLECT_REFRESH must be "deepest" or "all"',
     ),
+  // Whole ADA. 0 or unset keeps every token, which is the behaviour before this option existed.
+  // See DexterPoolSourceOptions.minDepthLovelace for the measurement that motivates it.
+  COLLECT_MIN_DEPTH_ADA: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 0 : Number(v)))
+    .refine((n) => Number.isFinite(n) && n >= 0, 'COLLECT_MIN_DEPTH_ADA must be a non-negative number of ADA'),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean }): Config {
@@ -84,5 +93,6 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     logLevel: v.LOG_LEVEL ?? 'info',
     venues,
     refreshPolicy: v.COLLECT_REFRESH,
+    minDepthLovelace: BigInt(Math.round(v.COLLECT_MIN_DEPTH_ADA * 1_000_000)),
   };
 }

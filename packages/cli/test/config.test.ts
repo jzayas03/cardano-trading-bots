@@ -10,7 +10,7 @@ describe('loadConfig', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
       databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
-      venues: DEFAULT_VENUES, refreshPolicy: 'deepest',
+      venues: DEFAULT_VENUES, refreshPolicy: 'deepest', minDepthLovelace: 0n,
     });
   });
 
@@ -39,7 +39,7 @@ describe('loadConfig', () => {
       intervalSec: 600,
       logLevel: 'info',
       venues: DEFAULT_VENUES,
-      refreshPolicy: 'deepest',
+      refreshPolicy: 'deepest', minDepthLovelace: 0n,
     });
     expect(() => loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: true })).toThrow(
       /BLOCKFROST_PROJECT_ID/,
@@ -131,5 +131,25 @@ describe('deriveDashboardUrl', () => {
     expect(deriveDashboardUrl('postgres://ctb:ctb_local_only@localhost:5433/ctb')).toBe(
       'postgres://ctb_dashboard:ctb_dashboard_local_only@localhost:5433/ctb',
     );
+  });
+});
+
+/**
+ * The refresh depth floor. Off by default so an existing deployment is unchanged; whole ADA in the
+ * environment, lovelace in the config, because every amount in this codebase is lovelace bigint.
+ */
+describe('COLLECT_MIN_DEPTH_ADA', () => {
+  const base = { DATABASE_URL: 'postgres://ctb:ctb_local_only@localhost:5433/ctb' };
+  it('is 0 when unset or blank, which disables the filter', () => {
+    expect(loadConfig(base, { blockfrost: false }).minDepthLovelace).toBe(0n);
+    expect(loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: '' }, { blockfrost: false }).minDepthLovelace).toBe(0n);
+  });
+  it('converts whole ADA to lovelace', () => {
+    expect(loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: '400000' }, { blockfrost: false }).minDepthLovelace).toBe(400_000_000_000n);
+    expect(loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: '0.5' }, { blockfrost: false }).minDepthLovelace).toBe(500_000n);
+  });
+  it('refuses a negative or non-numeric value rather than silently disabling itself', () => {
+    expect(() => loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: '-1' }, { blockfrost: false })).toThrow(/COLLECT_MIN_DEPTH_ADA/);
+    expect(() => loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: 'deep' }, { blockfrost: false })).toThrow(/COLLECT_MIN_DEPTH_ADA/);
   });
 });

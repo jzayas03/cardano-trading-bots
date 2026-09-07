@@ -28,6 +28,26 @@ The `.env.example` comments carry the arithmetic. The Blockfrost dashboard count
 authority, not `provider_calls` — the two agree on a clean day and only the dashboard counts
 retries the SDK made on our behalf.
 
+## The budget does not fit at 20 tokens
+
+Measured over the M1 run on 2026-09-07: refresh costs about **14.9 Blockfrost calls per pool per
+tick**, not the ~10 first estimated. MinswapV2 is the deepest pool for all 20 universe tokens, so a
+refresh tick is 297 calls, and a normal day at a 600-second interval is 144 ticks plus one discovery:
+
+    144 x 297 + 5,692 = 48,460 calls = 97% of the free tier's 50,000
+
+That leaves no room for a second discovery, which a restart or a lost venue triggers. Two levers:
+
+- **`COLLECT_MIN_DEPTH_ADA`** refreshes only tokens whose pool holds at least that much ADA. A floor
+  of 400,000 keeps 13 tokens and lands at 67% of the tier; 480,000 keeps 10 and lands at 54%. The
+  tokens it drops are the ones that barely move anyway — under 400,000 ADA they changed price on
+  between 1.7% and 15.7% of ticks. Discovery is untouched, so a token that gains liquidity rejoins.
+- **`COLLECT_INTERVAL_SECONDS`** trades granularity for budget across all 20 tokens: 900 seconds is
+  96 ticks a day, 34,200 calls, 68%.
+
+The collector logs which pools a floor drops. Prefer the floor over the interval when the shallow end
+of the universe is not what you are trading.
+
 ## Start
 
 ```bash
