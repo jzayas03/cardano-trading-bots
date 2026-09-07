@@ -2,7 +2,8 @@
 
 Paper-trading foundation for Cardano DEX bots. No real funds move in this repo.
 Design: `docs/specs/2026-09-05-paper-trading-foundation.md`. Plan: `docs/plans/`.
-Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-paper.md` (paper mode).
+Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-paper.md` (paper mode),
+`docs/ops/RUNBOOK-dashboard.md` (the read-only web dashboard).
 
 ## Quick start
 
@@ -12,6 +13,7 @@ Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-pap
     npm run migrate
     npm run collect -- --once
     npm run status
+    npm run dashboard                # http://127.0.0.1:3210/ — read-only, localhost only
 
 ## Strategies
 
