@@ -2,7 +2,9 @@
 
 Operating the snapshot collector as a long-running process: start, check, watch the Blockfrost
 budget, stop, recover. Written after the first real day of running it (run 52 onward, 2026-09-07).
-The paper-mode runbook is `docs/ops/RUNBOOK-paper.md`; it assumes this process is running.
+The paper-mode runbook is `docs/ops/RUNBOOK-paper.md`; it assumes this process is running. Once the
+dashboard (`docs/ops/RUNBOOK-dashboard.md`) is set up, its health page at `http://127.0.0.1:3210/` is
+the morning check — the same collector-tick and quota lines below, without a terminal.
 
 ## Before anything: `npm run doctor`
 

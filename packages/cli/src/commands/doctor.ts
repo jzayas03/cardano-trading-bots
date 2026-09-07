@@ -17,6 +17,50 @@ export function listProcesses(): ProcessLine[] {
   }).filter((p) => Number.isFinite(p.pid));
 }
 
+/** `npm run dashboard`'s own default (`commands/dashboard.ts`'s `DEFAULT_PORT`); doctor checks only
+ * this well-known port, not whatever an operator may have passed as `--port`. */
+export const DASHBOARD_HEALTH_URL = 'http://127.0.0.1:3210/';
+const DASHBOARD_PROBE_TIMEOUT_MS = 1000;
+
+/**
+ * Pure: turns "did something answer" into a `Check`. A dashboard that is not running is not a
+ * problem with the machine doctor is diagnosing — it is simply not running right now, same as
+ * `paper processes` reads "none running" as `ok` — so this is `ok` either way; only the detail says
+ * which. Kept separate from `probeDashboard` below so the mapping itself is testable with no network
+ * call at all.
+ */
+export function dashboardCheck(reachable: boolean): Check {
+  return { name: 'dashboard', status: 'ok', detail: reachable ? 'running' : 'not running' };
+}
+
+/**
+ * The impure probe: a GET against the dashboard's well-known default port with a ~1s timeout.
+ * `fetchImpl` is injectable (default: the global `fetch`) so callers can exercise every outcome —
+ * refused connection, timeout, or an unexpected response — without a real network call, per the
+ * brief's "if the fetch cannot be tested without a network call, inject it so it can be." Any
+ * response at all, even a non-2xx one, means *something* is answering on that port and counts as
+ * running; a refused connection, an aborted/timed-out request, or any other fetch failure all mean
+ * "not running." This must never throw: a down dashboard is informational only, never a doctor FAIL.
+ */
+export async function probeDashboard(
+  fetchImpl: typeof fetch = fetch,
+  url: string = DASHBOARD_HEALTH_URL,
+  timeoutMs: number = DASHBOARD_PROBE_TIMEOUT_MS,
+): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    await fetchImpl(url, { signal: controller.signal });
+    return true;
+  } catch {
+    // intentional: a refused connection (ECONNREFUSED), an aborted/timed-out request, or any other
+    // fetch failure are all indistinguishable from "nothing is listening" for this check's purpose.
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Preflight for the machine, before any long run. Every check that can be pure is pure (doctor.ts)
  * and unit-tested; this file only gathers the inputs. Exit code 1 on any FAIL so a start script can
@@ -30,6 +74,7 @@ export async function doctorCommand(log: Logger): Promise<void> {
   checks.push(checkNode(process.version, nvmrc));
   checks.push(...checkEnv(process.env));
   checks.push(...checkProcesses(listProcesses(), process.pid));
+  checks.push(dashboardCheck(await probeDashboard()));
   try {
     checks.push(checkDisk(Number(statfsSync(root).bavail) * Number(statfsSync(root).bsize), root));
   } catch (err) {
