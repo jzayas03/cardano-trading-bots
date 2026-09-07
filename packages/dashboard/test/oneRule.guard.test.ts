@@ -2,6 +2,16 @@
  * The one rule (spec §4.1): `packages/dashboard` computes no number of its own. Every figure on
  * every page is the return value of a function imported from `@ctb/reports`.
  *
+ * WHAT THIS GUARD COVERS, AND WHAT IT DOES NOT (IMPORTANT 4, final review): this guard is about
+ * PROVENANCE — where a number comes FROM — never about PLACEMENT — where it ends up on the page. It
+ * would not have caught, and is not meant to catch, a reviewer swapping the `return %` and `max DD %`
+ * columns in `renderRunsList`'s row array: no arithmetic changed and no import changed (both values
+ * still came from `@ctb/reports`/`runs.summary`, exactly as this guard requires), so it — and every
+ * other test in this repo that only asserted a value appeared SOMEWHERE on the page — stayed green
+ * while every run's drawdown displayed under "return %". Placement is covered by a DIFFERENT test:
+ * `runs.test.ts`'s `renderRunsList` describe block pins each summary field to its own column POSITION
+ * by reading the `<td>` at that column's index, with distinctive values so a swap fails there.
+ *
  * Round 1 of this guard keyed on four hardcoded identifier names plus two literal patterns and caught
  * only 1 of 6 realistic violations (see the task-5-fix-1 report for that table). It was replaced with
  * a SHAPE rule over source TEXT: any binary arithmetic operator sitting between two token-like
@@ -106,6 +116,12 @@
  * hole where a brand-new computed figure that happened to reuse an already-allowlisted expression's
  * TEXT passed silently (see that constant's own comment above). See the task-5-fix-4 report for both
  * injection tables.
+ *
+ * Round 5 (final review, MINOR finding): the `chart.ts` export-surface pin handled a function, a
+ * class, a variable, a bare `export { name }`, `export default`, and `export *` — but not `export
+ * enum` or `export namespace`, either of which can carry callable surface (an enum's reverse mapping;
+ * a namespace nesting its own function) inside the one file this guard exempts from the arithmetic
+ * scan. `collectChartExports` now also walks `EnumDeclaration` and `ModuleDeclaration` nodes.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -336,6 +352,15 @@ describe('@ctb/dashboard one-rule guard', () => {
         for (const decl of stmt.declarationList.declarations) {
           if (ts.isIdentifier(decl.name)) exported.add(decl.name.text);
         }
+      } else if ((ts.isEnumDeclaration(stmt) || ts.isModuleDeclaration(stmt)) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
+        // MINOR (final review): the original four export FORMS above did not include `export enum` or
+        // `export namespace` — either can carry callable surface (an enum's reverse-mapping object is
+        // itself just an object; a namespace can nest a function declaration) inside the one file this
+        // guard exempts from the arithmetic scan. `stmt.name` is always an `Identifier` for both an
+        // `EnumDeclaration` and a `ModuleDeclaration` written as `namespace X {}`/`module X {}` (only
+        // `declare module "some string"` uses a `StringLiteral` name, which cannot arise in a file this
+        // guard also parses for real, non-ambient code) — recorded the same way a class or function is.
+        exported.add(ts.isIdentifier(stmt.name) ? stmt.name.text : 'default');
       } else if (ts.isExportAssignment(stmt)) {
         exported.add('default'); // `export default <expr>;`
       } else if (ts.isExportDeclaration(stmt)) {

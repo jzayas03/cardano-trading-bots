@@ -61,14 +61,31 @@ dt { color: var(--muted); }
 dd { margin: 0; }
 `;
 
-/** Full document. The rehearsal banner (when present) renders before the title, so it is the first
- * thing on the page regardless of what the caller passes as `body`. */
-export function layout(title: string, body: string, opts: { refreshSec?: number; rehearsal?: boolean } = {}): string {
+/**
+ * Full document. The rehearsal banner (when present) renders before the title, so it is the first
+ * thing on the page regardless of what the caller passes as `body`.
+ *
+ * IMPORTANT 2 (final review): `chart.ts`'s `chartHtml` emits a bare inline `new uPlot(...)`, and this
+ * function emitted uPlot's STYLESHEET but never its SCRIPT — so a page with a chart threw
+ * `ReferenceError: uPlot is not defined` in a real browser and rendered an empty box, while both task
+ * reports that shipped this asserted only that the page body *contains* `new uPlot(`, which was true
+ * and proved nothing about whether the library that call needs was ever loaded. `opts.chart: true`
+ * loads BOTH the stylesheet and the 51 KB script — in `<head>`, with no `defer`/`async`, so the browser
+ * finishes parsing and running it before it reaches this function's own `body` interpolation below,
+ * where a chart page's inline `new uPlot(...)` script sits. Only a page that actually instantiates a
+ * chart passes `chart: true` (currently: the run detail page, and only when it has enough persisted
+ * equity points — see `pages/runs.ts`'s `renderEquityChart`) so the health board and the runs list
+ * never pay for 51 KB they do not use.
+ */
+export function layout(title: string, body: string, opts: { refreshSec?: number; rehearsal?: boolean; chart?: boolean } = {}): string {
   // `opts.refreshSec` is typed as `number`, so this is not reachable today — but every interpolation
   // in this file goes through `escape()` on principle (Task 5's guard test pins that literally), so a
   // future loosening of the type (or a caller reaching in with `as`) can't reintroduce an unescaped hole.
   const refreshMeta = opts.refreshSec !== undefined ? `<meta http-equiv="refresh" content="${escape(opts.refreshSec)}">` : '';
   const banner = opts.rehearsal ? `<div class="banner rehearsal">${escape(REHEARSAL_BANNER)}</div>` : '';
+  const chartAssets = opts.chart
+    ? '<link rel="stylesheet" href="/vendor/uPlot.min.css">\n<script src="/vendor/uPlot.iife.min.js"></script>'
+    : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -76,7 +93,7 @@ export function layout(title: string, body: string, opts: { refreshSec?: number;
 <meta name="viewport" content="width=device-width, initial-scale=1">
 ${refreshMeta}
 <title>${escape(title)}</title>
-<link rel="stylesheet" href="/vendor/uPlot.min.css">
+${chartAssets}
 <style>${PAGE_CSS}</style>
 </head>
 <body>

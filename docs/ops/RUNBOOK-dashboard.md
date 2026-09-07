@@ -26,9 +26,13 @@ logger every command uses):
 INFO: migrations applied {"applied":["0006_dashboard_role.sql"]}
 ```
 
-If it has already been applied (this is idempotent — the role is only created `IF NOT EXISTS`, and a
-schema can be migrated more than once safely), it instead prints `schema already current` and does
-nothing.
+If it has already been applied, it instead prints `schema already current` and does nothing — this is
+idempotent, but not via a check-then-create: `CREATE ROLE` has no `IF NOT EXISTS` form, and a
+check-then-create is not atomic across concurrent sessions (measured: 7 of 8 concurrent migrations,
+each racing a fresh cluster, failed with a duplicate-role error that way). The migration instead tries
+the `CREATE ROLE` unconditionally and catches the collision (`duplicate_object`/`unique_violation`) when
+another session already created it — the standard idiom for "create this cluster-wide object exactly
+once, however many sessions race to do it."
 
 **Confirm the role is really read-only** before trusting anything else in this file. Connect as
 `ctb_dashboard` directly and try a write — it must be refused:
@@ -74,20 +78,31 @@ exits on its own; there is no state to flush and nothing to wait for.
 
 ## What each page shows
 
-- **`/` Health.** The same lines `status --digest` prints — collector tick freshness, quota pace,
+- **`/` Health.** The digest lines `status --digest` prints — collector tick freshness, quota pace,
   any venue lost since the last discovery — rendered as a status board instead of terminal text,
   plus `doctor`'s own process, migration and rehearsal-data checks below them. Refreshes itself every
   60 seconds so it is safe to leave open. A database error renders an error page rather than a stale
-  or partial board.
+  or partial board. **It does not yet carry `status --digest`'s trailing `paper runs:` section** (a
+  later milestone's work) — an operator who switches their morning check to this page loses visibility
+  into which paper runs are currently running until that section is added here; run `status --digest`
+  or `status` alongside it if that matters to you today.
 - **`/runs`.** Every run, newest first, 50 to a page. Filter by mode, strategy, ticker or status
   with query parameters; an unrecognized filter value is a 400 naming what is accepted, never a
-  silent "show everything." Each row carries the same return, drawdown, fill counts and warning
-  count `report` would print for that run, and a `REHEARSAL` marker for any run made with synthetic
-  data.
+  silent "show everything." Each row's return %, max DD %, and fill counts come from `runs.summary` —
+  the row the engine wrote once, at finish time — never from a fresh query over that run's own rows
+  (the list would stop being one query per page otherwise). For a run with no resume this IS the whole
+  run. For a **resumed** paper run, `runs.summary` reflects only the LAST segment that wrote it, not
+  the whole run — the `basis` column reads `summary (last segment)` for exactly this case, and
+  `/runs/:id` for the same run shows the full picture: the whole-run headline (from every persisted
+  row across every segment) AND this same `runs.summary` table, side by side, so the two numbers are
+  never on different pages with no way to tell which is which.
 - **`/runs/:id`.** One run's own page: its provenance (git sha, mode, data source, window, fill
-  model, strategy params), the coverage and feed-counter lines, every warning, the headline numbers,
-  an equity chart for paper runs, and the orders table. A rehearsal run shows the
-  `REHEARSAL — synthetic data — not evidence` banner at the top.
+  model, strategy params), the coverage and feed-counter lines, every warning, the headline numbers —
+  for a paper run, BOTH the whole-run persisted-rows headline and, right below it, the same
+  `runs.summary` table `/runs`'s `basis` column is reading from, under the identical heading `report
+  <id>` prints — an equity chart for paper runs with at least two persisted equity points, and the
+  orders table. A rehearsal run shows the `REHEARSAL — synthetic data — not evidence` banner at the
+  top.
 
 ## What it can never do
 
@@ -119,10 +134,18 @@ that matters.
 
 Every number on every page is the return value of a function from `@ctb/reports` — the same package
 and, for a given run or digest, the same function call `report <id>`, `status --digest`, and `doctor`
-already use. Two guard tests in `packages/dashboard/test` pin this: one greps the dashboard package
-for any arithmetic of its own (a `returnPct`, `maxDrawdown`, `/ 1_000_000`, or similar assignment that
-is not an import), and the other runs every handler against a database stand-in that fails on any
-query that is not `SELECT`/`WITH`.
+already use. Two guard tests in `packages/dashboard/test` pin this: one parses every source file's
+TypeScript AST (`ts.createSourceFile`, not a grep or regex over the text) and fails on any binary
+arithmetic expression between two non-constant operands outside the one file spec sanctions for the
+lovelace-to-float conversion (`chart.ts`, whose own exported surface is separately pinned) — a real
+parser sees past comments, string/template contents, and formatting the way a regex cannot, which is
+why this guard was rewritten onto it after two earlier text-based versions each left a bypass. The
+other runs every handler against a database stand-in that fails on any query that is not
+`SELECT`/`WITH`. **This rule is about provenance — where a number comes FROM — not about placement —
+where it lands on the page.** It would not catch, and does not try to catch, two of a page's own
+columns being swapped with each other: both numbers still came from `@ctb/reports`/`runs.summary`,
+satisfying the rule, while displaying under each other's label. Placement is a separate, narrower pin
+in `packages/dashboard/test/runs.test.ts` that reads each column's own cell by position.
 
 That means the health page and `status --digest` cannot legitimately show different numbers for the
 same collector state, and neither can a run's `/runs/:id` page and `report <id>` for the same run —

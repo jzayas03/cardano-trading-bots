@@ -5,9 +5,10 @@ Written for M3; the acceptance drill itself is Task 7 of `docs/plans/2026-09-06-
 
 The paper process builds its own candles each boundary. It does **not** depend on a `candles` cron,
 but it does depend on `collect` running: without snapshots there is nothing to build from. The
-dashboard's `/runs/:id` page (`docs/ops/RUNBOOK-dashboard.md`) shows the same headline and equity
-chart as `report <id>` below, and its health page is the morning check for whether this run's feed is
-still alive.
+dashboard's `/runs/:id` page (`docs/ops/RUNBOOK-dashboard.md`) shows the same headline `report <id>`
+prints below — `report` has no equity chart of its own, so the chart is something this page gives you
+that the terminal command cannot — and its health page is the morning check for whether this run's
+feed is still alive.
 
 `collect` defaults to a 600s interval, `COLLECT_REFRESH=deepest` (one pool per token), and 6 venues
 (see `.env.example` for the refresh-budget arithmetic) — `paper` inherits the 600s interval from

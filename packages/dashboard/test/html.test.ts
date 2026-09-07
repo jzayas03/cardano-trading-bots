@@ -65,6 +65,19 @@ describe('layout', () => {
   it('escapes the title', () => {
     expect(layout('<script>', '<p></p>')).toContain('&lt;script&gt;');
   });
+
+  // IMPORTANT 2 (final review): `chart.ts`'s `chartHtml` emits a bare inline `new uPlot(...)` — a page
+  // that never loads uPlot's own script throws `ReferenceError: uPlot is not defined` in a real
+  // browser and renders an empty box. `chart: true` must load the script the inline call needs, not
+  // merely the stylesheet that was already (silently, uselessly) there.
+  it('loads uPlot\'s script and stylesheet only when chart is true', () => {
+    const withChart = layout('T', '<p></p>', { chart: true });
+    expect(withChart).toContain('<script src="/vendor/uPlot.iife.min.js"></script>');
+    expect(withChart).toContain('<link rel="stylesheet" href="/vendor/uPlot.min.css">');
+    const without = layout('T', '<p></p>');
+    expect(without).not.toContain('uPlot.iife.min.js');
+    expect(without).not.toContain('uPlot.min.css');
+  });
 });
 
 describe('statusWord', () => {
