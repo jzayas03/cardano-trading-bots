@@ -1,4 +1,6 @@
 import type { Strategy } from '../types.js';
+import { buyAndHold } from './buyAndHold.js';
 import { maCrossover } from './maCrossover.js';
-export const STRATEGIES: Record<string, Strategy> = { [maCrossover.id]: maCrossover };
-export { maCrossover };
+import { rsiMeanReversion } from './rsiMeanReversion.js';
+export const STRATEGIES: Record<string, Strategy> = { [maCrossover.id]: maCrossover, [rsiMeanReversion.id]: rsiMeanReversion, [buyAndHold.id]: buyAndHold };
+export { buyAndHold, maCrossover, rsiMeanReversion };

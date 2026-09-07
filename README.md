@@ -13,6 +13,15 @@ Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-pap
     npm run collect -- --once
     npm run status
 
+## Strategies
+
+Three plumbing proofs, none a recommendation: `ma-crossover`, `rsi-mean-reversion`, and the
+`buy-and-hold` baseline every other row is read against. Compare them over one window:
+
+    npm run backtest -- ma-crossover,rsi-mean-reversion,buy-and-hold SNEK 2026-06-01T00:00:00Z 2026-09-01T00:00:00Z --source external --depth-ada 800000
+
+Each strategy gets its own persisted run; a comparison table follows the per-run reports.
+
 ## Checks
 
     npm test        # unit tests

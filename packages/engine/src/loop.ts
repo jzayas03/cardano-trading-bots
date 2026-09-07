@@ -120,6 +120,13 @@ export class Summarizer {
   }
 
   /** Number of orders ingested so far, regardless of whether the caller is retaining them. */
+  get filledCount(): number {
+    return this.filled;
+  }
+  /** Reject reasons, most frequent first, as `reason xN`. */
+  topRejectReasons(n: number): string[] {
+    return Object.entries(this.rejectReasons).sort((a, b) => b[1] - a[1]).slice(0, n).map(([r, k]) => `${r} x${k}`);
+  }
   get orderCount(): number {
     return this.intents;
   }
@@ -278,6 +285,13 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     const warning = `strategy ${d.strategy.id} produced zero intents over ${candles} candles (warmup ${warmup}, params ${JSON.stringify(params)})`;
     warnings.push(warning);
     d.log.warn({ strategy: d.strategy.id, candles, warmup, params }, 'run produced zero intents');
+  } else if (summarizer.filledCount === 0) {
+    // The other way a run can be a non-event: it kept asking and the executor kept saying no. A
+    // buy-and-hold at fraction 1 did this 4,969 times over one window (insufficient cash: the fees
+    // the strategy cannot see) and reported a clean 0% return with nothing flagged.
+    const warning = `strategy ${d.strategy.id} emitted ${summarizer.orderCount} intents and none filled (${summarizer.topRejectReasons(3).join(', ')})`;
+    warnings.push(warning);
+    d.log.warn({ strategy: d.strategy.id, intents: summarizer.orderCount, reasons: summarizer.topRejectReasons(3) }, 'run never filled');
   }
   const summary = summarizer.finish(coverage, warnings);
   d.log.info({ strategy: d.strategy.id, ...summary }, 'engine run finished');

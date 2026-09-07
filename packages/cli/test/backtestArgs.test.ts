@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { parseBacktestArgs } from '../src/commands/backtest.js';
+import { parseBacktestArgs, parseStrategyList } from '../src/commands/backtest.js';
 
 describe('parseBacktestArgs', () => {
   it('parses positionals, defaults, and params', () => {
     const a = parseBacktestArgs(['ma-crossover', 'SNEK', '2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', '--param', 'fast=6', '--param', 'slow=24']);
-    expect(a).toMatchObject({ strategyId: 'ma-crossover', ticker: 'SNEK', source: 'candles', cashAda: 1000, depthAda: null, params: { fast: 6, slow: 24 }, syntheticPrice: 'close' });
+    expect(a).toMatchObject({ strategyIds: ['ma-crossover'], ticker: 'SNEK', source: 'candles', cashAda: 1000, depthAda: null, params: { fast: 6, slow: 24 }, syntheticPrice: 'close' });
     expect(a.from.toISOString()).toBe('2026-08-01T00:00:00.000Z');
   });
   it('requires --depth-ada for the external source and forbids it otherwise', () => {
@@ -48,5 +48,14 @@ describe('parseBacktestArgs', () => {
     expect(parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--source', 'external', '--depth-ada', '5000', '--synthetic-price', 'worst']).syntheticPrice).toBe('worst');
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--synthetic-price', 'worst'])).toThrow(/--synthetic-price only applies/);
     expect(() => parseBacktestArgs(['s', 'T', '2026-08-01', '2026-09-01', '--source', 'external', '--depth-ada', '5000', '--synthetic-price', 'bogus'])).toThrow(/--synthetic-price must be/);
+  });
+
+  // A comma list runs several strategies over one window. Fewer than typed is refused, not dropped.
+  it('accepts a comma-separated strategy list and refuses empty or repeated ids', () => {
+    expect(parseBacktestArgs(['ma-crossover,rsi-mean-reversion, buy-and-hold', 'T', '2026-08-01', '2026-09-01']).strategyIds).toEqual(['ma-crossover', 'rsi-mean-reversion', 'buy-and-hold']);
+    expect(parseStrategyList('a')).toEqual(['a']);
+    expect(() => parseStrategyList('a,,b')).toThrow(/empty strategy id/);
+    expect(() => parseStrategyList('a,b,')).toThrow(/empty strategy id/);
+    expect(() => parseStrategyList('a,b,a')).toThrow(/listed more than once/);
   });
 });
