@@ -2,12 +2,13 @@ import { readFile } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { RunRepo } from '@ctb/engine';
-import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
+import type { VenuePoolCount } from '@ctb/collector';
+import type { RunRepo, RunningRun } from '@ctb/engine';
+import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, heartbeatAgeCell, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';
 import { escape, layout } from './html.js';
 import { renderCompare } from './pages/compare.js';
-import { renderHealth } from './pages/health.js';
+import { renderHealth, type PaperRunRow } from './pages/health.js';
 import { renderRunDetail, renderRunsList } from './pages/runs.js';
 import { renderUniverse, UNIVERSE_SORTS } from './pages/universe.js';
 import { RUN_MODES, RUN_STATUSES, type DashboardReads, type RunFilter } from './reads.js';
@@ -18,8 +19,19 @@ export interface DashboardDeps {
   /** `PgDashboardReads` in production (see `commands/dashboard.ts`); a literal `{ listRuns: async
    *  () => [] }` in tests that don't exercise `/runs`. */
   reads: DashboardReads;
-  runs: Pick<RunRepo, 'getRun' | 'listOrders' | 'listEquity'>;
-  collector: { digestInput(intervalSec: number, venues: string[], now: Date): Promise<DigestInput> };
+  /** `listRunning` (added alongside the health page's "paper runs" section) is `PgRunRepo`'s own
+   *  method — the same one `status`'s paper-runs table already calls — so the two surfaces can never
+   *  disagree about which runs are currently running. */
+  runs: Pick<RunRepo, 'getRun' | 'listOrders' | 'listEquity' | 'listRunning'>;
+  /** `perVenuePoolCounts`/`missingTicksApprox` are `PgSnapshotRepo`'s own methods (moved there,
+   *  verbatim SQL, from `status`'s former inline queries) — added so the health page's three
+   *  previously-missing sections (spec: per-venue pool table, missing-ticks line, paper runs) render
+   *  the exact numbers `status --digest` prints, from the exact same calls. */
+  collector: {
+    digestInput(intervalSec: number, venues: string[], now: Date): Promise<DigestInput>;
+    perVenuePoolCounts(): Promise<VenuePoolCount[]>;
+    missingTicksApprox(intervalSec: number): Promise<string | null>;
+  };
   /** Injected so the trap cases (two collectors, a stopped fake collector) are unit-testable without a machine. */
   processes: () => ProcessLine[];
   migrations: () => Promise<{ onDisk: string[]; applied: string[] }>;
@@ -97,6 +109,30 @@ async function vendorFile(filename: string, contentType: string): Promise<Handle
 }
 
 /** `/`: the digest as a status board, plus the doctor's process, migration and rehearsal-data checks. */
+/**
+ * Builds the health page's "paper runs" rows the same way `status`'s own paper-runs table does
+ * (`packages/cli/src/commands/status.ts`): `listRunning()` for the running set, one `getRun` per row
+ * for its `params` (few rows at most — running paper processes, not request volume), and
+ * `heartbeatAgeCell` (from `@ctb/reports`, the same function `status` calls) for liveness. Kept as a
+ * standalone function so `oneRule.guard.test.ts`'s arithmetic scan has one small, obviously-correct
+ * site to walk rather than this logic living inline inside `healthHandler`.
+ */
+async function paperRunRows(deps: DashboardDeps, running: RunningRun[], now: Date): Promise<PaperRunRow[]> {
+  return Promise.all(running.map(async (r) => {
+    const full = await deps.runs.getRun(r.id);
+    return {
+      id: r.id, strategy: r.strategyId, ticker: deps.tickerOf(r.baseUnit), rehearsal: r.rehearsal,
+      heartbeatAge: heartbeatAgeCell(r.heartbeatAt, full?.params ?? {}, now),
+      lastTick: r.lastTickTs ? r.lastTickTs.toISOString() : '-', created: r.createdAt.toISOString(),
+    };
+  }));
+}
+
+/** `/`: the digest as a status board, plus the doctor's process, migration and rehearsal-data checks,
+ *  plus (spec: closing the runbook's admitted gap) the three sections `status --digest` also prints
+ *  that this page did not yet carry: the per-venue pool table, the missing-ticks line, and the paper
+ *  runs table — every one of them from the identical `PgSnapshotRepo`/`PgRunRepo` calls `status`
+ *  itself makes, so the two surfaces can never legitimately disagree. */
 async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
   const now = deps.now();
   const digestInput = await deps.collector.digestInput(deps.intervalSec, deps.venues, now);
@@ -109,7 +145,11 @@ async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
     checkFakeRows(fake.snapshots, fake.candles),
     ...deps.envChecks(),
   ];
-  return htmlPage(200, renderHealth({ digest, checks, now }));
+  const perVenue = await deps.collector.perVenuePoolCounts();
+  const missingTicks = await deps.collector.missingTicksApprox(deps.intervalSec);
+  const running = await deps.runs.listRunning();
+  const paperRuns = await paperRunRows(deps, running, now);
+  return htmlPage(200, renderHealth({ digest, checks, now, perVenue, missingTicks, paperRuns }));
 }
 
 const PAGE_SIZE = 50;

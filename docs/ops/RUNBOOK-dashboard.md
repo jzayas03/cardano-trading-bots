@@ -80,14 +80,14 @@ exits on its own; there is no state to flush and nothing to wait for.
 
 - **`/` Health.** The digest lines `status --digest` prints — collector tick freshness, quota pace,
   any venue lost since the last discovery — rendered as a status board instead of terminal text,
-  plus `doctor`'s own process, migration and rehearsal-data checks below them. Refreshes itself every
-  60 seconds so it is safe to leave open. A database error renders an error page rather than a stale
-  or partial board. **It does not yet carry `status --digest`'s three trailing sections** (a later
-  milestone's work): the per-venue pool-count table, the `ticks missing in last 24h (approx)` line,
-  and the `paper runs:` table. An operator who switches their morning check to this page loses
-  visibility into per-venue pool distribution, the approximate tick-gap count, and which paper runs
-  are currently running, until those sections are added here; run `status --digest` or `status`
-  alongside it if any of that matters to you today.
+  plus `doctor`'s own process, migration and rehearsal-data checks below them. Below those: the same
+  three sections `status --digest` prints after the digest lines, from the exact same repository
+  calls — a per-venue pool-count table at the newest tick, the `ticks missing in last 24h (approx)`
+  line, and the paper runs table (id, strategy, ticker, rehearsal, heartbeat age, last tick, created;
+  `(none running)` when nothing is). Refreshes itself every 60 seconds so it is safe to leave open. A
+  database error renders an error page rather than a stale or partial board. This page now carries
+  everything `status --digest` prints — an operator can make this their morning check without also
+  running the command.
 - **`/runs`.** Every run, newest first, 50 to a page. Filter by mode, strategy, ticker or status
   with query parameters; an unrecognized filter value is a 400 naming what is accepted, never a
   silent "show everything." Each row's return %, max DD %, and fill counts come from `runs.summary` —
