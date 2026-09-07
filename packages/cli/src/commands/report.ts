@@ -1,5 +1,6 @@
 import { createPool } from '@ctb/db';
-import { PgRunRepo, type EquityPoint, type OrderRecord, type RunCoverage, type RunRow } from '@ctb/engine';
+import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
+import { adaStr, coverageLine, feedCountersLine, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -8,6 +9,8 @@ import { join } from 'node:path';
 import { loadConfig } from '../config.js';
 import { csvFileNames, equityCsv, ordersCsv } from '../csv.js';
 import { compareRunRows, type CompareRunInput } from '../compare.js';
+
+export { adaStr, coverageLine, feedCountersLine, summarizeDay, summarizeRun, type DaySummary };
 
 const USAGE = 'usage: report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <run-id>[,<run-id>...]';
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -27,92 +30,6 @@ export function dayWindow(day: string): { from: Date; to: Date } {
     throw new Error(`--day is not a real calendar date: ${day}`);
   }
   return { from, to: new Date(from.getTime() + 86_400_000 - 1) };
-}
-
-export interface DaySummary {
-  points: number;
-  startEquity: bigint | null; endEquity: bigint | null;
-  startExecutable: bigint | null; endExecutable: bigint | null;
-  returnPct: number | null;
-  filled: number; rejected: number; rejectReasons: Record<string, number>; staleRejects: number;
-  feesLovelace: bigint; poolFeesIn: bigint;
-}
-
-/**
- * Pure: the day's equity points and orders in, a summary out. `returnPct` is computed from the
- * first and last equity point of the day in basis points via bigint (never a float division on
- * lovelace amounts), and is null when there are fewer than two points or the start equity is 0 —
- * there is no return to report over zero or one point. `staleRejects` is the `stale t+1` sub-count
- * called out separately in the reject-reasons table (spec: a stale pair does not trade).
- */
-export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DaySummary {
-  const first = equity[0] ?? null;
-  const last = equity.length > 0 ? equity[equity.length - 1]! : null;
-  const startEquity = first ? first.equityLovelace : null;
-  const endEquity = last ? last.equityLovelace : null;
-  const returnPct =
-    equity.length >= 2 && startEquity !== null && startEquity !== 0n && endEquity !== null
-      ? Number(((endEquity - startEquity) * 10_000n) / startEquity) / 100
-      : null;
-
-  let filled = 0;
-  let rejected = 0;
-  let staleRejects = 0;
-  let feesLovelace = 0n;
-  let poolFeesIn = 0n;
-  const rejectReasons: Record<string, number> = {};
-  for (const o of orders) {
-    if (o.result.status === 'filled') {
-      filled++;
-      feesLovelace += o.result.batcherFeeLovelace + o.result.networkFeeLovelace;
-      poolFeesIn += o.result.poolFeeIn;
-    } else {
-      rejected++;
-      rejectReasons[o.result.reason] = (rejectReasons[o.result.reason] ?? 0) + 1;
-      if (o.result.reason.startsWith('stale t+1')) staleRejects++;
-    }
-  }
-  return {
-    points: equity.length,
-    startEquity, endEquity,
-    startExecutable: first ? first.equityExecutableLovelace : null,
-    endExecutable: last ? last.equityExecutableLovelace : null,
-    returnPct, filled, rejected, rejectReasons, staleRejects, feesLovelace, poolFeesIn,
-  };
-}
-
-/**
- * The same pure computation as `summarizeDay`, named for its other use: the whole-run headline a
- * paper report prints from its PERSISTED rows. Final-review finding C1 — after a resume,
- * `runs.summary` describes only the segment whose process wrote it (`finishRun` overwrites the
- * column wholesale, and that process's `Summarizer` only ever saw its own candles). Verified on
- * rehearsal run 6: `summary` said 1 intent / 1 filled / 12 candles while `paper_orders` held 2 rows
- * and `run_equity` held 27. Equity points and orders in, one summary out — an alias rather than a
- * copy so the day view and the run headline can never drift apart.
- */
-export const summarizeRun = summarizeDay;
-
-/**
- * Lovelace to ADA with six decimals, in bigint. `Number(BigInt(x)) / 1e6` loses precision above
- * 2^53 lovelace (~9.007 billion ADA) and, more to the point, prints an approximation of a number the
- * whole report exists to make exact (finding M10).
- */
-export const adaStr = (lovelace: string | bigint): string => {
-  const v = BigInt(lovelace);
-  const abs = v < 0n ? -v : v;
-  return `${v < 0n ? '-' : ''}${abs / 1_000_000n}.${(abs % 1_000_000n).toString().padStart(6, '0')}`;
-};
-
-/**
- * Coverage belongs in the header, next to the provenance: a return figure computed over 4400 sparse
- * candles in a window that should hold 26 000 is not the same claim as one computed over a full
- * window, and nothing else on the report says which one it is (finding C3).
- */
-export function coverageLine(c: RunCoverage | undefined): string {
-  if (!c) return 'coverage: not recorded (run predates coverage stats)';
-  const pct = c.expectedBuckets > 0 ? ((c.candles / c.expectedBuckets) * 100).toFixed(1) : '0.0';
-  const range = c.first && c.last ? `${c.first} -> ${c.last}` : 'empty window';
-  return `coverage: ${c.candles} of ${c.expectedBuckets} expected buckets (${pct}%) | ${range} | max gap ${Math.round(c.maxGapMs / 60_000)}m | ${c.gapsOverBound} gaps over the stale-fill bound`;
 }
 
 /**
@@ -149,28 +66,6 @@ export function printReport(
     priceImpactBps: o.result.status === 'filled' ? o.result.priceImpactBps : '-', reason: o.result.status === 'rejected' ? o.result.reason : o.intent.reason,
   })));
   if (orders.length > 50) console.log(`... ${orders.length - 50} more orders (query paper_orders where run_id = ${run.id})`);
-}
-
-/** The ISO timestamps `RunRepo.appendResume` has appended to `params.resumes`, or [] on a run that
- * predates the column or has never been resumed. Read as `unknown[]` and stringified per element —
- * this is a jsonb blob, not a typed column. */
-function resumesOf(run: RunRow): string[] {
-  const raw = run.params.resumes;
-  return Array.isArray(raw) ? raw.map((x) => String(x)) : [];
-}
-
-/**
- * Finding I4: the run's own view of its feed, from `params.feedCounters`. A day of `yielded 0` with
- * a climbing `empty` count is what a dead collector looks like from inside the paper process, and
- * before this it was visible only in a log file nobody kept. Read defensively — this is a jsonb blob
- * that a run predating the counters simply will not have, and "not recorded" must not read as zero.
- */
-export function feedCountersLine(params: Record<string, unknown>): string {
-  const raw = params.feedCounters;
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return 'feed: not recorded (run predates feed counters)';
-  const c = raw as Record<string, unknown>;
-  const n = (k: string): string => (typeof c[k] === 'number' ? String(c[k]) : '?');
-  return `feed: ${n('ticks')} ticks | ${n('built')} built | ${n('yielded')} yielded | ${n('skippedStale')} stale-skipped | ${n('emptyBoundaries')} empty | ${n('tickFailures')} failed`;
 }
 
 /**
