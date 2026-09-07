@@ -13,6 +13,7 @@
     "migrate": "tsx packages/cli/src/main.ts migrate",
     "collect": "tsx packages/cli/src/main.ts collect",
     "status": "tsx packages/cli/src/main.ts status",
+    "doctor": "tsx packages/cli/src/main.ts doctor",
     "candles": "tsx packages/cli/src/main.ts candles",
     "backfill": "tsx packages/cli/src/main.ts backfill",
     "backtest": "tsx packages/cli/src/main.ts backtest",
