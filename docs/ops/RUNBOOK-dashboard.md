@@ -103,6 +103,31 @@ exits on its own; there is no state to flush and nothing to wait for.
   <id>` prints — an equity chart for paper runs with at least two persisted equity points, and the
   orders table. A rehearsal run shows the `REHEARSAL — synthetic data — not evidence` banner at the
   top.
+- **`/compare?ids=…`.** Several runs side by side: one table of their headlines and one chart with
+  their equity curves. Reach it by ticking boxes on `/runs` and pressing "compare selected", or by
+  typing the ids yourself — `?ids=6,7` and `?ids=6&ids=7` both work. The order is the order you asked
+  for; nothing is ever sorted by return. At most twelve runs at a time, because a chart with more
+  lines than that cannot be read. A backtest contributes a row but no curve: backtests persist orders
+  and a summary, not an equity point per candle, so there is nothing to plot. Curves are drawn as a
+  percentage of each run's own starting equity, so a run started with 1,000 ADA and one started with
+  10,000 sit on the same axis.
+
+  **A run's number here can differ from the same run's number on `/runs`, and that is not a bug.**
+  `/compare` recomputes a paper run's headline from every persisted row across every segment; `/runs`
+  reads the stored `runs.summary`. For a resumed run those are different figures — the whole run
+  versus its last segment — and each surface labels which it is showing in its `basis` column. The
+  standing instruction below, to file a bug when two surfaces disagree, means two surfaces claiming
+  the SAME basis and disagreeing. Two surfaces declaring different bases and showing different numbers
+  is them working.
+- **`/universe`.** The 20 tokens the bot follows: the deepest pool for each on the collector's newest
+  tick, its venue, ADA depth, price, 24-hour change and how much external price history has been
+  backfilled. Sort with `?sort=rank|ticker|depth|change|coverage`; the default is market-cap rank as
+  seeded in `universe.json`. Depth and price are measured from that one deepest pool at that one tick,
+  and the price is the same figure the candle builder records. The 24-hour change compares against the
+  newest tick at or before 24 hours ago, falling back to a tick up to 26 hours old if collection
+  gapped; hover the change cell to see which tick a row actually used. **A dash means unknown, never
+  zero** — no snapshot on the newest tick, no baseline old enough, or no external history — and under
+  any sort those rows go last rather than to the top.
 
 ## What it can never do
 

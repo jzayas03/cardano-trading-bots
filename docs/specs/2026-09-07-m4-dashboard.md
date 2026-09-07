@@ -198,8 +198,8 @@ local-only like `ctb_local_only` and lives in `.env.example` as such.
 | Milestone | Done when |
 | --- | --- |
 | M4a | `@ctb/reports` extracted; `npm run dashboard` serves `/`, `/runs`, `/runs/:id`; smoke and read-only tests green; the operator's morning check is the health page |
-| M4b | `/compare` with the shared equity chart; grid and sweep batches selectable from `/runs` |
-| M4c | `/universe` screener with sort; `doctor` reports the dashboard |
+| M4b | `/compare` with the shared equity chart, runs selected by a checkbox form on `/runs` — **done 2026-09-07** |
+| M4c | `/universe` screener with sort; `doctor` reports the dashboard — **done 2026-09-07** |
 
 Each milestone is its own plan under `docs/plans/` and its own PRs, executed
 the way M1-M3 were.
@@ -215,6 +215,16 @@ second theme. Deployment off the laptop is the M5 candidate.
 - uPlot's exact pinned version and size are checked at M4a; if it is over
   60 KB or its licence is not MIT, the fallback is an inline SVG polyline
   renderer with no library.
-- Whether the 24 h change on the screener should read the snapshot 24 h back
-  or the candle close: decided at M4c from what the collector's history looks
-  like after a week.
+- ~~Whether the 24 h change on the screener should read the snapshot 24 h back
+  or the candle close~~ — **answered at M4c (2026-09-07): the snapshot.** The
+  screener's current price is read from the newest snapshot's deepest pool, so
+  a baseline read the same way is comparable to it by construction; a candle
+  close is built from those same snapshots, so reading it instead would add a
+  layer without adding information. The baseline is the newest tick at or
+  before 24 h ago, accepted back to 26 h so a gap in collection degrades to
+  the nearest older tick rather than to nothing, and the tick actually used is
+  shown on the row.
+- `runsSharingGrid` (§4.3) was **not built.** M4b replaced it with an explicit
+  checkbox form: a heuristic that guesses which runs form a batch is worse than
+  the operator saying which runs they mean, and the form costs no query and no
+  JavaScript.
