@@ -8,10 +8,12 @@ import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
 import { externalCandleFeed, localCandleFeed } from '../feeds.js';
 import { printReport } from './report.js';
+import { compareRows, type CompareInput } from '../compare.js';
 import { parseIsoDate } from './backfill.js';
 
 export interface BacktestArgs {
-  strategyId: string; ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
+  /** One or more strategy ids (comma-separated on the command line). Each gets its own run over the same window, fill model, costs and `--param` values; more than one also prints a comparison table. */
+  strategyIds: string[]; ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
   cashAda: number; depthAda: number | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
   /** Only meaningful with `--source external` (the synthetic fill model); defaults to `close` so every existing backtest is unchanged. */
   syntheticPrice: 'close' | 'worst';
@@ -20,7 +22,7 @@ export interface BacktestArgs {
 /** Default stale-fill bound: three 5-minute buckets. Sparse external history routinely exceeds it (finding C3). */
 export const DEFAULT_MAX_GAP_MIN = 15;
 
-const USAGE = 'usage: backtest <strategy> <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
+const USAGE = 'usage: backtest <strategy>[,<strategy>...] <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
 
 function num(flag: string, v: string | undefined): number {
   const n = Number(v);
@@ -40,13 +42,27 @@ function splitParam(raw: string | undefined): [string, string | undefined] {
   return [s.slice(0, i), s.slice(i + 1)];
 }
 
+/**
+ * `a,b,c` -> ['a', 'b', 'c']. An empty item (`a,,b`, a trailing comma) and a repeated id are both
+ * refused rather than dropped: silently running fewer strategies than the operator typed is the
+ * same defect as silently accepting a flag with no effect.
+ */
+export function parseStrategyList(raw: string): string[] {
+  const ids = raw.split(',').map((x) => x.trim());
+  if (ids.some((x) => x === '')) throw new Error(`empty strategy id in "${raw}"\n${USAGE}`);
+  const dup = ids.find((x, i) => ids.indexOf(x) !== i);
+  if (dup) throw new Error(`strategy ${dup} listed more than once\n${USAGE}`);
+  return ids;
+}
+
 export function parseBacktestArgs(args: string[]): BacktestArgs {
-  const [strategyId, ticker, fromArg, toArg, ...rest] = args;
-  if (!strategyId || !ticker) throw new Error(USAGE);
+  const [strategyArg, ticker, fromArg, toArg, ...rest] = args;
+  if (!strategyArg || !ticker) throw new Error(USAGE);
+  const strategyIds = parseStrategyList(strategyArg);
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   if (from.getTime() >= to.getTime()) throw new Error(`from must be before to\n${USAGE}`);
-  const out: BacktestArgs = { strategyId, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close' };
+  const out: BacktestArgs = { strategyIds, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close' };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val = rest[i + 1];
@@ -131,8 +147,13 @@ export function buildRunParams(
 
 export async function backtestCommand(log: Logger, args: string[]): Promise<void> {
   const a = parseBacktestArgs(args);
-  const strategy = STRATEGIES[a.strategyId];
-  if (!strategy) throw new Error(`unknown strategy ${a.strategyId}; known: ${Object.keys(STRATEGIES).join(', ')}`);
+  // Every id is checked before any run row is written: a typo in the third strategy must not leave
+  // two finished runs behind and then fail.
+  const strategies = a.strategyIds.map((id) => {
+    const s = STRATEGIES[id];
+    if (!s) throw new Error(`unknown strategy ${id}; known: ${Object.keys(STRATEGIES).join(', ')}`);
+    return s;
+  });
   const cfg = loadConfig(process.env, { blockfrost: false });
   const universe = await loadUniverse();
   const token = universe.tokens.find((t) => t.ticker === a.ticker);
@@ -151,20 +172,30 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
     // The synthetic price mode only means anything for the external source's fill model; recording it
     // for an observed-reserves run would claim a choice that was never actually in effect.
     const extra = a.source === 'candles_external' ? { fillModelDetail: { syntheticPrice: a.syntheticPrice } } : undefined;
-    const runId = await runs.createRun({
-      mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
-      params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs, extra),
-    });
-    console.log(`run id: ${runId}`);
-    const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(new PgExternalRepo(db), token.unit, a.from, a.to);
-    const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
-    const result = await runEngine({ feed, strategy, params: a.params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
-      intervalSec: cfg.intervalSec, maxGapMs });
-    await runs.insertOrders(runId, token.unit, result.orders);
-    await runs.finishRun(runId, new Date(), result.summary);
-    const run = await runs.getRun(runId);
-    if (!run) throw new Error(`run ${runId} vanished`);
-    printReport(run, await runs.listOrders(runId), token.ticker);
+    const results: CompareInput[] = [];
+    // Sequential on purpose: each run reads the same candles, and one at a time keeps the run ids
+    // in the order the operator listed the strategies.
+    for (const strategy of strategies) {
+      const runId = await runs.createRun({
+        mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
+        params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs, extra),
+      });
+      console.log(`run id: ${runId}`);
+      const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(new PgExternalRepo(db), token.unit, a.from, a.to);
+      const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
+      const result = await runEngine({ feed, strategy, params: a.params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
+        intervalSec: cfg.intervalSec, maxGapMs });
+      await runs.insertOrders(runId, token.unit, result.orders);
+      await runs.finishRun(runId, new Date(), result.summary);
+      const run = await runs.getRun(runId);
+      if (!run) throw new Error(`run ${runId} vanished`);
+      printReport(run, await runs.listOrders(runId), token.ticker);
+      results.push({ strategyId: strategy.id, runId, summary: result.summary });
+    }
+    if (results.length > 1) {
+      console.log(`\n=== comparison | ${token.ticker} | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | same fill model, costs and --param values for every row`);
+      console.table(compareRows(results));
+    }
   } finally {
     await db.end();
   }

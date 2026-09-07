@@ -210,6 +210,20 @@ describe('runEngine warmup and zero-intent warning', () => {
     expect(warned).toHaveLength(1);
   });
 
+  it('warns when every intent was rejected, naming the top reasons, so a never-filled run cannot read as a clean 0%', async () => {
+    const warned: string[] = [];
+    const noisy = { info: () => {}, warn: (_o: unknown, msg: string) => { warned.push(msg); }, error: () => {} };
+    const always: Strategy = { id: 'always', warmup: 1, defaultParams: {}, warmupFor: () => 1, onCandle: () => [{ side: 'buy', amountIn: 1n, reason: 'go' }] };
+    const refusing: Executor = { fill: () => ({ status: 'rejected', reason: 'insufficient cash' }), markToMarket: () => null };
+    const r = await runEngine({ feed: Array.from({ length: 5 }, (_, i) => c(i, '1')), strategy: always, executor: refusing,
+      initial: { cashLovelace: 1_000n, positionBase: 0n }, decimals: 0, log: noisy });
+    // 5 decisions: 4 refused by the executor, and the last one never gets a t+1 to settle on.
+    expect(r.summary.filled).toBe(0);
+    expect(r.summary.intents).toBe(5);
+    expect(r.summary.warnings).toEqual(['strategy always emitted 5 intents and none filled (insufficient cash x4, no t+1 candle x1)']);
+    expect(warned).toEqual(['run never filled']);
+  });
+
   it('records no warning when the run did trade', async () => {
     const feed = [c(0, '1.0'), c(1, '1.0'), c(2, '2.0'), c(3, '2.0'), c(4, '4.0'), c(5, '4.0')];
     const r = await runEngine({ feed, strategy: buyOnceThenSell, executor: passthrough, initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
