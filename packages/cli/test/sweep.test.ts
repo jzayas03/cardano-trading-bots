@@ -1,6 +1,6 @@
 import type { RunSummaryStats } from '@ctb/engine';
 import { describe, expect, it } from 'vitest';
-import { backfillAll } from '../src/commands/backfill.js';
+import { backfillAll, parseBackfillFlags } from '../src/commands/backfill.js';
 import { autoDepthLovelace } from '../src/commands/backtest.js';
 import { sweepRows } from '../src/compare.js';
 
@@ -44,5 +44,13 @@ describe('autoDepthLovelace', () => {
     expect(seen[0]).toEqual(['unit-1']);
     const empty = { query: async <T>() => ({ rows: [{ reserve_quote: null }] as T[] }) };
     expect(await autoDepthLovelace(empty, 'unit-2')).toBeNull();
+  });
+
+  it('parseBackfillFlags: --spacing-sec is optional, numeric, non-negative; unknown flags are refused', () => {
+    expect(parseBackfillFlags([])).toEqual({ spacingSec: null });
+    expect(parseBackfillFlags(['--spacing-sec', '8'])).toEqual({ spacingSec: 8 });
+    expect(() => parseBackfillFlags(['--spacing-sec'])).toThrow(/non-negative number/);
+    expect(() => parseBackfillFlags(['--spacing-sec', 'fast'])).toThrow(/non-negative number/);
+    expect(() => parseBackfillFlags(['--bogus'])).toThrow(/unknown flag --bogus/);
   });
 });

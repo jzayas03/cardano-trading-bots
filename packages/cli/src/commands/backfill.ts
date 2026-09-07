@@ -35,9 +35,26 @@ export async function backfillAll(
   return { rows, failures };
 }
 
+const USAGE = 'usage: backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]';
+
+/** `--spacing-sec N`: the base wait between GeckoTerminal calls (the client widens it on 429s and decays back). Null when not given. */
+export function parseBackfillFlags(rest: string[]): { spacingSec: number | null } {
+  const out = { spacingSec: null as number | null };
+  for (let i = 0; i < rest.length; i++) {
+    const flag = rest[i]!;
+    if (flag === '--spacing-sec') {
+      const n = Number(rest[i + 1]);
+      if (rest[i + 1] === undefined || !Number.isFinite(n) || n < 0) throw new Error(`--spacing-sec needs a non-negative number of seconds\n${USAGE}`);
+      out.spacingSec = n; i++;
+    } else throw new Error(`unknown flag ${flag}\n${USAGE}`);
+  }
+  return out;
+}
+
 export async function backfillCommand(log: Logger, args: string[]): Promise<void> {
-  const [ticker, fromArg, toArg] = args;
-  if (!ticker) throw new Error('usage: backfill <TICKER|ALL> <from-ISO> <to-ISO>');
+  const [ticker, fromArg, toArg, ...rest] = args;
+  if (!ticker) throw new Error(USAGE);
+  const { spacingSec } = parseBackfillFlags(rest);
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   const cfg = loadConfig(process.env, { blockfrost: false });
@@ -47,7 +64,7 @@ export async function backfillCommand(log: Logger, args: string[]): Promise<void
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   try {
     await ensureTokens(db, universe);
-    const client = new GeckoTerminalClient({ log });
+    const client = new GeckoTerminalClient({ log, ...(spacingSec !== null ? { minSpacingMs: Math.round(spacingSec * 1000) } : {}) });
     const repo = new PgExternalRepo(db);
     const one = async (tk: string): Promise<BackfillRow> => {
       const token = universe.tokens.find((t) => t.ticker === tk)!;
@@ -62,7 +79,7 @@ export async function backfillCommand(log: Logger, args: string[]): Promise<void
     const { rows, failures } = await backfillAll(tokens, one, log);
     console.table(rows);
     if (failures.length) console.table(failures);
-    console.log(`backfilled ${rows.length} of ${tokens.length} tokens, ${client.calls()} GeckoTerminal calls${failures.length ? `, ${failures.length} failed` : ''}`);
+    console.log(`backfilled ${rows.length} of ${tokens.length} tokens, ${client.calls()} GeckoTerminal calls${failures.length ? `, ${failures.length} failed` : ''}; call spacing ended at ${client.currentSpacingMs()} ms`);
   } finally {
     await db.end();
   }
