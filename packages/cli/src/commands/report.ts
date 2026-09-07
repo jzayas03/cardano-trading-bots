@@ -7,8 +7,9 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../config.js';
 import { csvFileNames, equityCsv, ordersCsv } from '../csv.js';
+import { compareRunRows, type CompareRunInput } from '../compare.js';
 
-const USAGE = 'usage: report <run-id> [--day YYYY-MM-DD] [--csv <dir>]';
+const USAGE = 'usage: report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <run-id>[,<run-id>...]';
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -253,14 +254,32 @@ export function printDayReport(
   }
 }
 
-export interface ReportArgs { id: number; day: string | undefined; csvDir: string | undefined }
+export interface ReportArgs { id: number; day: string | undefined; csvDir: string | undefined; compare: number[] | undefined }
+
+/** `--compare 14,15,16`: positive integers, no empties, no repeats — fewer runs than typed is refused, not dropped. */
+export function parseCompareList(raw: string): number[] {
+  const ids = raw.split(',').map((x) => {
+    const n = Number(x.trim());
+    if (x.trim() === '' || !Number.isInteger(n) || n <= 0) throw new Error(`--compare needs run ids, got ${JSON.stringify(x)} in "${raw}"\n${USAGE}`);
+    return n;
+  });
+  const dup = ids.find((x, i) => ids.indexOf(x) !== i);
+  if (dup !== undefined) throw new Error(`run ${dup} listed more than once\n${USAGE}`);
+  return ids;
+}
 
 export function parseReportArgs(args: string[]): ReportArgs {
+  if (args[0] === '--compare') {
+    if (args[1] === undefined || args[1].startsWith('--')) throw new Error(`--compare needs a value\n${USAGE}`);
+    if (args.length > 2) throw new Error(`--compare takes no other flags\n${USAGE}`);
+    return { id: 0, day: undefined, csvDir: undefined, compare: parseCompareList(args[1]) };
+  }
   const id = Number(args[0]);
   if (!Number.isInteger(id) || id <= 0) throw new Error(USAGE);
-  const out: ReportArgs = { id, day: undefined, csvDir: undefined };
+  const out: ReportArgs = { id, day: undefined, csvDir: undefined, compare: undefined };
   for (let i = 1; i < args.length; i++) {
     const flag = args[i];
+    if (flag === '--compare') throw new Error(`--compare stands alone: report --compare <ids>\n${USAGE}`);
     if (flag === '--day' || flag === '--csv') {
       // A missing value (e.g. `--day` as the last argument) previously left the value undefined,
       // which is indistinguishable from "no flag at all" below and silently fell through to the
@@ -304,17 +323,42 @@ export function writeCsvExport(dir: string, run: RunRow, orders: OrderRecord[], 
   return written;
 }
 
+/**
+ * `report --compare`: the persisted-rows headline of several runs side by side, in the order given.
+ * Every row's numbers are what `report <id>` prints for that run; nothing is recomputed differently
+ * here. A rehearsal run anywhere in the list puts the banner above the table AND the word on its row.
+ */
+export function printCompare(inputs: CompareRunInput[], now: Date): void {
+  if (inputs.some((i) => i.run.rehearsal)) console.log('REHEARSAL — one or more rows are synthetic data — not evidence');
+  const tickers = [...new Set(inputs.map((i) => i.ticker))];
+  console.log(`\n=== compare ${inputs.map((i) => i.run.id).join(',')} | ${tickers.join(', ')} | as of ${now.toISOString()}`);
+  if (tickers.length > 1) console.log('warning: these runs are on different tokens; their returns are not comparable to each other');
+  console.table(compareRunRows(inputs, now));
+}
+
 export async function reportCommand(log: Logger, args: string[]): Promise<void> {
-  const { id, day: dayArg, csvDir } = parseReportArgs(args);
+  const { id, day: dayArg, csvDir, compare } = parseReportArgs(args);
   // Validate before opening a pool so a malformed --day fails fast without a DB round trip.
   const window = dayArg !== undefined ? dayWindow(dayArg) : null;
   const cfg = loadConfig(process.env, { blockfrost: false });
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   try {
     const runs = new PgRunRepo(db);
+    const universe = await loadUniverse();
+    if (compare) {
+      const now = new Date();
+      const inputs: CompareRunInput[] = [];
+      for (const rid of compare) {
+        const r = await runs.getRun(rid);
+        if (!r) throw new Error(`no run ${rid}`);
+        const [equity, orders] = await Promise.all([runs.listEquity(rid, new Date(0), now), runs.listOrders(rid)]);
+        inputs.push({ run: r, ticker: universe.tokens.find((t) => t.unit === r.baseUnit)?.ticker ?? r.baseUnit, equity, orders });
+      }
+      printCompare(inputs, now);
+      return;
+    }
     const run = await runs.getRun(id);
     if (!run) throw new Error(`no run ${id}`);
-    const universe = await loadUniverse();
     const ticker = universe.tokens.find((t) => t.unit === run.baseUnit)?.ticker ?? run.baseUnit;
     if (window) {
       const [equity, orders] = await Promise.all([runs.listEquity(id, window.from, window.to), runs.listOrdersBetween(id, window.from, window.to)]);

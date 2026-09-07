@@ -14,8 +14,8 @@ const order: OrderRecord = { seq: 1, tsIntent: new Date(0), intent: { side: 'buy
 
 describe('parseReportArgs', () => {
   it('parses --csv with a directory and keeps --day working', () => {
-    expect(parseReportArgs(['12', '--csv', 'out'])).toEqual({ id: 12, day: undefined, csvDir: 'out' });
-    expect(parseReportArgs(['12', '--day', '2026-09-06'])).toEqual({ id: 12, day: '2026-09-06', csvDir: undefined });
+    expect(parseReportArgs(['12', '--csv', 'out'])).toEqual({ id: 12, day: undefined, csvDir: 'out', compare: undefined });
+    expect(parseReportArgs(['12', '--day', '2026-09-06'])).toEqual({ id: 12, day: '2026-09-06', csvDir: undefined, compare: undefined });
   });
   it('refuses a bare --csv, a flag where the value should be, --csv with --day, and unknown flags', () => {
     expect(() => parseReportArgs(['12', '--csv'])).toThrow(/--csv needs a value/);

@@ -29,6 +29,27 @@ yields nothing. Pass `--allow-interval-mismatch` only if that is deliberate.
 pgrep -fl 'main.ts paper'
 ```
 
+## Several strategies at once
+
+Run one `paper` process per strategy. They share the collector's snapshots, each builds candles at the
+boundary (idempotent, database-only, no Blockfrost cost), and each has its own run row, heartbeat and
+report. Give each its own log and pid file:
+
+```bash
+caffeinate -is npm run paper -- ma-crossover SNEK > paper-ma.log 2>&1 &
+caffeinate -is npm run paper -- rsi-mean-reversion SNEK > paper-rsi.log 2>&1 &
+caffeinate -is npm run paper -- buy-and-hold SNEK > paper-bah.log 2>&1 &
+```
+
+`npm run status` lists them together. Compare them from their persisted rows at any time, in the
+order you list them (never sorted by return, so the table cannot read as a ranking):
+
+```bash
+npm run report -- --compare 14,15,16
+```
+
+A rehearsal run anywhere in the list puts the REHEARSAL banner above the table and the word on its row.
+
 ## Check
 
 ```bash
