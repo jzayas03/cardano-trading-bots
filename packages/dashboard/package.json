@@ -8,6 +8,7 @@
     "@ctb/db": "*",
     "@ctb/engine": "*",
     "@ctb/reports": "*",
+    "@ctb/sim-executor": "*",
     "@ctb/universe": "*"
   }
 }

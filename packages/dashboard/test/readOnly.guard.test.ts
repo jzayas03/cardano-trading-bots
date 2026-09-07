@@ -12,6 +12,14 @@
  * from a different code path in this test, so a more faithful reproduction is folding the DELETE
  * into the SAME string via a semicolon, e.g. `SELECT 1; DELETE FROM runs`) and on the forbidden-
  * keyword check. Reverted afterwards — see the task report for the exact diff and failure output.
+ *
+ * Finding I1 (review round 1): the call list above is hand-written, so a NEW method added to
+ * `PgDashboardReads` is simply never called here and the guard stays green — a reviewer proved this
+ * by adding `async purgeRuns() { await this.q.query('DELETE FROM runs'); }` to the class. The second
+ * `it` below closes that: it enumerates `PgDashboardReads.prototype`'s own method names at runtime and
+ * asserts the set is EXACTLY the set this file exercises above. Adding any method — read or write —
+ * fails this assertion until its name is added to `EXERCISED_METHODS` *and* a call to it is added
+ * above that proves it SELECT/WITH-only; a write method can never clear both bars at once.
  */
 import type pg from 'pg';
 import { PgRunRepo } from '@ctb/engine';
@@ -21,15 +29,27 @@ import { PgDashboardReads } from '../src/reads.js';
 
 class RecordingQueryable implements Queryable {
   readonly statements: string[] = [];
+  /** Finding I2: the previous version of this recorder discarded the bound parameters, so nothing
+   * anywhere ever checked what `listRuns` actually sent as `LIMIT`/`OFFSET` — a `9999`-row request
+   * being silently accepted and a real `500` clamp being silently deleted looked identical to every
+   * test in the suite (`reads.pg.test.ts`'s own clamp case only ever had 3 rows in its schema, so it
+   * could not tell "clamped to 500" apart from "not clamped at all"). Recording `values` alongside
+   * `text` lets a test assert the actual bound number, not just a row count that a small fixture can't
+   * distinguish. */
+  readonly calls: Array<{ text: string; values: unknown[] }> = [];
 
-  async query<R extends pg.QueryResultRow = pg.QueryResultRow>(text: string): Promise<pg.QueryResult<R>> {
+  async query<R extends pg.QueryResultRow = pg.QueryResultRow>(text: string, values: unknown[] = []): Promise<pg.QueryResult<R>> {
     this.statements.push(text);
+    this.calls.push({ text, values });
     return { rows: [] as R[], rowCount: 0, command: '', oid: 0, fields: [] } as unknown as pg.QueryResult<R>;
   }
 }
 
 const READ_ONLY_PREFIX = /^\s*(SELECT|WITH)\b/i;
 const FORBIDDEN_KEYWORD = /\b(INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|TRUNCATE)\b/i;
+
+/** Every `PgDashboardReads` method this file actually drives through the recorder above. */
+const EXERCISED_METHODS = new Set(['listRuns']);
 
 describe('dashboard read-only guard', () => {
   it('every SQL statement PgDashboardReads.listRuns and the RunRepo methods the detail page uses issue is SELECT/WITH only', async () => {
@@ -61,5 +81,39 @@ describe('dashboard read-only guard', () => {
       expect(sql, `not SELECT/WITH: ${sql}`).toMatch(READ_ONLY_PREFIX);
       expect(sql, `contains a forbidden keyword: ${sql}`).not.toMatch(FORBIDDEN_KEYWORD);
     }
+  });
+
+  // Finding I2: `reads.pg.test.ts`'s `listRuns({}, 9999, 0)` case only ever runs against a 3-row test
+  // schema, so it returns the same 3 rows whether the clamp is applied or the whole clamp is deleted —
+  // it asserts row count, which cannot distinguish "clamped to 500" from "not clamped at all". This
+  // proves the actual bound `LIMIT`/`OFFSET` parameter instead, with no database at all: for `filter =
+  // {}` the WHERE clause adds no parameters, so `values` is always exactly `[limit, offset]`.
+  it('clamps the bound LIMIT parameter to [1, 500] — proven against the actual parameter value, not a row count (I2)', async () => {
+    const rec = new RecordingQueryable();
+    const reads = new PgDashboardReads(rec);
+
+    await reads.listRuns({}, 9999, 0);
+    expect(rec.calls.at(-1)!.values).toEqual([500, 0]);
+
+    await reads.listRuns({}, 0, 0);
+    expect(rec.calls.at(-1)!.values).toEqual([1, 0]);
+
+    await reads.listRuns({}, 500, 0);
+    expect(rec.calls.at(-1)!.values).toEqual([500, 0]);
+
+    await reads.listRuns({}, 1, 0);
+    expect(rec.calls.at(-1)!.values).toEqual([1, 0]);
+  });
+
+  it('exercises every PgDashboardReads prototype method (I1) — a method added to the class must be added here, and driven above, before this passes again', () => {
+    const actual = new Set(
+      Object.getOwnPropertyNames(PgDashboardReads.prototype).filter((name) => name !== 'constructor'),
+    );
+    expect(
+      actual,
+      'PgDashboardReads.prototype has a method this guard does not know about — a new method (read or ' +
+        'write) is invisible to the SELECT/WITH check above until it is added to EXERCISED_METHODS and ' +
+        'a call to it is added to the test that drives the recorder',
+    ).toEqual(EXERCISED_METHODS);
   });
 });

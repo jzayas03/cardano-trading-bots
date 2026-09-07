@@ -45,6 +45,10 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
   const tickerOf = (unit: string): string => universe.tokens.find((t) => t.unit === unit)?.ticker ?? unit;
   // The other direction of `tickerOf`, for `/runs?ticker=` — a pure universe lookup, not a query.
   const unitOf = (ticker: string): string | undefined => universe.tokens.find((t) => t.ticker === ticker)?.unit;
+  // Finding I3 (review round 1): every ticker the universe knows about — a pure in-memory list, no
+  // query — so the filter form always offers every ticker, not just whatever the current (already
+  // filtered) page happens to show.
+  const tickers = (): string[] => universe.tokens.map((t) => t.ticker);
 
   const deps: DashboardDeps = {
     reads: new PgDashboardReads(db),
@@ -63,6 +67,7 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
     envChecks: () => checkEnv(process.env),
     tickerOf,
     unitOf,
+    tickers,
     intervalSec: cfg.intervalSec,
     venues: cfg.venues,
     now: () => new Date(),

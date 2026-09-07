@@ -79,6 +79,7 @@ function makeDeps(): DashboardDeps {
     envChecks: () => checkEnv(process.env),
     tickerOf: (unit: string) => (unit === 'testtoken.abcd' ? 'TEST' : unit),
     unitOf: (ticker: string) => (ticker === 'TEST' ? 'testtoken.abcd' : undefined),
+    tickers: () => ['TEST'],
     intervalSec: 600,
     venues: ['MinswapV2', 'SundaeSwapV3'],
     now: () => new Date('2026-09-07T12:05:00Z'),
@@ -266,7 +267,13 @@ describe('createDashboardServer / listen', () => {
     }
   });
 
-  it.each(['0', '-1', 'abc', '1.5'])('/runs?page=%s is refused with 400', async (page) => {
+  // Finding M1 (review round 1): `1e21` has no fractional part and isn't negative, so it slipped past
+  // `Number.isInteger`/`n < 1` and reached the SQL OFFSET parameter as `(1e21 - 1) * PAGE_SIZE` —
+  // Postgres then rejected the out-of-range integer with a 500, not the 400 every other bad query
+  // value on this route gets. `2000000` exceeds the new `MAX_PAGE` ceiling while still being a
+  // perfectly safe, in-range integer, proving the ceiling check fires on its own (not merely riding on
+  // `Number.isSafeInteger`).
+  it.each(['0', '-1', 'abc', '1.5', '1e21', '2000000'])('/runs?page=%s is refused with 400', async (page) => {
     const server = createDashboardServer(makeDeps());
     const { url } = await listen(server, 0);
     try {

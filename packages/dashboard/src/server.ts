@@ -30,6 +30,10 @@ export interface DashboardDeps {
    *  Undefined for a ticker the universe doesn't recognise, which `/runs` turns into a 400 (a typo'd
    *  ticker must not silently render as "no filter" — that would show every run instead of none). */
   unitOf: (ticker: string) => string | undefined;
+  /** Finding I3 (review round 1): every ticker the universe knows about, so the filter form's ticker
+   *  options are never limited to whatever happens to be on the current (already-filtered) page — a
+   *  pure in-memory list, no query, the same shape as `tickerOf`/`unitOf`. */
+  tickers: () => string[];
   intervalSec: number;
   venues: string[];
   now: () => Date;
@@ -103,6 +107,13 @@ async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
 }
 
 const PAGE_SIZE = 50;
+/** Finding M1 (review round 1): `?page=1e21` passed `Number.isInteger` (1e21 has no fractional part)
+ *  and `n < 1` (it's huge, not negative), so it reached `(query.page - 1) * PAGE_SIZE` as the SQL
+ *  OFFSET parameter and Postgres rejected the out-of-range integer — a 500, not the 400 a bad query
+ *  value is supposed to get everywhere else in this router. `Number.isSafeInteger` alone already
+ *  rejects `1e21` (it is far past 2^53), and `MAX_PAGE` additionally names a sane ceiling explicitly
+ *  rather than leaving "how big is too big" implicit in a bit-width nobody reading this would guess. */
+const MAX_PAGE = 1_000_000;
 
 /** Thrown only inside `parseRunsQuery` for a bad query value; caught in `runsHandler` and turned
  * into a 400 that names the accepted values (spec §6, "never a silent default"). */
@@ -137,7 +148,9 @@ function parseRunsQuery(deps: DashboardDeps, url: URL): { filter: RunFilter; pag
   let page = 1;
   if (pageRaw !== null && pageRaw !== '') {
     const n = Number(pageRaw);
-    if (!Number.isInteger(n) || n < 1) throw new RunsQueryError(`page must be an integer >= 1; got ${JSON.stringify(pageRaw)}`);
+    if (!Number.isSafeInteger(n) || n < 1 || n > MAX_PAGE) {
+      throw new RunsQueryError(`page must be an integer between 1 and ${MAX_PAGE}; got ${JSON.stringify(pageRaw)}`);
+    }
     page = n;
   }
   return { filter: { mode, strategy, unit, status }, page };
@@ -156,7 +169,7 @@ async function runsHandler(deps: DashboardDeps, url: URL, path: string): Promise
   }
   const offset = (query.page - 1) * PAGE_SIZE;
   const runs = await deps.reads.listRuns(query.filter, PAGE_SIZE, offset);
-  const body = renderRunsList({ runs, tickerOf: deps.tickerOf, filter: query.filter, page: query.page, pageSize: PAGE_SIZE, now: deps.now() });
+  const body = renderRunsList({ runs, tickerOf: deps.tickerOf, tickers: deps.tickers(), filter: query.filter, page: query.page, pageSize: PAGE_SIZE, now: deps.now() });
   return htmlPage(200, body);
 }
 

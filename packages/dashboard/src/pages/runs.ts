@@ -10,6 +10,15 @@
  */
 import { STRATEGIES, type EquityPoint, type OrderRecord, type RunRow, type RunSummaryStats } from '@ctb/engine';
 import { adaStr, coverageLine, feedCountersLine, resumesOf, summarizeRun } from '@ctb/reports';
+// Critical 2 (review round 1): `report <id>` prints `assumedVenuesTouched(orders)` as a warning — a
+// fill against a venue with no documented batcher fee had its cost ASSUMED, and an operator reading
+// only the dashboard page had no way to know that. Imported straight from `@ctb/sim-executor`, the
+// same package `printReport` imports it from — never re-exported through `@ctb/reports`, which
+// imports `@ctb/candles` (and so `pg`) and is required to stay free of a database driver
+// (`@ctb/reports`'s own Task 1 guard pins that). `@ctb/dashboard` already depends on `pg` directly
+// (via `@ctb/db`, for `PgDashboardReads`/`PgRunRepo`), so this import adds nothing new to ITS own
+// dependency graph — only `@ctb/reports`'s purity would have been at risk.
+import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { chartHtml, equitySeries } from '../chart.js';
 import { escape, layout, table } from '../html.js';
 import { RUN_MODES, RUN_STATUSES, type RunFilter } from '../reads.js';
@@ -24,32 +33,73 @@ function selectField(name: string, current: string | undefined, values: readonly
 
 /**
  * The list never loads a run's rows (see file header), so it cannot know a run's ticker from the
- * database alone — `tickerOf` is a pure lookup over the universe, not a query. The strategy and
- * ticker options are built from what's actually on the page (plus the current filter value, so a
- * filter that matches zero rows still shows itself as selected) rather than the full universe, which
- * this page has no other reason to load.
+ * database alone — `tickerOf` is a pure lookup over the universe, not a query. The strategy options
+ * are the full sanctioned `STRATEGIES` list (plus the current filter value, so a filter that matches
+ * zero rows still shows itself as selected).
+ *
+ * Finding I3 (review round 1): the ticker options used to be built from `runs.map(tickerOf)` — only
+ * the tickers on the CURRENT (already-filtered) page — so a ticker that only appears on page 2, or
+ * that has zero runs matching the rest of the current filter, was undiscoverable through the form: an
+ * operator would have to clear every filter first just to find out it existed. `tickers` is now the
+ * full universe list, threaded in from `DashboardDeps.tickers()` (a pure in-memory lookup, no query —
+ * the same shape as `tickerOf`/`unitOf`), so every ticker the universe knows about is always offered.
  */
-function renderFilterForm(filter: RunFilter, tickerOf: (unit: string) => string, runs: RunRow[]): string {
+function renderFilterForm(filter: RunFilter, tickerOf: (unit: string) => string, tickers: readonly string[]): string {
   const selectedTicker = filter.unit !== undefined ? tickerOf(filter.unit) : undefined;
-  const tickers = new Set<string>(runs.map((r) => tickerOf(r.baseUnit)));
-  if (selectedTicker !== undefined) tickers.add(selectedTicker);
+  const tickerOptions = new Set<string>(tickers);
+  if (selectedTicker !== undefined) tickerOptions.add(selectedTicker);
   const strategies = new Set<string>(Object.keys(STRATEGIES));
   if (filter.strategy !== undefined) strategies.add(filter.strategy);
 
   return `<form method="get" action="/runs" style="${PAGE_CSS_FORM}">
 <label>mode<br>${selectField('mode', filter.mode, RUN_MODES)}</label>
 <label>strategy<br>${selectField('strategy', filter.strategy, [...strategies].sort())}</label>
-<label>ticker<br>${selectField('ticker', selectedTicker, [...tickers].sort())}</label>
+<label>ticker<br>${selectField('ticker', selectedTicker, [...tickerOptions].sort())}</label>
 <label>status<br>${selectField('status', filter.status, RUN_STATUSES)}</label>
 <button type="submit">filter</button>
 </form>`;
 }
 
-export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string) => string; filter: RunFilter; page: number; pageSize: number; now: Date }): string {
-  const { runs, tickerOf, filter, page, pageSize, now } = input;
+/** The query string for the SAME filter, at a different `page` — used by both the filter form's
+ * implicit resubmission (page 1) and the prev/next links below (whatever page they name). Encodes
+ * `filter.unit` back to its display ticker via `tickerOf`, since `?ticker=` is what the URL/router
+ * actually accepts (`reads.ts`'s `RunFilter.unit` only exists after the router already resolved it). */
+function runsQueryString(filter: RunFilter, tickerOf: (unit: string) => string, page: number): string {
+  const params = new URLSearchParams();
+  if (filter.mode !== undefined) params.set('mode', filter.mode);
+  if (filter.strategy !== undefined) params.set('strategy', filter.strategy);
+  if (filter.unit !== undefined) params.set('ticker', tickerOf(filter.unit));
+  if (filter.status !== undefined) params.set('status', filter.status);
+  params.set('page', String(page));
+  return `/runs?${params.toString()}`;
+}
+
+/**
+ * M2 (review round 1): with more than one page of runs (129 in the live dev DB), the list had no
+ * next/prev links at all — an operator had to already know `?page=` existed and hand-edit the URL,
+ * with nothing on the page even hinting that further pages existed. The list deliberately never runs
+ * a second (COUNT) query per page (file header: "a page of 50 runs stays one query"), so "is there a
+ * next page" is inferred the same way most offset-paginated APIs without a count do: a FULL page
+ * (`rowsOnPage === pageSize`) probably has more after it; a fetch that came back short is the last one.
+ */
+function renderPagerLinks(filter: RunFilter, tickerOf: (unit: string) => string, page: number, pageSize: number, rowsOnPage: number): string {
+  const links: string[] = [];
+  if (page > 1) links.push(`<a href="${escape(runsQueryString(filter, tickerOf, page - 1))}">&larr; prev</a>`);
+  if (rowsOnPage === pageSize) links.push(`<a href="${escape(runsQueryString(filter, tickerOf, page + 1))}">next &rarr;</a>`);
+  return links.length > 0 ? `<p class="pager">${links.join(' &middot; ')}</p>` : '';
+}
+
+export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string) => string; tickers: readonly string[]; filter: RunFilter; page: number; pageSize: number; now: Date }): string {
+  const { runs, tickerOf, tickers, filter, page, pageSize, now } = input;
 
   const rows = runs.map((r) => {
     const s = r.summary;
+    // Finding I4 (review round 1): a resumed run's `runs.summary` reflects only its LAST segment (the
+    // same fact `renderPersistedHeadline`'s own heading already calls out on the detail page), but the
+    // list column was unconditionally labelled `summary` — an operator comparing the list's return %
+    // against the detail page's persisted-rows headline for the same resumed run saw two different
+    // numbers with no indication either one was partial (measured: list -0.09, detail -0.16 for run 6).
+    const basis = s ? (resumesOf(r).length > 0 ? 'summary (last segment)' : 'summary') : 'unfinished';
     return [
       // The only RenderedCell this page builds itself: a plain numeric id, escaped anyway on
       // principle (parked risk — `table()`'s unescaped branch is keyed on shape, not provenance, so
@@ -65,14 +115,15 @@ export function renderRunsList(input: { runs: RunRow[]; tickerOf: (unit: string)
       s ? `${s.filled}/${s.intents}` : '-',
       s ? (s.warnings ?? []).length : '-',
       r.rehearsal ? 'REHEARSAL' : '',
-      s ? 'summary' : 'unfinished',
+      basis,
     ];
   });
 
   const columns = ['id', 'mode', 'strategy', 'ticker', 'status', 'created', 'return %', 'max DD %', 'fills / intents', 'warnings', 'rehearsal', 'basis'];
   const body = `
-${renderFilterForm(filter, tickerOf, runs)}
+${renderFilterForm(filter, tickerOf, tickers)}
 ${table(columns, rows)}
+${renderPagerLinks(filter, tickerOf, page, pageSize, runs.length)}
 <p class="asof">page ${page} (${pageSize} per page) &middot; as of ${escape(now.toISOString())}</p>`;
 
   const rehearsal = runs.some((r) => r.rehearsal);
@@ -194,8 +245,15 @@ function renderOrdersTable(orders: Array<OrderRecord & { baseUnit: string }>): s
   return `<section><h2>orders</h2>${table(ORDERS_COLUMNS, rows)}${more}</section>`;
 }
 
+/**
+ * M3 (review round 1): a paper run with 0 or 1 persisted equity points (a run that just started, or
+ * whose feed has not written a tick yet) rendered NOTHING here — no chart, no message — while the
+ * backtest branch right next to it always explains itself ("equity is not persisted for backtest
+ * runs"). An operator seeing a run's page end mid-section with no equity chart and no reason had no
+ * way to tell "not enough data yet" apart from "the page silently dropped something".
+ */
 function renderEquityChart(runId: number, equity: EquityPoint[]): string {
-  if (equity.length < 2) return '';
+  if (equity.length < 2) return '<section><h2>equity</h2><p class="empty">not enough persisted points to chart</p></section>';
   return `<section><h2>equity</h2>${chartHtml(`equity-chart-${runId}`, equitySeries(equity))}</section>`;
 }
 
@@ -206,7 +264,21 @@ export function renderRunDetail(input: { run: RunRow; ticker: string; orders: Ar
 
   sections.push(`<p>${escape(coverageLine(run.summary?.coverage))}</p>`);
   for (const w of run.summary?.warnings ?? []) sections.push(`<p class="empty">warning: ${escape(w)}</p>`);
+  // Same wording as `printReport`/`printDayReport`, driven by the same `orders` this page already
+  // fetched — computed here (not gated on `run.summary` existing, unlike the CLI's early return) so a
+  // paper run being watched mid-flight never hides an assumed cost just because it hasn't finished yet.
+  const assumedVenues = assumedVenuesTouched(orders);
+  if (assumedVenues.length > 0) {
+    sections.push(`<p class="empty">warning: fills touched venues with ASSUMED costs: ${escape(assumedVenues.join(', '))} (see runs.params.costs.venues)</p>`);
+  }
 
+  // Finding M4 (review round 1): the paper branch always showed the persisted-rows headline (correct
+  // — see finding C1, it never depends on `runs.summary`) but that branch never fell through to the
+  // "unfinished" message below, so a RUNNING paper run with no `runs.summary` yet looked identical to
+  // a finished one — only a backtest ever said "unfinished". `printReport` prints BOTH for exactly
+  // this case (the persisted headline, then "run has no summary (unfinished)"), so the two checks
+  // below are now independent: mode decides which headline (if any) to show, `!run.summary` decides
+  // whether "unfinished" is ALSO shown, for either mode.
   let rejectReasons: Record<string, number> = {};
   if (run.mode === 'paper') {
     const headline = renderPersistedHeadline(equity, orders);
@@ -216,9 +288,8 @@ export function renderRunDetail(input: { run: RunRow; ticker: string; orders: Ar
     const headline = renderBacktestHeadline(run.summary);
     sections.push(headline.html);
     rejectReasons = headline.rejectReasons;
-  } else {
-    sections.push('<p class="empty">run has no summary (unfinished)</p>');
   }
+  if (!run.summary) sections.push('<p class="empty">run has no summary (unfinished)</p>');
   sections.push(renderRejectReasons(rejectReasons));
 
   sections.push(run.mode === 'backtest'

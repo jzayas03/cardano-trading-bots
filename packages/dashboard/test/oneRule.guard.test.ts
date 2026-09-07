@@ -2,19 +2,40 @@
  * The one rule (spec §4.1): `packages/dashboard` computes no number of its own. Every figure on
  * every page is the return value of a function imported from `@ctb/reports`.
  *
- * The brief's proposed regex (a negative lookahead requiring one of the sanctioned function names to
- * appear later on the SAME line as a `returnPct|maxDrawdownPct|feesLovelace|feesAda` assignment)
- * turned out to flag correct code: a plain read like `returnPct: s.returnPct ?? '-'` never mentions
- * `summarizeRun` on that line (the call already happened earlier, to produce `s`), so the lookahead
- * fired on the very pattern the whole rest of this file uses. The rule actually enforced here is
- * more direct and, empirically, exactly as strict where it matters: a bare member read or a function
- * call never contains an arithmetic operator (`+ - * /`) between two operands, and a hand-rolled
- * recomputation always does — `(end - start) / start * 100` has three; `s.returnPct` and
- * `adaStr(s.feesLovelace)` have none. String literals are stripped before this check so a value like
- * `'-'` (a literal dash, not subtraction) can't cause a false positive.
+ * Round 1 of this guard keyed on four hardcoded identifier names (`returnPct`, `maxDrawdownPct`,
+ * `feesLovelace`, `feesAda`) plus two literal patterns (`/ 1_000_000`, `* 100`). A review proved it
+ * caught only 1 of 6 realistic violations planted one at a time in `pages/runs.ts`:
  *
- * Proved red on 2026-09-07 by adding `const returnPct = (end - start) / start * 100;` to
- * `pages/runs.ts` — see the task report for the exact diff and failure output — then restoring it.
+ *   const returnPct = (end - start) / start * 100;                    caught (name + shape both fired)
+ *   const pct = Math.round(((endA - startA) / startA) * 10000) / 100; MISSED (no sensitive name)
+ *   const totalFees = fees.reduce((a, b) => a + b, 0n);                MISSED (no sensitive name, no /)
+ *   const ada = lov / 1_000_000n;                                      MISSED (bigint `n` suffix broke
+ *                                                                       the `\b` after the digits)
+ *   const elapsedSec = (d2.getTime() - d1.getTime()) / 1000;           MISSED (no sensitive name)
+ *   const summarizeLocal = (xs) => xs.reduce((a, b) => a + b, 0);      MISSED (no sensitive name)
+ *
+ * The name-keyed rule is gone. What replaces it is a SHAPE rule: any binary arithmetic operator
+ * (`+ - * / %`, including a compound-assignment form like `+=`) sitting between two token-like
+ * operands, anywhere in the package outside `chart.ts` (spec's one sanctioned lovelace-to-float
+ * conversion), is presumptively a local computation and fails the test — regardless of what anything
+ * is named. A short, explicitly commented allowlist below covers the handful of genuine index/offset
+ * arithmetic sites that are not financial figures (a string-slice offset, an array's last-index, a
+ * "how many more rows" count, a pagination `OFFSET`); anything else has to earn its way onto that
+ * list by being reviewed, not by picking an unlucky variable name.
+ *
+ * Source is scanned as text, not parsed, so two things are stripped before the operator scan so they
+ * cannot produce false positives: single/double-quoted string literals (removed entirely — they can
+ * never hold a `${}` expression) and comment lines (`//...`, or a line whose trimmed text starts with
+ * `*`/`/**`/`/*`, since JSDoc prose routinely contains stray hyphens and slashes). Backtick template
+ * literals are handled more carefully: a same-line template literal's plain HTML/SQL text (which can
+ * itself contain a false-positive-looking `/` or `*`, e.g. `` `SELECT * FROM runs` `` or "run_equity +
+ * paper_orders" as English prose) is discarded, but any `${...}` expression inside it is kept and
+ * still scanned — an arithmetic expression hidden inside a rendered template fragment is exactly the
+ * kind of thing this guard exists to catch, so nothing is allowed to make it invisible by nesting it
+ * in a backtick string.
+ *
+ * Proved red against all six injections above (see the task-5-fix-1 report for the per-injection
+ * table); restored.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -34,33 +55,94 @@ function walk(dir: string): string[] {
 
 const FILES = walk(SRC);
 
-/** Strips single/double/backtick string literals so a literal `'-'` or `'/'` in display text never
- * reads as an arithmetic operator. Not a full JS parser (a literal containing an escaped quote of a
- * different kind can confuse it) — good enough for the vocabulary this codebase's source actually uses. */
-function withoutStringLiterals(line: string): string {
-  return line.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g, '');
+/**
+ * Genuine index/offset/pagination arithmetic that is not a financial figure, and so is not something
+ * `@ctb/reports` could sensibly own. Each entry is an exact substring of one specific line — narrow on
+ * purpose, so this list allows exactly the reviewed expression it names and nothing that merely
+ * resembles it. Adding a new entry here is itself a reviewable change.
+ */
+const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; needle: string; because: string }> = [
+  { file: 'pages/health.ts', needle: 'line.slice(idx + 2)', because: 'string offset past a ": " separator, not a computed figure' },
+  { file: 'pages/runs.ts', needle: 'resumes.length - 1', because: 'array index into the resumes list, to show the last one' },
+  { file: 'pages/runs.ts', needle: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line' },
+  { file: 'pages/runs.ts', needle: 'runsQueryString(filter, tickerOf, page - 1)', because: 'M2 pager: the previous page number for the "prev" link, not a financial number' },
+  { file: 'pages/runs.ts', needle: 'runsQueryString(filter, tickerOf, page + 1)', because: 'M2 pager: the next page number for the "next" link, not a financial number' },
+  { file: 'server.ts', needle: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number' },
+];
+
+function isAllowed(rel: string, line: string): boolean {
+  return ALLOWED_ARITHMETIC.some((a) => a.file === rel && line.includes(a.needle));
 }
 
-const SENSITIVE_ASSIGNMENT = /(returnPct|maxDrawdownPct|feesLovelace|feesAda)\s*[:=]\s*([^;,\n]+)/g;
-const ARITHMETIC_OPERATOR = /[-+*/]/;
-const LOVELACE_DIVISION = /\/\s*1_000_000\b|\/\s*1e6\b/i;
-const PERCENT_MULTIPLY = /\*\s*100\b/;
+/** Drops the line entirely if it is a comment (`//...`, or a line whose trimmed text starts with
+ * `*`/`/**`/`/*`, since JSDoc prose routinely contains stray hyphens and slashes). */
+function isCommentLine(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/**') || trimmed.startsWith('/*');
+}
+
+/**
+ * For a same-line-closed backtick template literal, keeps only its `${...}` expression contents and
+ * discards the literal text around them — so plain HTML/SQL text can never produce a false positive,
+ * but an expression hidden inside a rendered fragment is never made invisible either. A backtick that
+ * does not close on this line (the common case — every page is built from multi-line templates) is
+ * left untouched: its plain-text lines elsewhere carry no closing/opening marker for this regex to
+ * match, and its own expression lines are scanned normally like any other line.
+ *
+ * This MUST run before plain-quote stripping, not after: this package's backtick templates are full
+ * of literal double quotes as ordinary HTML markup (`` `<a href="${...}">` ``, `` `<div id="${...}">` ``).
+ * A naive quote-strip applied to the raw line first cannot tell that `"` apart from a real string
+ * delimiter — it matches from the FIRST such `"` to the NEXT one and swallows everything between them,
+ * including a `${...}` expression that happened to sit inside an `href`/`id`/`class` attribute (this
+ * is exactly what hid the M2 pager link's `page - 1` from an earlier draft of this file).
+ */
+function stripBacktickText(line: string): string {
+  return line.replace(/`(?:[^`\\]|\\.)*`/g, (whole) => {
+    const exprs: string[] = [];
+    const exprRe = /\$\{([^{}]*)\}/g;
+    let m: RegExpExecArray | null;
+    while ((m = exprRe.exec(whole))) exprs.push(m[1] ?? '');
+    return exprs.join(' ');
+  });
+}
+
+/** Strips single/double-quoted string literals (never able to hold a `${}` expression, so safe to
+ * remove outright once any backtick template's HTML text is already gone — see `stripBacktickText`). */
+function stripPlainStrings(line: string): string {
+  return line.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '');
+}
+
+function preprocess(line: string): string {
+  if (isCommentLine(line)) return '';
+  return stripPlainStrings(stripBacktickText(line));
+}
+
+// Requires whitespace around the operator with a token-like character immediately on each side, so a
+// hyphenated CSS property (`max-width`, `border-collapse`, `--fg`) or SQL wildcard glued to its
+// neighbours never matches — every real arithmetic expression in this codebase's own style puts spaces
+// around its operators (see the six injections above), and every non-arithmetic hyphen/asterisk this
+// package's HTML/CSS text actually contains does not.
+const BINARY_ARITHMETIC = /([\w$)\]])\s+([-+*/%])\s+([\w$(])/;
+// `total += x`-shaped local accumulation — no known instance in this package today, but the same
+// mechanism as the `reduce((a, b) => a + b, ...)` injection above and just as capable of quietly
+// summing fees or returns; cheap to close off before it exists.
+const COMPOUND_ASSIGNMENT = /\w\s*[-+*/%]=/;
 
 describe('@ctb/dashboard one-rule guard', () => {
   it('scans every .ts file under src (no file list is empty)', () => {
     expect(FILES.length).toBeGreaterThan(5);
   });
 
-  it('never assigns returnPct/maxDrawdownPct/feesLovelace/feesAda from a local arithmetic expression', () => {
+  it('never contains binary arithmetic between two operands outside chart.ts and the reviewed allowlist', () => {
     for (const file of FILES) {
       const rel = relative(SRC, file);
+      if (rel === 'chart.ts') continue; // the one sanctioned lovelace->float conversion, itself routed through adaStr
       const text = readFileSync(file, 'utf8');
-      for (const line of text.split('\n')) {
-        const stripped = withoutStringLiterals(line);
-        for (const m of stripped.matchAll(SENSITIVE_ASSIGNMENT)) {
-          const rhs = m[2] ?? '';
-          expect(ARITHMETIC_OPERATOR.test(rhs), `${rel}: local arithmetic on ${m[1]}: ${line.trim()}`).toBe(false);
-        }
+      for (const rawLine of text.split('\n')) {
+        if (isAllowed(rel, rawLine)) continue;
+        const scanned = preprocess(rawLine);
+        expect(BINARY_ARITHMETIC.test(scanned), `${rel}: local arithmetic: ${rawLine.trim()}`).toBe(false);
+        expect(COMPOUND_ASSIGNMENT.test(scanned), `${rel}: local compound-assignment arithmetic: ${rawLine.trim()}`).toBe(false);
       }
     }
   });
@@ -70,10 +152,11 @@ describe('@ctb/dashboard one-rule guard', () => {
       const rel = relative(SRC, file);
       if (rel === 'chart.ts') continue; // the one sanctioned lovelace->float conversion, itself routed through adaStr
       const text = readFileSync(file, 'utf8');
-      for (const line of text.split('\n')) {
-        const stripped = withoutStringLiterals(line);
-        expect(LOVELACE_DIVISION.test(stripped), `${rel}: hand lovelace->ADA division: ${line.trim()}`).toBe(false);
-        expect(PERCENT_MULTIPLY.test(stripped), `${rel}: hand percent multiplication: ${line.trim()}`).toBe(false);
+      for (const rawLine of text.split('\n')) {
+        if (isAllowed(rel, rawLine)) continue;
+        const scanned = preprocess(rawLine);
+        expect(/\/\s*1_000_000\b|\/\s*1e6\b/i.test(scanned), `${rel}: hand lovelace->ADA division: ${rawLine.trim()}`).toBe(false);
+        expect(/\*\s*100\b/.test(scanned), `${rel}: hand percent multiplication: ${rawLine.trim()}`).toBe(false);
       }
     }
   });
