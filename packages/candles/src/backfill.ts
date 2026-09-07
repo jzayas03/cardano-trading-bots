@@ -1,4 +1,4 @@
-import type { Logger } from '@ctb/collector';
+import type { Logger } from '@ctb/collector/pure';
 import type { TokenSpec } from '@ctb/universe';
 import type { ExternalRepo } from './externalRepo.js';
 import { chooseExternalPool, type GeckoCandle, type GeckoTerminalClient } from './geckoTerminal.js';

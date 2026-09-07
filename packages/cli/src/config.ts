@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_VENUES, isDexName, type DexName } from '@ctb/collector';
+import { DEFAULT_VENUES, isDexName, type DexName } from '@ctb/collector/pure';
 import { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';
 
 export { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';

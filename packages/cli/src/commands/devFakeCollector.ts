@@ -1,4 +1,4 @@
-import { bucketTick, PgSnapshotRepo, type SnapshotRow } from '@ctb/collector';
+import { bucketTick, PgSnapshotRepo, type SnapshotRow } from '@ctb/collector/pure';
 import { createPool, type Db } from '@ctb/db';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';

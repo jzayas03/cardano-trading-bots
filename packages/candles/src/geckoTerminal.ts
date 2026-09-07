@@ -1,4 +1,4 @@
-import type { Logger } from '@ctb/collector';
+import type { Logger } from '@ctb/collector/pure';
 import type { Decimal } from './types.js';
 
 export interface GeckoPool { id: string; hex: string; name: string; dex: string; reserveUsd: number | null }

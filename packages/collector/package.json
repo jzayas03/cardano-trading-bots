@@ -2,7 +2,10 @@
   "name": "@ctb/collector",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./pure": "./src/pure.ts"
+  },
   "dependencies": {
     "@ctb/db": "*",
     "@ctb/reports": "*",

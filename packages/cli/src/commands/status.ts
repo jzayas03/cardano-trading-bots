@@ -1,4 +1,4 @@
-import { PgSnapshotRepo } from '@ctb/collector';
+import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool } from '@ctb/db';
 import { PgRunRepo } from '@ctb/engine';
 import { heartbeatAgeCell, isHeartbeatStale } from '@ctb/reports';

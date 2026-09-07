@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, statfsSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { PgSnapshotRepo } from '@ctb/collector';
+import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool, listMigrations } from '@ctb/db';
 import type { Logger } from 'pino';
 import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';

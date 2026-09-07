@@ -1,6 +1,6 @@
 import { migrate, type Db } from '@ctb/db';
 import { PgExternalRepo } from '@ctb/candles';
-import { PgSnapshotRepo, type SnapshotRow } from '@ctb/collector';
+import { PgSnapshotRepo, type SnapshotRow } from '@ctb/collector/pure';
 import { PgRunRepo } from '@ctb/engine';
 import { describe, expect, it } from 'vitest';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';

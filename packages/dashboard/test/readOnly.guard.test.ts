@@ -47,7 +47,7 @@
  * written as a field is invoked exactly like a callable one written as a method.
  */
 import type pg from 'pg';
-import { PgSnapshotRepo } from '@ctb/collector';
+import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { PgRunRepo } from '@ctb/engine';
 import type { Queryable } from '@ctb/db';
 import { describe, expect, it } from 'vitest';

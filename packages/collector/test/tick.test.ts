@@ -3,7 +3,7 @@ import type { Pair } from '@ctb/universe';
 import {
   isPoolFailure, runTick,
   type CollectorState, type PoolLike, type PoolSource, type RunError, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult,
-} from '../src/index.js';
+} from '../src/pure.js';
 
 const SNEK_PAIR: Pair = {
   base: { ticker: 'SNEK', policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', assetNameHex: '534e454b', decimals: 0, category: 'Meme',

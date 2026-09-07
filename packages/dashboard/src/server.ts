@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { VenuePoolCount } from '@ctb/collector';
+import type { VenuePoolCount } from '@ctb/collector/pure';
 import type { RunRepo, RunningRun } from '@ctb/engine';
 import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, heartbeatAgeCell, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';

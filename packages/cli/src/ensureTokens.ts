@@ -1,4 +1,4 @@
-import { PgSnapshotRepo } from '@ctb/collector';
+import { PgSnapshotRepo } from '@ctb/collector/pure';
 import type { Db } from '@ctb/db';
 import type { Universe } from '@ctb/universe';
 

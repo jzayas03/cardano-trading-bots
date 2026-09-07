@@ -1,4 +1,4 @@
-import { isDexName, type DexName } from '@ctb/collector';
+import { isDexName, type DexName } from '@ctb/collector/pure';
 import type { FillResult } from '@ctb/engine';
 
 /**

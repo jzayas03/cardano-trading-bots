@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bucketTick, poolIdOf, poolToSnapshot, type PoolLike } from '../src/index.js';
+import { bucketTick, poolIdOf, poolToSnapshot, type PoolLike } from '../src/pure.js';
 
 const SNEK = { policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', nameHex: '534e454b' };
 const ctx = { tickTs: new Date('2026-09-05T15:00:00Z'), blockHeight: 12_345_678, observedAt: new Date('2026-09-05T15:00:07Z') };

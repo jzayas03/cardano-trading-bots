@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_VENUES, VENUE_NAMES } from '@ctb/collector';
+import { DEFAULT_VENUES, VENUE_NAMES } from '@ctb/collector/pure';
 import { deriveDashboardUrl, loadConfig } from '../src/config.js';
 
 const base = { DATABASE_URL: 'postgres://ctb:x@localhost:5433/ctb' };
