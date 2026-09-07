@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chooseExternalPool, GeckoTerminalClient, type GeckoPool } from '../src/index.js';
+import { chooseExternalPool, GeckoTerminalClient, MAX_SPACING_MS, parseRetryAfter, type GeckoPool } from '../src/index.js';
 
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -111,6 +111,52 @@ describe('GeckoTerminalClient', () => {
     const f = (async () => { throw new Error('ECONNRESET'); }) as typeof fetch;
     const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, minSpacingMs: 0, log });
     await expect(c.listAdaPools('u')).rejects.toThrow(/network error.*5 attempts/);
+  });
+});
+
+describe('GeckoTerminalClient adaptive spacing (2026-09-07 universe backfill: 118 rate limits at 3 s)', () => {
+  const ohlcv = () => json({ data: { attributes: { ohlcv_list: [] } } });
+  it('doubles the spacing on a 429 (capped), honors Retry-After as the floor of the wait, and decays back toward the base on successes', async () => {
+    const slept: number[] = [];
+    const { f } = fakeFetch([
+      () => json({}, 429), ohlcv, // widen 3000 -> 6000
+      () => new Response('{}', { status: 429, headers: { 'retry-after': '20' } }), ohlcv, // widen to max(12000, 20000) = 20000; wait >= 20000
+      ohlcv, ohlcv, ohlcv,
+    ]);
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async (ms) => { slept.push(ms); }, minSpacingMs: 3_000, log, random: () => 0 });
+    expect(c.currentSpacingMs()).toBe(3_000);
+    await c.ohlcv5m('p'); // 429 then ok
+    expect(slept[0]).toBe(5_000); // retry backoff
+    // success decays: 6000 * 0.85 = 5100
+    expect(c.currentSpacingMs()).toBe(5_100);
+    await c.ohlcv5m('p'); // 429 with Retry-After 20 s, then ok
+    expect(slept.some((ms) => ms >= 20_000)).toBe(true);
+    // widened to 20000 then one success decays to 17000
+    expect(c.currentSpacingMs()).toBe(17_000);
+    await c.ohlcv5m('p'); await c.ohlcv5m('p'); await c.ohlcv5m('p');
+    expect(c.currentSpacingMs()).toBeLessThan(17_000);
+    expect(c.currentSpacingMs()).toBeGreaterThanOrEqual(3_000);
+  });
+  it('never widens past MAX_SPACING_MS and never decays below the base', async () => {
+    const { f } = fakeFetch([() => json({}, 429), () => json({}, 429), () => json({}, 429), () => json({}, 429), ohlcv, ...Array.from({ length: 40 }, () => ohlcv)]);
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, minSpacingMs: 3_000, log, random: () => 0 });
+    await c.ohlcv5m('p'); // four 429s then ok: 6000, 12000, 24000, 30000 (cap), then one decay
+    expect(c.currentSpacingMs()).toBe(Math.round(MAX_SPACING_MS * 0.85));
+    for (let i = 0; i < 40; i++) await c.ohlcv5m('p');
+    expect(c.currentSpacingMs()).toBe(3_000);
+  });
+  it('a 5xx backs off the call but does not widen the spacing (it is not a rate limit)', async () => {
+    const { f } = fakeFetch([() => json({}, 503), ohlcv]);
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, minSpacingMs: 3_000, log, random: () => 0 });
+    await c.ohlcv5m('p');
+    expect(c.currentSpacingMs()).toBe(3_000);
+  });
+  it('parseRetryAfter reads seconds and ignores anything else', () => {
+    expect(parseRetryAfter('20')).toBe(20_000);
+    expect(parseRetryAfter(' 1.5 ')).toBe(1_500);
+    expect(parseRetryAfter(null)).toBeNull();
+    expect(parseRetryAfter('Wed, 21 Oct 2015 07:28:00 GMT')).toBeNull();
+    expect(parseRetryAfter('-3')).toBeNull();
   });
 });
 

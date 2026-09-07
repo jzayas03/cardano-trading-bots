@@ -42,7 +42,7 @@ async function main(): Promise<void> {
       return devFakeCollectorCommand(log, rest);
     default:
       console.error(
-        'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO>|' +
+        'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
         'backtest <strategy>[,<strategy>...] <TICKER|ALL> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N|auto] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
         'report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <ids>|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...|' +
