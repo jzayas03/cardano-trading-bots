@@ -89,6 +89,23 @@ The 200-minute gap is the interval between the exploratory tick of 2026-09-06 20
 the M1 run at 2026-09-07 00:10, not a collection failure. The 20- and 30-minute gaps are the two
 collector restarts of that night.
 
+## Decision: keep deepest-per-tick, and declare it
+
+Asked and settled 2026-09-07, from the evidence above. The candle builder continues to use the
+deepest pool available at each tick, and a run declares how many pools its series spanned.
+
+Two alternatives were considered and rejected. **Pinning a run to one pool** and producing no candle
+when that pool is missing would give one consistent series with honest holes — but on the night this
+was measured it would have produced two hours of nothing for 16 of the 20 tokens, and a hole is not
+more informative than a quote from the next-deepest pool. **Pinning with a fallback after some number
+of missing ticks** is closest to what a person would choose by hand, and is also the most code, the
+most parameters, and the most to get wrong for a case that a warning already makes visible.
+
+The deepest pool is genuinely the best available quote at that moment, which is why the rule was
+chosen in the first place. What was wrong was not the rule but its silence: a reader could not tell a
+spliced series from a clean one. That is fixed. Anyone who later wants a pinned series should read
+this section first and argue against the measurement, not against the rule in the abstract.
+
 ## What this changes
 
 - The seven-day run's token choice should come from the movement table above, not from habit.
