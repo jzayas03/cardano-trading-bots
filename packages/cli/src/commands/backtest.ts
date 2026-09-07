@@ -8,13 +8,17 @@ import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
 import { externalCandleFeed, localCandleFeed } from '../feeds.js';
 import { printReport } from './report.js';
-import { compareRows, type CompareInput } from '../compare.js';
+import { compareRows, sweepRows, type SweepInput } from '../compare.js';
 import { parseIsoDate } from './backfill.js';
 
 export interface BacktestArgs {
   /** One or more strategy ids (comma-separated on the command line). Each gets its own run over the same window, fill model, costs and `--param` values; more than one also prints a comparison table. */
-  strategyIds: string[]; ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
-  cashAda: number; depthAda: number | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
+  strategyIds: string[];
+  /** A universe ticker, or `ALL`: every universe token that has data for the chosen source. */
+  ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
+  cashAda: number;
+  /** ADA of synthetic depth (external source only); `'auto'` = each token's own latest deepest-pool ADA reserve from `pool_snapshots`. Default `'auto'` for `ALL`, required otherwise. */
+  depthAda: number | 'auto' | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
   /** Only meaningful with `--source external` (the synthetic fill model); defaults to `close` so every existing backtest is unchanged. */
   syntheticPrice: 'close' | 'worst';
 }
@@ -22,7 +26,7 @@ export interface BacktestArgs {
 /** Default stale-fill bound: three 5-minute buckets. Sparse external history routinely exceeds it (finding C3). */
 export const DEFAULT_MAX_GAP_MIN = 15;
 
-const USAGE = 'usage: backtest <strategy>[,<strategy>...] <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
+const USAGE = 'usage: backtest <strategy>[,<strategy>...] <TICKER|ALL> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N|auto] [--batcher-ada N] [--network-ada N] [--max-gap-min N] [--synthetic-price close|worst] [--param k=v]...';
 
 function num(flag: string, v: string | undefined): number {
   const n = Number(v);
@@ -71,7 +75,7 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
         if (val !== 'candles' && val !== 'external') throw new Error(`--source must be candles or external\n${USAGE}`);
         out.source = val === 'external' ? 'candles_external' : 'candles'; i++; break;
       case '--cash-ada': out.cashAda = num(flag, val); i++; break;
-      case '--depth-ada': out.depthAda = num(flag, val); i++; break;
+      case '--depth-ada': out.depthAda = val === 'auto' ? 'auto' : num(flag, val); i++; break;
       case '--batcher-ada': out.batcherAda = num(flag, val); i++; break;
       case '--network-ada': out.networkAda = num(flag, val); i++; break;
       case '--max-gap-min': {
@@ -91,7 +95,10 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
       default: throw new Error(`unknown flag ${flag}\n${USAGE}`);
     }
   }
-  if (out.source === 'candles_external' && out.depthAda === null) throw new Error(`--depth-ada is required with --source external (declared pool depth in ADA for the synthetic fill model)\n${USAGE}`);
+  // A sweep over 20 tokens of very different size with one hand-typed depth would make every
+  // synthetic fill meaningless for most of them, so ALL defaults to each token's own measured depth.
+  if (out.source === 'candles_external' && out.depthAda === null && out.ticker === 'ALL') out.depthAda = 'auto';
+  if (out.source === 'candles_external' && out.depthAda === null) throw new Error(`--depth-ada is required with --source external (declared pool depth in ADA for the synthetic fill model, or auto)\n${USAGE}`);
   if (out.source === 'candles' && out.depthAda !== null) throw new Error(`--depth-ada only applies to --source external; observed reserves are used otherwise\n${USAGE}`);
   // Same footgun as depthAda: silently accepting a flag with no effect reads as "I turned on
   // worst-of pricing" when the observed fill model never looks at it.
@@ -100,6 +107,22 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
 }
 
 const ada = (n: number): bigint => BigInt(Math.round(n * 1_000_000));
+
+/**
+ * `--depth-ada auto`: the token's latest deepest pool's ADA reserve, from our own snapshots — the
+ * depth the observed fill model would see today, applied to external history that carries no
+ * reserves. Null when the collector has never snapshotted this token; the caller refuses rather
+ * than guessing a number.
+ */
+export async function autoDepthLovelace(db: { query: <T>(sql: string, params?: unknown[]) => Promise<{ rows: T[] }> }, unit: string): Promise<bigint | null> {
+  const r = await db.query<{ reserve_quote: string | null }>(
+    `SELECT max(reserve_quote) AS reserve_quote FROM pool_snapshots
+      WHERE base_unit = $1 AND tick_ts = (SELECT max(tick_ts) FROM pool_snapshots WHERE base_unit = $1)`,
+    [unit],
+  );
+  const v = r.rows[0]?.reserve_quote;
+  return v === null || v === undefined ? null : BigInt(v);
+}
 
 /**
  * Pure builder for the `runs.params` JSON blob, extracted so cost provenance can be unit-tested
@@ -156,44 +179,71 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
   });
   const cfg = loadConfig(process.env, { blockfrost: false });
   const universe = await loadUniverse();
-  const token = universe.tokens.find((t) => t.ticker === a.ticker);
-  if (!token) throw new Error(`unknown ticker ${a.ticker}; not in universe.json`);
+  const tokens = a.ticker === 'ALL' ? universe.tokens : universe.tokens.filter((t) => t.ticker === a.ticker);
+  if (tokens.length === 0) throw new Error(`unknown ticker ${a.ticker}; not in universe.json`);
+  const sweep = a.ticker === 'ALL';
   const db = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'pg pool error'));
   try {
     await ensureTokens(db, universe);
     const runs = new PgRunRepo(db);
+    const external = new PgExternalRepo(db);
     const gitSha = gitShaOrUnknown(process.cwd());
     if (gitSha === 'unknown') log.warn({}, 'git sha unknown: run provenance is incomplete');
-    const fillModel: FillModel = a.source === 'candles'
-      ? { kind: 'cpmm_observed' }
-      : { kind: 'cpmm_synthetic_depth', depthLovelace: ada(a.depthAda ?? 0), price: a.syntheticPrice };
     const maxGapMs = a.maxGapMin * 60_000;
     const costOverrides: Partial<Pick<VenueCosts, 'batcherFeeLovelace' | 'networkFeeLovelace'>> = { ...(a.batcherAda !== null ? { batcherFeeLovelace: ada(a.batcherAda) } : {}), ...(a.networkAda !== null ? { networkFeeLovelace: ada(a.networkAda) } : {}) };
-    // The synthetic price mode only means anything for the external source's fill model; recording it
-    // for an observed-reserves run would claim a choice that was never actually in effect.
-    const extra = a.source === 'candles_external' ? { fillModelDetail: { syntheticPrice: a.syntheticPrice } } : undefined;
-    const results: CompareInput[] = [];
-    // Sequential on purpose: each run reads the same candles, and one at a time keeps the run ids
-    // in the order the operator listed the strategies.
-    for (const strategy of strategies) {
-      const runId = await runs.createRun({
-        mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
-        params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, a.depthAda, costOverrides, maxGapMs, extra),
-      });
-      console.log(`run id: ${runId}`);
-      const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(new PgExternalRepo(db), token.unit, a.from, a.to);
-      const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
-      const result = await runEngine({ feed, strategy, params: a.params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
-        intervalSec: cfg.intervalSec, maxGapMs });
-      await runs.insertOrders(runId, token.unit, result.orders);
-      await runs.finishRun(runId, new Date(), result.summary);
-      const run = await runs.getRun(runId);
-      if (!run) throw new Error(`run ${runId} vanished`);
-      printReport(run, await runs.listOrders(runId), token.ticker);
-      results.push({ strategyId: strategy.id, runId, summary: result.summary });
+    const results: SweepInput[] = [];
+    const skipped: Array<{ ticker: string; reason: string }> = [];
+    for (const token of tokens) {
+      // A sweep token with nothing to run on is a row in the skipped table, not the end of the sweep.
+      if (a.source === 'candles_external' && sweep && !(await external.getMap(token.unit))) { skipped.push({ ticker: token.ticker, reason: 'no external history (run backfill first)' }); continue; }
+      let depthLovelace: bigint | null = null;
+      let depthAdaForParams: number | null = null;
+      if (a.source === 'candles_external') {
+        if (a.depthAda === 'auto') {
+          depthLovelace = await autoDepthLovelace(db, token.unit);
+          if (depthLovelace === null) {
+            const reason = 'no pool snapshot for this token, so --depth-ada auto has nothing to read';
+            if (sweep) { skipped.push({ ticker: token.ticker, reason }); continue; }
+            throw new Error(`${token.ticker}: ${reason}`);
+          }
+        } else {
+          depthLovelace = ada(a.depthAda ?? 0);
+        }
+        depthAdaForParams = Number(depthLovelace) / 1_000_000;
+      }
+      const fillModel: FillModel = a.source === 'candles'
+        ? { kind: 'cpmm_observed' }
+        : { kind: 'cpmm_synthetic_depth', depthLovelace: depthLovelace ?? 0n, price: a.syntheticPrice };
+      // The synthetic price mode and the depth basis only mean anything for the external source's fill
+      // model; recording them for an observed-reserves run would claim choices never in effect.
+      const extra = a.source === 'candles_external' ? { fillModelDetail: { syntheticPrice: a.syntheticPrice, depthBasis: a.depthAda === 'auto' ? 'auto: latest deepest-pool ADA reserve from pool_snapshots' : 'flag' } } : undefined;
+      // Sequential on purpose: each run reads the same candles, and one at a time keeps the run ids
+      // in the order the operator listed the strategies.
+      for (const strategy of strategies) {
+        const runId = await runs.createRun({
+          mode: 'backtest', strategyId: strategy.id, gitSha, baseUnit: token.unit, dataSource: a.source, fillModel: fillModel.kind, dataFrom: a.from, dataTo: a.to,
+          params: buildRunParams(strategy.defaultParams, a.params, a.cashAda, depthAdaForParams, costOverrides, maxGapMs, extra),
+        });
+        console.log(`run id: ${runId} (${token.ticker} ${strategy.id})`);
+        const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to);
+        const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
+        const result = await runEngine({ feed, strategy, params: a.params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
+          intervalSec: cfg.intervalSec, maxGapMs });
+        await runs.insertOrders(runId, token.unit, result.orders);
+        await runs.finishRun(runId, new Date(), result.summary);
+        const run = await runs.getRun(runId);
+        if (!run) throw new Error(`run ${runId} vanished`);
+        // A sweep prints one table at the end; sixty full reports would bury it. `report <id>` has each.
+        if (!sweep) printReport(run, await runs.listOrders(runId), token.ticker);
+        results.push({ ticker: token.ticker, strategyId: strategy.id, runId, summary: result.summary, depthAda: depthAdaForParams });
+      }
     }
-    if (results.length > 1) {
-      console.log(`\n=== comparison | ${token.ticker} | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | same fill model, costs and --param values for every row`);
+    if (sweep) {
+      console.log(`\n=== sweep | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | ${results.length} runs over ${tokens.length - skipped.length} of ${tokens.length} tokens | depth: ${a.depthAda === 'auto' ? 'auto (each token\'s latest deepest-pool ADA reserve)' : `${String(a.depthAda)} ADA for every token`}`);
+      console.table(sweepRows(results));
+      if (skipped.length) { console.log('skipped:'); console.table(skipped); }
+    } else if (results.length > 1) {
+      console.log(`\n=== comparison | ${a.ticker} | ${a.source} ${a.from.toISOString()} -> ${a.to.toISOString()} | same fill model, costs and --param values for every row`);
       console.table(compareRows(results));
     }
   } finally {
