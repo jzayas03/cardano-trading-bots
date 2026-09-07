@@ -75,7 +75,7 @@ export async function loadDigestInput(db: { query: <T>(sql: string, params?: unk
        (SELECT count(DISTINCT base_unit) FROM pool_snapshots WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots)) AS tokens_covered,
        (SELECT coalesce(sum(pools_failed), 0) FROM collector_runs WHERE tick_ts > $1::timestamptz - interval '24 hours') AS failures_24h,
        (SELECT coalesce(sum(jsonb_array_length(errors)), 0) FROM collector_runs WHERE tick_ts > $1::timestamptz - interval '24 hours') AS errors_24h,
-       (SELECT count(*) FROM collector_runs WHERE finished_at IS NULL) AS unfinished,
+       (SELECT count(*) FROM collector_runs WHERE finished_at IS NULL AND started_at > $1::timestamptz - interval '24 hours') AS unfinished,
        (SELECT max(tick_ts) FROM collector_runs WHERE discovered AND finished_at IS NOT NULL) AS last_discovery`,
     [now, utcMidnight(now)],
   );

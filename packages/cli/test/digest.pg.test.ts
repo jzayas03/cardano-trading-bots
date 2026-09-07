@@ -40,6 +40,8 @@ describe.skipIf(!PG_ENABLED)('loadDigestInput', () => {
       // today 11:50 UTC refresh: newest finished
       id = await repo.startRun(new Date('2026-09-07T11:50:00Z'), new Date('2026-09-07T11:50:01Z'));
       await repo.finishRun(id, new Date('2026-09-07T11:51:00Z'), { ...done, providerCalls: 210 });
+      // two days ago, never finished (a killed process): outside 24h -> not an unfinished run anymore
+      await repo.startRun(new Date('2026-09-05T12:00:00Z'), new Date('2026-09-05T12:00:01Z'));
       // today 12:00 UTC: in flight, never finished -> unfinished only; its calls are still 0
       await repo.startRun(new Date('2026-09-07T12:00:00Z'), new Date('2026-09-07T12:00:01Z'));
 
