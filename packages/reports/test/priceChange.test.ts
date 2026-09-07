@@ -1,5 +1,24 @@
 import { describe, expect, it } from 'vitest';
-import { priceChangePct } from '../src/index.js';
+import { dayAgo, priceChangePct } from '../src/index.js';
+
+describe('dayAgo', () => {
+  it('is exactly 24 hours (86_400_000 ms) before `now`', () => {
+    const now = new Date('2026-09-07T19:10:00.000Z');
+    expect(dayAgo(now).toISOString()).toBe('2026-09-06T19:10:00.000Z');
+    expect(now.getTime() - dayAgo(now).getTime()).toBe(86_400_000);
+  });
+
+  it('crosses a day/month/year boundary correctly, not just a fixed offset in the same day', () => {
+    expect(dayAgo(new Date('2026-01-01T00:30:00.000Z')).toISOString()).toBe('2025-12-31T00:30:00.000Z');
+  });
+
+  it('does not mutate its argument', () => {
+    const now = new Date('2026-09-07T19:10:00.000Z');
+    const before = now.getTime();
+    dayAgo(now);
+    expect(now.getTime()).toBe(before);
+  });
+});
 
 describe('priceChangePct', () => {
   it('a doubling is 100', () => {

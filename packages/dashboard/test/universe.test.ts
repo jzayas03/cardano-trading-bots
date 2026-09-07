@@ -27,6 +27,22 @@ const alpha = token({ ticker: 'ALPHA', unit: 'unit-alpha', decimals: 6 });
 const beta = token({ ticker: 'BETA', unit: 'unit-beta', decimals: 0 });
 const gamma = token({ ticker: 'GAMMA', unit: 'unit-gamma', decimals: 6 });
 
+/**
+ * Fix round, IMPORTANT 3: the `?sort=change` test below only ever checked which row came first —
+ * nothing anywhere asserted that a real, non-zero change actually renders as the number it is
+ * (e.g. `100` for a doubling), only that rows with a change value sort ahead of rows without one. This
+ * pulls one row's own `<td>` cells out by ticker, in column order (`COLUMNS` in `pages/universe.ts`:
+ * rank, ticker, venue, pool, depth, price, change, ext rows, ext first, ext last, note), so the value
+ * assertions below can pin the "24h change %" cell (index 6) to its exact rendered text rather than
+ * merely its position on the page.
+ */
+function rowCellsFor(html: string, ticker: string): string[] {
+  const rows = [...html.matchAll(/<tr>(.*?)<\/tr>/g)].map((m) => m[1] ?? '');
+  const row = rows.find((r) => r.includes(`>${ticker}<`));
+  if (row === undefined) throw new Error(`no <tr> found containing >${ticker}<`);
+  return [...row.matchAll(/<td>(.*?)<\/td>/g)].map((m) => m[1] ?? '');
+}
+
 describe('renderUniverse', () => {
   it('renders exactly one row per universe token, in universe order by default (sort: rank)', () => {
     const tokens = [alpha, beta, gamma];
@@ -75,10 +91,24 @@ describe('renderUniverse', () => {
     expect(dashCount).toBe(2); // ext first, ext last only
   });
 
-  it('pool id is shortened to 12 characters with the full id in a title attribute', () => {
+  it('pool id is shortened to its LAST 12 characters, with the full id in a title attribute', () => {
+    // Fix round, finding 4: every real pool id is "<dex>:" + 128 hex characters, so truncating the
+    // first 12 characters of the raw id showed "MinswapV2:ab" on every single row — ten of those twelve
+    // characters are just the venue name, already shown one column over. Stripping the "<dex>:" label
+    // alone is STILL not enough: a live check against the real dev database (Step 5's own
+    // verification, see this function's own header comment) found every pool id also shares a long
+    // common script-hash prefix immediately after the label (the DEX's own validator script, identical
+    // for every pool of that DEX version) — only the LAST 12 characters (the pool-specific staking
+    // credential) actually differ row to row.
     const latest = [snapshot(alpha.unit, { poolId: 'MinswapV2:abcdefghijklmnopqrstuvwxyz' })];
     const html = renderUniverse({ tokens: [alpha], latest, dayAgo: [], coverage: [], sort: 'rank', now });
-    expect(html).toContain('<span title="MinswapV2:abcdefghijklmnopqrstuvwxyz">MinswapV2:ab</span>');
+    expect(html).toContain('<span title="MinswapV2:abcdefghijklmnopqrstuvwxyz">opqrstuvwxyz</span>');
+  });
+
+  it('a short pool id (under 12 characters) renders in full, never crashing or padding', () => {
+    const latest = [snapshot(alpha.unit, { poolId: 'short' })];
+    const html = renderUniverse({ tokens: [alpha], latest, dayAgo: [], coverage: [], sort: 'rank', now });
+    expect(html).toContain('<span title="short">short</span>');
   });
 
   it('every ticker links to /runs?ticker=<ticker>', () => {
@@ -125,6 +155,16 @@ describe('renderUniverse', () => {
       const idx = (t: string) => html.indexOf(`>${t}<`);
       expect(idx('BETA')).toBeLessThan(idx('ALPHA')); // +100% before 0%
       expect(idx('ALPHA')).toBeLessThan(idx('GAMMA')); // present (0%) before absent
+
+      // The ordering above only proves relative position; nothing yet proves the change COLUMN itself
+      // (index 6: rank, ticker, venue, pool, depth, price, change, ...) actually shows the real
+      // percentage rather than, say, a placeholder or the wrong figure entirely. A present value
+      // renders as `<span title="baseline tick: ...">N</span>` (finding 5: the baseline tick lives in
+      // the title), so these check the cell's rendered TEXT content, not the raw `<td>` body.
+      expect(rowCellsFor(html, 'BETA')[6]).toContain('>100<'); // then 100, now 200 -> +100%
+      expect(rowCellsFor(html, 'BETA')[6]).toContain(`title="baseline tick: ${DAY_AGO_TICK.toISOString()}"`);
+      expect(rowCellsFor(html, 'ALPHA')[6]).toContain('>0<'); // then 100, now 100 -> unchanged, a real 0, not absence
+      expect(rowCellsFor(html, 'GAMMA')[6]).toBe('-'); // no dayAgo row -> absence, never a computed 0
     });
 
     it('?sort=coverage orders by external row count descending', () => {

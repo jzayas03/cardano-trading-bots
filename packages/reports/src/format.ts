@@ -46,6 +46,21 @@ export function feedCountersLine(params: Record<string, unknown>): string {
 }
 
 /**
+ * M4b/M4c, `/universe` (fix round, IMPORTANT 2): the instant 24 hours before `now` — the screener's
+ * price baseline `snapshotsAt` is asked for. Here rather than in `packages/dashboard/src`, because
+ * the OTHER half of this same figure (`priceChangePct`, immediately below) already lives here, and a
+ * figure split across that exact package boundary is what the dashboard's one rule (no computed
+ * numbers of its own) exists to prevent — the dashboard owning "24 hours ago" while this package owns
+ * "what percentage that change is" would be the same figure computed by two different rulebooks.
+ * `86_400_000` (24h in milliseconds) is a numeric-literal computation, not a call to `now.getTime()`
+ * dereferenced elsewhere, so nothing here needs a named constant to explain it — see `server.ts`'s own
+ * call site for why this replaced a per-file allowlist entry rather than a constant next to it.
+ */
+export function dayAgo(now: Date): Date {
+  return new Date(now.getTime() - 86_400_000);
+}
+
+/**
  * M4b/M4c, `/universe`: the screener's 24-hour change column. Lives here, not in
  * `packages/dashboard/src`, because that package's one rule is that it computes no numbers itself —
  * every figure it shows is the return value of a function imported from `@ctb/reports` (or

@@ -122,6 +122,15 @@
  * enum` or `export namespace`, either of which can carry callable surface (an enum's reverse mapping;
  * a namespace nesting its own function) inside the one file this guard exempts from the arithmetic
  * scan. `collectChartExports` now also walks `EnumDeclaration` and `ModuleDeclaration` nodes.
+ *
+ * Round 6 (task-2 fix round, IMPORTANT 2): the `server.ts` entry for `now.getTime() - 86_400_000`
+ * (the `/universe` 24h-ago target) is REMOVED, not renamed. That entry was well-formed — pinned to
+ * one file, one exact expression, one occurrence — but avoidable: `@ctb/reports` already owns the
+ * other half of the same figure (`priceChangePct`), so a new `dayAgo(now)` function lives there
+ * instead, and `server.ts` now calls it rather than computing the subtraction itself. The guard is
+ * green again with seven entries, none of them touched; reintroducing the raw subtraction in
+ * `server.ts` (without a matching allowlist entry) turns it red again, proving this file's own scan —
+ * not a since-removed allowlist entry — is what would catch a regression back to the old shape.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -172,14 +181,6 @@ const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; expr: string; because: s
   { file: 'pages/runs.ts', expr: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line', count: 1 },
   { file: 'server.ts', expr: 'query.page - 1', because: 'SQL OFFSET from a 1-based page number, not a financial number (the inner term of the next entry)', count: 1 },
   { file: 'server.ts', expr: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number', count: 1 },
-  // M4c (`/universe`): `snapshotsAt(at: Date, withinMs: number)` needs an actual `Date` 24 hours
-  // before "now" to ask for — a time-window boundary for a query parameter, not a financial figure,
-  // the same non-goal this allowlist already carves out for the pager-offset entries above. There is
-  // no way to build that Date without subtracting from `now.getTime()` (a CallExpression, so never a
-  // "numeric constant" by this scan's own rule) — the literal is inlined (86_400_000 ms, i.e. 24h)
-  // rather than routed through a named constant, since a referenced Identifier is just as "not a
-  // numeric constant" as a CallExpression is, and would only move the violation, not remove it.
-  { file: 'server.ts', expr: 'now.getTime() - 86_400_000', because: '"24 hours ago" target for snapshotsAt — a time window, not a financial figure', count: 1 },
 ];
 
 function isAllowed(rel: string, exprText: string): boolean {

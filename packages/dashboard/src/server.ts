@@ -3,7 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunRepo } from '@ctb/engine';
-import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
+import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';
 import { escape, layout } from './html.js';
 import { renderCompare } from './pages/compare.js';
@@ -293,16 +293,15 @@ function parseUniverseSort(url: URL): (typeof UNIVERSE_SORTS)[number] {
 }
 
 /**
- * `/universe` (spec §4.2, M4c): the screener. `at`/`withinMs` are the ONLY date arithmetic this
- * package's own code performs (everything else this page shows is a straight pass-through of what
- * `PgDashboardReads` and `@ctb/reports`/`@ctb/candles` already computed) — `now.getTime() -
- * 86_400_000` builds the "24 hours ago" target `snapshotsAt` needs, and it is a genuine time-window
- * boundary, not a financial figure (the same non-goal the one-rule guard's own `ALLOWED_ARITHMETIC`
- * already carves out for `server.ts`'s pager-offset arithmetic in `runsHandler` above) — reviewed and
- * allowlisted in `oneRule.guard.test.ts` rather than smuggled past it. `withinMs` is 26 hours: wide
- * enough that a single missed collector tick still finds ITS token's own nearest older snapshot
- * (`snapshotsAt`'s per-token degrade — see `reads.ts`), never nothing, on a collector that ticks
- * roughly hourly or faster.
+ * `/universe` (spec §4.2, M4c): the screener. This package's own code performs NO date arithmetic at
+ * all — the "24 hours ago" target `snapshotsAt` needs comes from `@ctb/reports`'s `dayAgo(now)` (fix
+ * round, IMPORTANT 2), the same package that already owns the other half of this figure
+ * (`priceChangePct`), rather than from a `now.getTime() - 86_400_000` computed here and separately
+ * allowlisted in `oneRule.guard.test.ts` — a widening that round closed instead of keeping. `withinMs`
+ * is a plain numeric literal (26 hours), not a computed expression, so it needs no allowlist entry
+ * either: wide enough that a single missed collector tick still finds ITS token's own nearest older
+ * snapshot (`snapshotsAt`'s per-token degrade — see `reads.ts`), never nothing, on a collector that
+ * ticks roughly hourly or faster.
  */
 async function universeHandler(deps: DashboardDeps, url: URL, path: string): Promise<HandlerResult> {
   let sort: (typeof UNIVERSE_SORTS)[number];
@@ -313,14 +312,13 @@ async function universeHandler(deps: DashboardDeps, url: URL, path: string): Pro
     throw err;
   }
   const now = deps.now();
-  const dayAgoTarget = new Date(now.getTime() - 86_400_000); // 24h — see this function's own header
   const withinMs = 93_600_000; // 26h
-  const [latest, dayAgo, coverage] = await Promise.all([
+  const [latest, dayAgoSnapshots, coverage] = await Promise.all([
     deps.reads.latestSnapshotsPerToken(),
-    deps.reads.snapshotsAt(dayAgoTarget, withinMs),
+    deps.reads.snapshotsAt(dayAgo(now), withinMs),
     deps.reads.externalCoverageAll(),
   ]);
-  const body = renderUniverse({ tokens: deps.universeTokens(), latest, dayAgo, coverage, sort, now });
+  const body = renderUniverse({ tokens: deps.universeTokens(), latest, dayAgo: dayAgoSnapshots, coverage, sort, now });
   return htmlPage(200, body);
 }
 

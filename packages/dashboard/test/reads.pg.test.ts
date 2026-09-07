@@ -137,6 +137,37 @@ describe.skipIf(!PG_ENABLED)('PgDashboardReads.latestSnapshotsPerToken / snapsho
     });
   });
 
+  /**
+   * MINOR finding 6 (fix round): `latestSnapshotsPerToken`/`snapshotsAt` tie-break on `tvl_lovelace`,
+   * the same column `packages/candles/src/build.ts`'s `buildCandles` sorts by — not `reserve_quote`,
+   * which is only DISPLAYED as "depth ADA". Every other fixture in this file sets
+   * `tvl_lovelace = reserve_quote` (via `snapshot()`'s default), so neither ordering can be told apart
+   * there. This fixture deliberately makes the two columns DISAGREE — a pool with the higher
+   * `reserve_quote` but the lower `tvl_lovelace` — so a pass here proves the query reads the column it
+   * claims to, not the one it happens to equal today.
+   */
+  it('latestSnapshotsPerToken: orders by tvl_lovelace, not reserve_quote, when the two disagree', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      const snaps = new PgSnapshotRepo(db);
+      await snaps.syncTokens([thin], { seededAt: '2026-09-06', seedSource: 'test' });
+      const run = await snaps.startRun(NEWEST_TICK, NEWEST_TICK);
+      await snaps.insertSnapshots(run, [
+        // Higher reserve_quote (9_000), but LOWER tvl_lovelace (1_000) — must LOSE.
+        { ...snapshot(NEWEST_TICK, thin.unit, 'SundaeSwapV3:high-reserve', 9_000n), tvlLovelace: 1_000n },
+        // Lower reserve_quote (1_000), but HIGHER tvl_lovelace (20_000) — must WIN.
+        { ...snapshot(NEWEST_TICK, thin.unit, 'SundaeSwapV3:high-tvl', 1_000n), tvlLovelace: 20_000n },
+      ]);
+
+      const reads = new PgDashboardReads(db);
+      const latest = await reads.latestSnapshotsPerToken();
+      expect(latest).toHaveLength(1);
+      expect(latest[0]?.poolId).toBe('SundaeSwapV3:high-tvl');
+      expect(latest[0]?.tvlLovelace).toBe(20_000n);
+      expect(latest[0]?.reserveQuote).toBe(1_000n); // the lower-reserve pool still wins — tvl_lovelace decides
+    });
+  });
+
   it('snapshotsAt: returns the row at or before the target and nothing older than the window; a target before any snapshot returns []', async () => {
     await withTestSchema(async (db) => {
       await migrate(db);
@@ -161,6 +192,43 @@ describe.skipIf(!PG_ENABLED)('PgDashboardReads.latestSnapshotsPerToken / snapsho
       // A target before any snapshot exists at all returns an empty array, never an error.
       const nothing = await reads.snapshotsAt(new Date(Date.UTC(2020, 0, 1)), 20 * 60_000);
       expect(nothing).toEqual([]);
+    });
+  });
+
+  /**
+   * Fix round, IMPORTANT 1: nothing above proves per-token "newest tick wins" as distinct from
+   * "deepest pool wins" — every token in `seed()`'s fixture that has more than one candidate row has
+   * them all on the SAME tick (DEEP's three pools), so `ORDER BY base_unit, tick_ts DESC, reserve_quote
+   * DESC, pool_id` and a hypothetical `ORDER BY base_unit, tick_ts ASC, reserve_quote DESC, pool_id`
+   * would return the identical row for every existing assertion — the entire Postgres suite stayed
+   * green under that flip (reviewer finding). This test gives ONE token two snapshots at two DIFFERENT
+   * ticks, both inside the query window, with the OLDER tick holding the DEEPER pool — the two rules
+   * pull in opposite directions, so only the correct (`tick_ts DESC`) ordering picks the newer,
+   * shallower row; the wrong (`tick_ts ASC`) ordering would pick the older, deeper one instead.
+   */
+  it('snapshotsAt: a token\'s NEWEST qualifying tick wins even when an OLDER tick in the window has a deeper pool', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      const snaps = new PgSnapshotRepo(db);
+      await snaps.syncTokens([thin], { seededAt: '2026-09-06', seedSource: 'test' });
+      const olderDeeper = t(0);
+      const newerShallower = t(8);
+      const run = await snaps.startRun(newerShallower, newerShallower);
+      await snaps.insertSnapshots(run, [
+        // Deeper pool (9_000), but on the OLDER tick — must lose to the newer tick below.
+        snapshot(olderDeeper, thin.unit, 'SundaeSwapV3:old-deep', 9_000n),
+        // Shallower pool (1_000), but on the NEWER tick — must win: per-token "newest qualifying tick"
+        // outranks "deepest pool" (the deepest-pool tie-break only applies AMONG rows sharing the
+        // winning tick_ts, not across different ticks).
+        snapshot(newerShallower, thin.unit, 'SundaeSwapV3:new-shallow', 1_000n),
+      ]);
+
+      const reads = new PgDashboardReads(db);
+      const result = await reads.snapshotsAt(newerShallower, 20 * 60_000);
+      expect(result).toHaveLength(1);
+      expect(result[0]?.tickTs).toEqual(newerShallower);
+      expect(result[0]?.poolId).toBe('SundaeSwapV3:new-shallow');
+      expect(result[0]?.reserveQuote).toBe(1_000n);
     });
   });
 

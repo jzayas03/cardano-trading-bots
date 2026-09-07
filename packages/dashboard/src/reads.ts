@@ -62,8 +62,9 @@ export interface DashboardReads {
   /** The deepest pool per token AT the newest `tick_ts` in `pool_snapshots` — a token whose only
    * snapshot is older than that tick (the collector missed it, or the token was added after) is
    * simply ABSENT from the result, never padded in with a stale row. One query: the newest `tick_ts`
-   * as a subquery, `DISTINCT ON (base_unit)` breaking ties the same way `buildCandles`/the collector
-   * do — largest `reserve_quote`, then smallest `pool_id`. */
+   * as a subquery, `DISTINCT ON (base_unit)` breaking ties the same way `buildCandles` does — largest
+   * `tvl_lovelace`, then smallest `pool_id` (see `TOKEN_SNAPSHOT_SELECT`'s own comment for why this is
+   * `tvl_lovelace`, not `reserve_quote`). */
   latestSnapshotsPerToken(): Promise<TokenSnapshot[]>;
 
   /** The deepest pool per token at the newest `tick_ts` that is `<= at` AND `>= at - withinMs` — a
@@ -104,8 +105,23 @@ function rowToTokenSnapshot(r: TokenSnapshotRaw): TokenSnapshot {
 /** Shared by `latestSnapshotsPerToken` and `snapshotsAt`: one row per `base_unit`, the deepest pool
  * at whichever `tick_ts` the caller's `WHERE` clause admits — `DISTINCT ON (base_unit)` keeps the
  * FIRST row per group under this exact `ORDER BY`, so sorting by `tick_ts DESC` first (newest
- * qualifying tick wins), then `reserve_quote DESC, pool_id` (deepest pool at THAT tick, ties broken
- * the same way `buildCandles`/the collector do) picks exactly the row spec §4.3 describes. */
+ * qualifying tick wins), then `tvl_lovelace DESC, pool_id` (deepest pool at THAT tick, ties broken the
+ * same way) picks exactly the row spec §4.3 describes.
+ *
+ * MINOR (fix round, finding 6): this used to tie-break on `reserve_quote DESC` — the same figure
+ * `pages/universe.ts` displays as "depth ADA" — while `packages/candles/src/build.ts`'s `buildCandles`
+ * picks its own deepest pool by `tvlLovelace DESC, poolId` (see that file's own sort, right after it
+ * throws on a non-cpmm/zero-reserve row). The two orderings agreed only because the collector always
+ * writes `tvl_lovelace = 2 * reserve_quote` (`packages/collector/src/snapshot.ts`'s `SnapshotRow`
+ * construction) — a multiplication by a positive constant never changes which row sorts first, so the
+ * two columns were always equivalent orderings in practice, but nothing here PINNED that: a future
+ * pool type with a different tvl/reserve relationship (a stableswap curve, a concentrated-liquidity
+ * position sized asymmetrically) would silently make this query's "deepest" pool disagree with the
+ * candle builder's, while every existing test — built on the same invariant — kept passing. Ordering
+ * by `tvl_lovelace` directly, the identical column `buildCandles` sorts by, removes the dependency on
+ * that invariant rather than merely documenting it: this query and the candle builder now agree by
+ * construction, for any future pool type, not only for the CPMM shape the invariant happens to hold
+ * for today. */
 const TOKEN_SNAPSHOT_SELECT = `SELECT DISTINCT ON (base_unit) base_unit, dex, pool_id, tick_ts, reserve_base, reserve_quote, fee_bps, tvl_lovelace
      FROM pool_snapshots`;
 
@@ -154,7 +170,7 @@ export class PgDashboardReads implements DashboardReads {
     const res = await this.q.query<TokenSnapshotRaw>(
       `${TOKEN_SNAPSHOT_SELECT}
       WHERE tick_ts = (SELECT max(tick_ts) FROM pool_snapshots)
-      ORDER BY base_unit, reserve_quote DESC, pool_id`,
+      ORDER BY base_unit, tvl_lovelace DESC, pool_id`,
     );
     return res.rows.map(rowToTokenSnapshot);
   }
@@ -177,7 +193,7 @@ export class PgDashboardReads implements DashboardReads {
     const res = await this.q.query<TokenSnapshotRaw>(
       `${TOKEN_SNAPSHOT_SELECT}
       WHERE tick_ts <= $1 AND tick_ts >= $1 - ($2 * interval '1 millisecond')
-      ORDER BY base_unit, tick_ts DESC, reserve_quote DESC, pool_id`,
+      ORDER BY base_unit, tick_ts DESC, tvl_lovelace DESC, pool_id`,
       [at, withinMs],
     );
     return res.rows.map(rowToTokenSnapshot);

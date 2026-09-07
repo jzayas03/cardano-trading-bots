@@ -52,6 +52,11 @@ interface UniverseRow {
   latest: TokenSnapshot | undefined;
   dayAgo: TokenSnapshot | undefined;
   coverage: ExternalCoverage | undefined;
+  /** `safePrice(latest, token.decimals)` — computed once here (fix round, finding 7) and reused by
+   * BOTH `changePct` below (as the `now` argument to `priceChangePct`) and `rowCells`'s displayed price
+   * cell, so a row's current price is asked for exactly once, never recomputed a second time for the
+   * same figure. */
+  price: string | null;
   /** `null` when there is no `latest` price, no `dayAgo` price, or `priceChangePct` itself says so
    * (an unparseable or zero baseline) — computed once per row so both the table cell and the `change`
    * sort read the identical value. */
@@ -80,14 +85,15 @@ function buildRows(tokens: TokenSpec[], latest: TokenSnapshot[], dayAgo: TokenSn
     const latestSnap = latestByUnit.get(token.unit);
     const dayAgoSnap = dayAgoByUnit.get(token.unit);
     const then = safePrice(dayAgoSnap, token.decimals);
-    const now = safePrice(latestSnap, token.decimals);
+    const price = safePrice(latestSnap, token.decimals);
     return {
       rank: ranks[i] ?? 0,
       token,
       latest: latestSnap,
       dayAgo: dayAgoSnap,
       coverage: coverageByUnit.get(token.unit),
-      changePct: priceChangePct(then, now),
+      price,
+      changePct: priceChangePct(then, price),
     };
   });
 }
@@ -122,8 +128,23 @@ const SORTERS: Record<(typeof UNIVERSE_SORTS)[number], ((a: UniverseRow, b: Univ
   coverage: withAbsentLast((r) => r.coverage?.rows, descending),
 };
 
+/**
+ * Fix round, finding 4: every real pool id is `<dex>:` followed by 128 hex characters, so truncating
+ * the RAW id to the first `POOL_ID_DISPLAY_CHARS` showed `MinswapV2:f5` on every single row — ten of
+ * the twelve displayed characters were just the venue name, already shown one column over.
+ *
+ * Stripping the `<dex>:` label was the first fix tried, but the live dev database (Step 5's own
+ * verification) showed it is NOT enough on its own: a Cardano DEX pool id is itself a script address,
+ * and its payment credential — the DEX's OWN validator script hash — is identical across every pool of
+ * that DEX version, not just the human-readable `MinswapV2:` label in front of it. All 20 live rows'
+ * ids shared the identical 12 characters immediately after the label (`f5808c2c990d`) and only diverged
+ * further in — the pool-specific part (the staking credential) sits at the END of the id, not right
+ * after the prefix. Taking the LAST `POOL_ID_DISPLAY_CHARS` characters of the full id — verified
+ * distinct across all 20 live rows — is what actually distinguishes one pool from another; the full,
+ * untruncated id still lives in the `title` attribute either way.
+ */
 function poolCell(poolId: string): RenderedCell {
-  const short = poolId.slice(0, POOL_ID_DISPLAY_CHARS);
+  const short = poolId.slice(-POOL_ID_DISPLAY_CHARS);
   return { html: `<span title="${escape(poolId)}">${escape(short)}</span>` };
 }
 
@@ -133,9 +154,21 @@ function tickerCell(ticker: string): RenderedCell {
   return { html: `<a href="/runs?ticker=${escape(ticker)}">${escape(ticker)}</a>` };
 }
 
+/**
+ * Fix round, finding 5: a token whose `dayAgo` snapshot is actually 26 hours old (the far edge of
+ * `snapshotsAt`'s degrade window) rendered identically to one exactly 24 hours old — nothing on the
+ * page named which tick a given row's percentage was measured against. `dayAgo` is defined here
+ * whenever `changePct` is non-null (`priceChangePct` needs `then`, which only exists when `dayAgoSnap`
+ * itself does — see `buildRows`), so the title is always available on every row that isn't a dash.
+ */
+function changeCell(changePct: number | null, dayAgo: TokenSnapshot | undefined): string | RenderedCell {
+  if (changePct === null) return '-';
+  const title = dayAgo ? `baseline tick: ${dayAgo.tickTs.toISOString()}` : '';
+  return { html: `<span title="${escape(title)}">${escape(changePct)}</span>` };
+}
+
 function rowCells(row: UniverseRow): Array<string | number | RenderedCell> {
-  const { latest, coverage, changePct } = row;
-  const price = latest ? safePrice(latest, row.token.decimals) : null;
+  const { latest, coverage, changePct, price } = row;
   const note = latest === undefined ? 'no collector snapshot for this token on the newest tick' : '';
   return [
     row.rank,
@@ -144,7 +177,7 @@ function rowCells(row: UniverseRow): Array<string | number | RenderedCell> {
     latest ? poolCell(latest.poolId) : '-',
     latest ? adaStr(latest.reserveQuote) : '-',
     price ?? '-',
-    changePct === null ? '-' : changePct,
+    changeCell(changePct, row.dayAgo),
     coverage?.rows ?? 0,
     coverage?.first ? coverage.first.toISOString() : '-',
     coverage?.last ? coverage.last.toISOString() : '-',

@@ -1,4 +1,4 @@
-export { adaStr, coverageLine, feedCountersLine, priceChangePct, resumesOf } from './format.js';
+export { adaStr, coverageLine, dayAgo, feedCountersLine, priceChangePct, resumesOf } from './format.js';
 export { summarizeDay, summarizeRun, type DaySummary } from './summary.js';
 export { BLOCKFROST_FREE_DAILY_QUOTA, MIN_PROJECTION_ELAPSED_SEC, QUOTA_OK_BELOW, digestLines, utcMidnight, type DigestInput } from './digest.js';
 export { checkDigestLines, checkDisk, checkEnv, checkFakeRows, checkMigrations, checkNode, checkProcesses, LOW_DISK_BYTES, verdict, type Check, type ProcessLine, type Status } from './doctor.js';
