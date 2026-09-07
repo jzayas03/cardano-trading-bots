@@ -32,7 +32,7 @@ export interface DigestInput {
   lastDiscoveryAt: Date | null;
   poolFailures24h: number;
   venueErrors24h: number;
-  /** Runs with no finished_at — the newest one may simply be in flight. */
+  /** Runs started in the trailing 24 h with no finished_at — the newest one may simply be in flight; older ones are killed processes. A row older than a day is history, not a live problem. */
   unfinishedRuns: number;
 }
 
