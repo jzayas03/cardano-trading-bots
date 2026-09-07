@@ -24,9 +24,9 @@ export const DEFAULT_COSTS: VenueCosts = { batcherFeeLovelace: 2_000_000n, netwo
 
 export const VENUE_COSTS: Record<DexName, VenueCosts> = {
   Minswap: { batcherFeeLovelace: 0n, networkFeeLovelace: NETWORK, basis: 'documented', source: MINSWAP_DOC, readAt: READ_AT },
-  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: `${MINSWAP_DOC} (conflicts with the v2 spec on GitHub; on-chain check pending)`, readAt: READ_AT },
+  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.minswap.org/courses/how-to-perform-swaps/batcher.md ("previously around 2 ADA per order", read 2026-09-07; no current figure, V1/V2 not distinguished; on-chain check pending)', readAt: READ_AT },
   SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
-  SundaeSwapV3: { batcherFeeLovelace: 1_000_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §4.4.3 (dynamic 0.5-1.0 ADA; upper bound used)', readAt: READ_AT },
+  SundaeSwapV3: { batcherFeeLovelace: 1_000_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §4.4.3 (documented range 0.5-1.0 ADA per order; the upper bound is charged here, so reported results err on the expensive side)', readAt: READ_AT },
   MuesliSwap: { batcherFeeLovelace: 950_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'https://docs.muesliswap.com', readAt: READ_AT },
   WingRiders: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },
   WingRidersV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },
