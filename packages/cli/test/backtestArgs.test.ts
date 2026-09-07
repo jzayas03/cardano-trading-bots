@@ -58,4 +58,14 @@ describe('parseBacktestArgs', () => {
     expect(() => parseStrategyList('a,b,')).toThrow(/empty strategy id/);
     expect(() => parseStrategyList('a,b,a')).toThrow(/listed more than once/);
   });
+
+  // ALL = every token; depth defaults to auto there because one hand-typed depth cannot fit 20 tokens.
+  it('ALL with the external source defaults --depth-ada to auto; a single ticker still requires it; auto parses explicitly', () => {
+    expect(parseBacktestArgs(['s', 'ALL', '2026-06-01', '2026-09-01', '--source', 'external'])).toMatchObject({ ticker: 'ALL', depthAda: 'auto' });
+    expect(parseBacktestArgs(['s', 'SNEK', '2026-06-01', '2026-09-01', '--source', 'external', '--depth-ada', 'auto']).depthAda).toBe('auto');
+    expect(parseBacktestArgs(['s', 'ALL', '2026-06-01', '2026-09-01', '--source', 'external', '--depth-ada', '500']).depthAda).toBe(500);
+    expect(() => parseBacktestArgs(['s', 'SNEK', '2026-06-01', '2026-09-01', '--source', 'external'])).toThrow(/--depth-ada is required/);
+    expect(() => parseBacktestArgs(['s', 'ALL', '2026-06-01', '2026-09-01', '--depth-ada', 'auto'])).toThrow(/--depth-ada only applies/);
+    expect(parseBacktestArgs(['s', 'ALL', '2026-06-01', '2026-09-01']).depthAda).toBeNull();
+  });
 });

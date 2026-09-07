@@ -65,3 +65,19 @@ export function compareRunRows(inputs: CompareRunInput[], now: Date): CompareRun
     };
   });
 }
+
+export interface SweepInput extends CompareInput { ticker: string; depthAda: number | null }
+export interface SweepRow {
+  ticker: string; strategy: string; runId: number; depthAda: number | string; coveragePct: string; candles: number;
+  returnPct: number; maxDrawdownPct: number; filled: number; intents: number; feesAda: string; warnings: number;
+}
+
+/** One row per token x strategy, in the order run — token-major, never sorted by return. Coverage is the run's own (`candles / expectedBuckets`), so a 4% return over a 12%-dense corpus reads as what it is. */
+export function sweepRows(results: SweepInput[]): SweepRow[] {
+  return results.map(({ ticker, strategyId, runId, summary: s, depthAda }) => ({
+    ticker, strategy: strategyId, runId, depthAda: depthAda ?? '-',
+    coveragePct: s.coverage.expectedBuckets > 0 ? ((s.coverage.candles / s.coverage.expectedBuckets) * 100).toFixed(1) : '0.0',
+    candles: s.candles, returnPct: s.returnPct, maxDrawdownPct: s.maxDrawdownPct, filled: s.filled, intents: s.intents,
+    feesAda: adaStr(s.feesLovelace), warnings: (s.warnings ?? []).length,
+  }));
+}
