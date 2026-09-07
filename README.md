@@ -2,6 +2,7 @@
 
 Paper-trading foundation for Cardano DEX bots. No real funds move in this repo.
 Design: `docs/specs/2026-09-05-paper-trading-foundation.md`. Plan: `docs/plans/`.
+Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-paper.md` (paper mode).
 
 ## Quick start
 
