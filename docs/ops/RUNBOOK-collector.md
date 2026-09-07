@@ -4,6 +4,13 @@ Operating the snapshot collector as a long-running process: start, check, watch 
 budget, stop, recover. Written after the first real day of running it (run 52 onward, 2026-09-07).
 The paper-mode runbook is `docs/ops/RUNBOOK-paper.md`; it assumes this process is running.
 
+## Before anything: `npm run doctor`
+
+Node version, `.env` (key present by length only, interval vs default), database and migrations,
+duplicate collector/paper processes, rehearsal leftovers, disk, and the digest's collector/quota
+lines. Exit code 1 on any FAIL. Two of tonight's incidents (2026-09-07: a duplicate collector, a
+stale `COLLECT_INTERVAL_SECONDS=300`) are checks here now.
+
 ## What one day costs
 
 Blockfrost's free plan allows 50,000 requests per day, reset at 00:00 UTC. The collector spends

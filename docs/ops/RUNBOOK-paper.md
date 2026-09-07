@@ -10,6 +10,13 @@ but it does depend on `collect` running: without snapshots there is nothing to b
 (see `.env.example` for the refresh-budget arithmetic) — `paper` inherits the 600s interval from
 `COLLECT_INTERVAL_SECONDS` (below) automatically.
 
+## Before anything: `npm run doctor`
+
+Node version, `.env` (key present by length only, interval vs default), database and migrations,
+duplicate collector/paper processes, rehearsal leftovers, disk, and the digest's collector/quota
+lines. Exit code 1 on any FAIL. Two of tonight's incidents (2026-09-07: a duplicate collector, a
+stale `COLLECT_INTERVAL_SECONDS=300`) are checks here now.
+
 ## Start
 
 ```bash
