@@ -5,7 +5,7 @@ import { heartbeatAgeCell, isHeartbeatStale } from '../src/commands/status.js';
  * Finding (Task 5 review round 1): the `status` STALE/heartbeat-age rule had no unit test at all —
  * it lived inline in a `.map()` callback inside `statusCommand`, reachable only through a live
  * Postgres run. `heartbeatAgeCell` is the same rule extracted pure: `2 * intervalSec + graceSec` is
- * the liveness bound (defaults 300/60 when `params` lacks numeric `intervalSec`/`graceSec`); a run
+ * the liveness bound (defaults 600/60 — the collector's default interval — when `params` lacks numeric `intervalSec`/`graceSec`); a run
  * that has never heartbeated is STALE regardless of `now`.
  */
 describe('heartbeatAgeCell', () => {
@@ -16,16 +16,16 @@ describe('heartbeatAgeCell', () => {
     expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('30');
   });
 
-  it('is not stale exactly at the bound (default 2*300+60 = 660s)', () => {
-    const heartbeatAt = new Date(now.getTime() - 660_000);
-    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('660');
+  it('is not stale exactly at the bound (default 2*600+60 = 1260s)', () => {
+    const heartbeatAt = new Date(now.getTime() - 1_260_000);
+    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('1260');
   });
 
   // Finding M1 changed this expectation: a bare `STALE` hid HOW stale. The age is now carried with
   // it, because 30 seconds past the bound and two days past it call for different operator actions.
   it('is STALE with the age, one second past the bound', () => {
-    const heartbeatAt = new Date(now.getTime() - 661_000);
-    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('STALE (661s)');
+    const heartbeatAt = new Date(now.getTime() - 1_261_000);
+    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('STALE (1261s)');
   });
 
   it('is a bare STALE, with no age, when the run has never heartbeated: there is no age to state', () => {
@@ -40,10 +40,10 @@ describe('heartbeatAgeCell', () => {
     expect(heartbeatAgeCell(pastBound, { intervalSec: 10, graceSec: 5 }, now)).toBe('STALE (26s)');
   });
 
-  it('falls back to defaults (300/60) when params lack them or hold non-numeric values', () => {
-    const heartbeatAt = new Date(now.getTime() - 660_000);
-    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('660');
-    expect(heartbeatAgeCell(heartbeatAt, { intervalSec: 'ten', graceSec: null }, now)).toBe('660');
+  it('falls back to defaults (600/60) when params lack them or hold non-numeric values', () => {
+    const heartbeatAt = new Date(now.getTime() - 1_260_000);
+    expect(heartbeatAgeCell(heartbeatAt, {}, now)).toBe('1260');
+    expect(heartbeatAgeCell(heartbeatAt, { intervalSec: 'ten', graceSec: null }, now)).toBe('1260');
   });
 });
 
@@ -62,8 +62,8 @@ describe('isHeartbeatStale', () => {
   });
 
   it('is false exactly at the bound and true one second past it', () => {
-    expect(isHeartbeatStale(new Date(now.getTime() - 660_000), {}, now)).toBe(false);
-    expect(isHeartbeatStale(new Date(now.getTime() - 661_000), {}, now)).toBe(true);
+    expect(isHeartbeatStale(new Date(now.getTime() - 1_260_000), {}, now)).toBe(false);
+    expect(isHeartbeatStale(new Date(now.getTime() - 1_261_000), {}, now)).toBe(true);
   });
 
   it('is true for a run that has never heartbeated', () => {
@@ -76,7 +76,7 @@ describe('isHeartbeatStale', () => {
   });
 
   it('agrees with heartbeatAgeCell: every input the cell calls STALE is stale here', () => {
-    for (const ageMs of [0, 100_000, 660_000, 661_000, 5_000_000]) {
+    for (const ageMs of [0, 100_000, 1_260_000, 1_261_000, 5_000_000]) {
       const at = new Date(now.getTime() - ageMs);
       expect(heartbeatAgeCell(at, {}, now).startsWith('STALE')).toBe(isHeartbeatStale(at, {}, now));
     }

@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     case 'collect':
       return collectCommand(log, { once: rest.includes('--once') });
     case 'status':
-      return statusCommand(log);
+      return statusCommand(log, rest);
     case 'candles':
       return candlesCommand(log, { ticker: rest[0] });
     case 'backfill':
@@ -39,9 +39,9 @@ async function main(): Promise<void> {
       return devFakeCollectorCommand(log, rest);
     default:
       console.error(
-        'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
+        'usage: tsx packages/cli/src/main.ts <migrate|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER> <from-ISO> <to-ISO>|' +
         'backtest <strategy>[,<strategy>...] <TICKER> <from-ISO> <to-ISO> [--source candles|external] [--cash-ada N] [--depth-ada N] [--batcher-ada N] [--network-ada N] [--param k=v]...|' +
-        'report <run-id> [--day YYYY-MM-DD]|' +
+        'report <run-id> [--day YYYY-MM-DD] [--csv <dir>]|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...|' +
         'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]>',
       );

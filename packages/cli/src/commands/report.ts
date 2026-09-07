@@ -3,9 +3,12 @@ import { PgRunRepo, type EquityPoint, type OrderRecord, type RunCoverage, type R
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadConfig } from '../config.js';
+import { csvFileNames, equityCsv, ordersCsv } from '../csv.js';
 
-const USAGE = 'usage: report <run-id> [--day YYYY-MM-DD]';
+const USAGE = 'usage: report <run-id> [--day YYYY-MM-DD] [--csv <dir>]';
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -250,26 +253,59 @@ export function printDayReport(
   }
 }
 
-export async function reportCommand(log: Logger, args: string[]): Promise<void> {
+export interface ReportArgs { id: number; day: string | undefined; csvDir: string | undefined }
+
+export function parseReportArgs(args: string[]): ReportArgs {
   const id = Number(args[0]);
   if (!Number.isInteger(id) || id <= 0) throw new Error(USAGE);
-  let dayArg: string | undefined;
+  const out: ReportArgs = { id, day: undefined, csvDir: undefined };
   for (let i = 1; i < args.length; i++) {
-    if (args[i] === '--day') {
-      // A missing value (e.g. `--day` as the last argument) previously left `dayArg` undefined,
-      // which is indistinguishable from "no --day at all" below and silently fell through to the
-      // non-day report instead of failing (review finding, Task 5 round 1).
+    const flag = args[i];
+    if (flag === '--day' || flag === '--csv') {
+      // A missing value (e.g. `--day` as the last argument) previously left the value undefined,
+      // which is indistinguishable from "no flag at all" below and silently fell through to the
+      // plain report instead of failing (review finding, Task 5 round 1).
       const value = args[i + 1];
-      if (value === undefined) throw new Error(USAGE);
-      dayArg = value;
+      if (value === undefined || value.startsWith('--')) throw new Error(`${flag} needs a value\n${USAGE}`);
+      if (flag === '--day') out.day = value; else out.csvDir = value;
       i++;
       continue;
     }
     // Finding M2: anything else used to be skipped in silence, so `report 6 --dya 2026-09-06` — or a
     // stray shell word — produced a confident full-run report instead of the day the operator asked
     // for. Every other command in this CLI rejects an unknown flag; this one now does too.
-    throw new Error(`unknown argument ${args[i]}\n${USAGE}`);
+    throw new Error(`unknown argument ${flag}\n${USAGE}`);
   }
+  if (out.day !== undefined && out.csvDir !== undefined) throw new Error(`--csv exports the whole run; it does not combine with --day\n${USAGE}`);
+  return out;
+}
+
+/**
+ * Writes the run's persisted rows as CSV files an operator can plot. Never overwrites: `wx` fails on
+ * an existing file, and the error names it — a re-export onto a file someone is already reading
+ * would change the numbers under them. Returns the paths written, for the caller to print.
+ */
+export function writeCsvExport(dir: string, run: RunRow, orders: OrderRecord[], equity: EquityPoint[]): string[] {
+  mkdirSync(dir, { recursive: true });
+  const names = csvFileNames(run);
+  const written: string[] = [];
+  const write = (name: string, body: string): void => {
+    const path = join(dir, name);
+    try {
+      writeFileSync(path, body, { flag: 'wx' });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'EEXIST') throw new Error(`${path} already exists; move it aside before exporting again`);
+      throw e;
+    }
+    written.push(path);
+  };
+  write(names.orders, ordersCsv(orders));
+  if (run.mode === 'paper') write(names.equity, equityCsv(equity));
+  return written;
+}
+
+export async function reportCommand(log: Logger, args: string[]): Promise<void> {
+  const { id, day: dayArg, csvDir } = parseReportArgs(args);
   // Validate before opening a pool so a malformed --day fails fast without a DB round trip.
   const window = dayArg !== undefined ? dayWindow(dayArg) : null;
   const cfg = loadConfig(process.env, { blockfrost: false });
@@ -290,7 +326,13 @@ export async function reportCommand(log: Logger, args: string[]): Promise<void> 
       // `runs` row itself (18:32:03), so anchoring the window at `created_at` would silently drop
       // 2 of 27 rows — the very truncation this finding exists to remove.
       const equity = run.mode === 'paper' ? await runs.listEquity(id, new Date(0), new Date()) : [];
-      printReport(run, await runs.listOrders(id), ticker, equity);
+      const orders = await runs.listOrders(id);
+      printReport(run, orders, ticker, equity);
+      if (csvDir !== undefined) {
+        for (const path of writeCsvExport(csvDir, run, orders, equity)) console.log(`wrote ${path}`);
+        if (run.mode !== 'paper') console.log('no equity file: backtest runs persist orders only (equity is not stored for them)');
+        if (run.rehearsal) console.log('REHEARSAL — the files are named accordingly; synthetic data, not evidence');
+      }
     }
   } finally {
     await db.end();
