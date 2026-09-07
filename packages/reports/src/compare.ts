@@ -12,6 +12,17 @@ import { heartbeatAgeCell } from './heartbeat.js';
  */
 export const MIXED_TOKENS_WARNING = 'warning: these runs are on different tokens; their returns are not comparable to each other';
 
+/**
+ * The exact wording `report --compare`'s `printCompare` and the dashboard's `/compare` page both show
+ * when ANY compared run is a rehearsal. Deliberately different from the single-run `REHEARSAL —
+ * synthetic data — not evidence` banner (`packages/dashboard/src/html.ts`'s `REHEARSAL_BANNER`, and
+ * `printReport`'s own identical line): on a comparison page, "synthetic data — not evidence" reads as
+ * "the whole page is synthetic," which is wrong on a mixed comparison of one rehearsal run and one real
+ * one — only SOME of the rows are. This wording says exactly that (final review, MINOR finding: the
+ * dashboard used to show the single-run wording here too, misleadingly).
+ */
+export const COMPARE_REHEARSAL_BANNER = 'REHEARSAL — one or more rows are synthetic data — not evidence';
+
 export interface CompareInput { strategyId: string; runId: number; summary: RunSummaryStats }
 export interface CompareRow {
   strategy: string; runId: number; candles: number; intents: number; filled: number; rejected: number;

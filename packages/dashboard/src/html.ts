@@ -56,10 +56,24 @@ p.asof { color: var(--muted); font-size: 0.8rem; }
 .status-fail, .status-stop, .status-stale, .status-lost { color: var(--fail); }
 .status { font-weight: 600; }
 .banner.rehearsal { background: var(--warn); color: #1a1a1a; padding: 0.5rem 0.75rem; font-weight: 600; margin-bottom: 1rem; }
+nav.sitenav { margin-bottom: 1rem; font-size: 0.9rem; }
+nav.sitenav a { color: var(--fg); margin-right: 1rem; }
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; }
 dt { color: var(--muted); }
 dd { margin: 0; }
 `;
+
+/**
+ * IMPORTANT 5 (final review): `/` links to nothing, `/runs/:id` links nowhere, `/universe` is
+ * reachable only by typing the path, and an error page carried zero links — browser-back was the only
+ * way out of any page, and there was no path from `/` to `/runs` at all despite the spec's own morning
+ * workflow assuming the operator opens the dashboard and clicks into a run. Three plain links, present
+ * on EVERY page `layout()` renders (health board, runs list, run detail, compare, universe, and every
+ * error page — `errorPage`/`notFound`/`badRequest`/`internalErrorPage` in `server.ts` all go through
+ * this same function), so there is always a way home. Plain `<a href>` tags, no JavaScript, per spec's
+ * own constraint.
+ */
+const SITE_NAV = '<nav class="sitenav"><a href="/">Health</a><a href="/runs">Runs</a><a href="/universe">Universe</a></nav>';
 
 /**
  * Full document. The rehearsal banner (when present) renders before the title, so it is the first
@@ -76,13 +90,18 @@ dd { margin: 0; }
  * chart passes `chart: true` (currently: the run detail page, and only when it has enough persisted
  * equity points — see `pages/runs.ts`'s `renderEquityChart`) so the health board and the runs list
  * never pay for 51 KB they do not use.
+ *
+ * `opts.rehearsalText` (final review, MINOR): overrides the banner's own wording without touching
+ * whether it shows at all (`opts.rehearsal` still decides that). `/compare` is the only caller that
+ * passes it today — see `pages/compare.ts`'s own comment for why a mixed comparison needs different
+ * wording than a single run's page.
  */
-export function layout(title: string, body: string, opts: { refreshSec?: number; rehearsal?: boolean; chart?: boolean } = {}): string {
+export function layout(title: string, body: string, opts: { refreshSec?: number; rehearsal?: boolean; rehearsalText?: string; chart?: boolean } = {}): string {
   // `opts.refreshSec` is typed as `number`, so this is not reachable today — but every interpolation
   // in this file goes through `escape()` on principle (Task 5's guard test pins that literally), so a
   // future loosening of the type (or a caller reaching in with `as`) can't reintroduce an unescaped hole.
   const refreshMeta = opts.refreshSec !== undefined ? `<meta http-equiv="refresh" content="${escape(opts.refreshSec)}">` : '';
-  const banner = opts.rehearsal ? `<div class="banner rehearsal">${escape(REHEARSAL_BANNER)}</div>` : '';
+  const banner = opts.rehearsal ? `<div class="banner rehearsal">${escape(opts.rehearsalText ?? REHEARSAL_BANNER)}</div>` : '';
   const chartAssets = opts.chart
     ? '<link rel="stylesheet" href="/vendor/uPlot.min.css">\n<script src="/vendor/uPlot.iife.min.js"></script>'
     : '';
@@ -98,6 +117,7 @@ ${chartAssets}
 </head>
 <body>
 ${banner}
+${SITE_NAV}
 <h1>${escape(title)}</h1>
 ${body}
 </body>
@@ -111,10 +131,15 @@ ${body}
  * cell type could never carry a pre-rendered `<span>`, so every real page hand-rolled its own
  * `<table>` markup and the "escaping rides on the type system" property was true of nothing. An empty
  * `rows` renders `<p class="empty">none</p>` instead of a headers-only table.
+ *
+ * `columns` accepts a `RenderedCell` per header too (final review, IMPORTANT 5's "while you are there"
+ * note): `/universe`'s sortable column headers link to their own `?sort=` value, so an operator doesn't
+ * have to hand-edit the URL to sort by depth or 24h change — a plain string header still renders as
+ * plain escaped text exactly as before, so every existing caller is unaffected.
  */
-export function table(columns: string[], rows: Array<Array<string | number | bigint | null | undefined | RenderedCell>>): string {
+export function table(columns: Array<string | RenderedCell>, rows: Array<Array<string | number | bigint | null | undefined | RenderedCell>>): string {
   if (rows.length === 0) return '<p class="empty">none</p>';
-  const thead = `<thead><tr>${columns.map((c) => `<th>${escape(c)}</th>`).join('')}</tr></thead>`;
+  const thead = `<thead><tr>${columns.map((c) => `<th>${isRenderedCell(c) ? c.html : escape(c)}</th>`).join('')}</tr></thead>`;
   const tbody = `<tbody>${rows.map((r) => `<tr>${r.map((cell) => `<td>${isRenderedCell(cell) ? cell.html : escape(cell)}</td>`).join('')}</tr>`).join('')}</tbody>`;
   return `<table>${thead}${tbody}</table>`;
 }

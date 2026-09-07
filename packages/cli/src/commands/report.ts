@@ -1,6 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
-import { adaStr, coverageLine, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
+import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -151,11 +151,23 @@ export function printDayReport(
 
 export interface ReportArgs { id: number; day: string | undefined; csvDir: string | undefined; compare: number[] | undefined }
 
-/** `--compare 14,15,16`: positive integers, no empties, no repeats — fewer runs than typed is refused, not dropped. */
+/**
+ * `--compare 14,15,16`: positive integers, no empties, no repeats — fewer runs than typed is refused,
+ * not dropped.
+ *
+ * Final review, IMPORTANT 1: the dashboard's `/compare?ids=` used the identical `!Number.isInteger(n)`
+ * shape check this function does, and a reviewer showed it accepts values it should refuse — `1e21`
+ * reaches Postgres as a bigint parameter and 500s, `0x10` silently parses as `Number('0x10') === 16`
+ * and would run against the WRONG run with no error at all, and `+1`/`1.0` also slip through since
+ * `Number()` parses all of them and `Number.isInteger` doesn't care. Both surfaces are fixed together
+ * here with the identical `/^\d+$/` shape check the dashboard now uses (see `server.ts`'s own
+ * `parseCompareIds`), so `report --compare` and `/compare?ids=` keep agreeing about what a run id is.
+ */
 export function parseCompareList(raw: string): number[] {
   const ids = raw.split(',').map((x) => {
-    const n = Number(x.trim());
-    if (x.trim() === '' || !Number.isInteger(n) || n <= 0) throw new Error(`--compare needs run ids, got ${JSON.stringify(x)} in "${raw}"\n${USAGE}`);
+    const trimmed = x.trim();
+    const n = Number(trimmed);
+    if (!/^\d+$/.test(trimmed) || !Number.isSafeInteger(n) || n <= 0) throw new Error(`--compare needs run ids, got ${JSON.stringify(x)} in "${raw}"\n${USAGE}`);
     return n;
   });
   const dup = ids.find((x, i) => ids.indexOf(x) !== i);
@@ -224,7 +236,7 @@ export function writeCsvExport(dir: string, run: RunRow, orders: OrderRecord[], 
  * here. A rehearsal run anywhere in the list puts the banner above the table AND the word on its row.
  */
 export function printCompare(inputs: CompareRunInput[], now: Date): void {
-  if (inputs.some((i) => i.run.rehearsal)) console.log('REHEARSAL — one or more rows are synthetic data — not evidence');
+  if (inputs.some((i) => i.run.rehearsal)) console.log(COMPARE_REHEARSAL_BANNER);
   const tickers = [...new Set(inputs.map((i) => i.ticker))];
   console.log(`\n=== compare ${inputs.map((i) => i.run.id).join(',')} | ${tickers.join(', ')} | as of ${now.toISOString()}`);
   if (tickers.length > 1) console.log(MIXED_TOKENS_WARNING);

@@ -196,4 +196,20 @@ describe('renderUniverse', () => {
   it('UNIVERSE_SORTS names exactly the five accepted sort values', () => {
     expect(UNIVERSE_SORTS).toEqual(['rank', 'ticker', 'depth', 'change', 'coverage']);
   });
+
+  // IMPORTANT 5 (final review, "while you are there" note): sorting used to require hand-editing the
+  // URL. Every sortable column's header is now a plain <a href="/universe?sort=..."> link — one per
+  // entry in UNIVERSE_SORTS — while a column this page cannot sort by (venue, pool, price, ext
+  // first/last, note) stays plain text.
+  it('links each sortable column header to its own ?sort= value, and leaves non-sortable headers as plain text', () => {
+    const html = renderUniverse({ tokens: [alpha], latest: [], dayAgo: [], coverage: [], sort: 'rank', now });
+    expect(html).toContain('<th><a href="/universe?sort=rank">rank</a></th>');
+    expect(html).toContain('<th><a href="/universe?sort=ticker">ticker</a></th>');
+    expect(html).toContain('<th><a href="/universe?sort=depth">depth ADA</a></th>');
+    expect(html).toContain('<th><a href="/universe?sort=change">24h change %</a></th>');
+    expect(html).toContain('<th><a href="/universe?sort=coverage">ext rows</a></th>');
+    expect(html).toContain('<th>venue</th>');
+    expect(html).toContain('<th>pool</th>');
+    expect(html).toContain('<th>price ADA/token</th>');
+  });
 });

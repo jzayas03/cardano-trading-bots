@@ -78,6 +78,30 @@ describe('layout', () => {
     expect(without).not.toContain('uPlot.iife.min.js');
     expect(without).not.toContain('uPlot.min.css');
   });
+
+  // IMPORTANT 5 (final review): `/` linked to nothing, `/runs/:id` linked nowhere, `/universe` was
+  // reachable only by typing the path, and an error page had zero links — browser-back was the only
+  // way out of any page. `layout()` is the ONE function every page (including every error page — see
+  // `server.ts`'s `errorPage`) goes through, so putting the three links here puts them everywhere.
+  it('puts links to /, /runs and /universe on every page, before the title', () => {
+    const html = layout('Title', '<p>body</p>');
+    for (const href of ['href="/"', 'href="/runs"', 'href="/universe"']) {
+      expect(html).toContain(href);
+      expect(html.indexOf(href)).toBeLessThan(html.indexOf('<h1>'));
+    }
+  });
+
+  // MINOR (final review): a mixed `/compare` page needs different rehearsal wording than a single
+  // run's page (`COMPARE_REHEARSAL_BANNER` vs. the default `REHEARSAL_BANNER`) — `rehearsalText`
+  // overrides the wording without changing whether the banner shows at all.
+  it('rehearsalText overrides the banner wording when rehearsal is true, and is ignored when rehearsal is not set', () => {
+    const overridden = layout('T', '<p></p>', { rehearsal: true, rehearsalText: 'custom wording' });
+    expect(overridden).toContain('custom wording');
+    expect(overridden).not.toContain(REHEARSAL_BANNER);
+
+    const ignored = layout('T', '<p></p>', { rehearsal: false, rehearsalText: 'custom wording' });
+    expect(ignored).not.toContain('custom wording');
+  });
 });
 
 describe('statusWord', () => {
