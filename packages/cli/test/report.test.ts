@@ -31,18 +31,26 @@ describe('adaStr', () => {
 /** Finding C3: the coverage header is where a sparse window stops being invisible. */
 describe('coverageLine', () => {
   it('states how much of the window the run actually saw', () => {
-    const line = coverageLine({ candles: 4400, first: '2026-06-01T00:00:00.000Z', last: '2026-09-01T00:00:00.000Z', expectedBuckets: 26_496, maxGapMs: 26_700_000, gapsOverBound: 561 });
+    const line = coverageLine({ candles: 4400, first: '2026-06-01T00:00:00.000Z', last: '2026-09-01T00:00:00.000Z', expectedBuckets: 26_496, maxGapMs: 26_700_000, gapsOverBound: 561, distinctPools: 1 });
     expect(line).toContain('4400 of 26496 expected buckets (16.6%)');
     expect(line).toContain('max gap 445m');
     expect(line).toContain('561 gaps over the stale-fill bound');
+    expect(line).toContain('1 pool');
   });
 
   it('says so rather than dividing by zero on an empty window', () => {
-    expect(coverageLine({ candles: 0, first: null, last: null, expectedBuckets: 0, maxGapMs: 0, gapsOverBound: 0 })).toContain('empty window');
+    expect(coverageLine({ candles: 0, first: null, last: null, expectedBuckets: 0, maxGapMs: 0, gapsOverBound: 0, distinctPools: 0 })).toContain('empty window');
   });
 
   it('names a run that predates coverage instead of printing blanks', () => {
     expect(coverageLine(undefined)).toMatch(/not recorded/);
+  });
+
+  it('pluralizes the pool count and says "not recorded" for a run that predates pool tracking', () => {
+    const base = { candles: 10, first: '2026-09-06T20:00:00.000Z', last: '2026-09-07T23:00:00.000Z', expectedBuckets: 10, maxGapMs: 0, gapsOverBound: 0 };
+    expect(coverageLine({ ...base, distinctPools: 2 })).toContain('2 pools');
+    expect(coverageLine({ ...base, distinctPools: 1 })).toMatch(/\| 1 pool$/); // singular, not "1 pools"
+    expect(coverageLine(base)).toContain('not recorded (run predates pool tracking)');
   });
 });
 

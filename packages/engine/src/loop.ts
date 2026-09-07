@@ -175,6 +175,11 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
   let widestGapMs = 0;
   let gapsOverBound = 0;
   let aborted = false;
+  // Pools this run's own consumed candles actually came from (finding: the deepest-pool candle
+  // builder silently splices series across venues when one drops out). Seeded empty, never from
+  // `primeHistory` — same rule as `candles`/`firstTs`/`lastTs` above: a resumed segment counts only
+  // what IT consumed.
+  const poolsSeen = new Set<string>();
 
   // Finding I6: seed the indicator window BEFORE the feed starts. Deliberately not touching
   // `candles`/`firstTs`/`lastTs`/`summarizer` — see `primeHistory`'s doc comment.
@@ -205,6 +210,7 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     firstTs ??= candle.tickTs;
     lastTs = candle.tickTs;
     lastCandle = candle;
+    if (candle.poolId !== null) poolsSeen.add(candle.poolId);
     // 1. settle what was decided on the previous candle. Intents decided together (same candle) fill
     // in order against a pool that depletes as they go: each fill's `poolAfter` becomes the `working`
     // reserves the next one in the batch trades against, instead of every one hitting the same quote.
@@ -277,8 +283,17 @@ export async function runEngine(d: RunEngineDeps): Promise<RunResult> {
     expectedBuckets: firstTs && lastTs ? Math.floor((lastTs.getTime() - firstTs.getTime()) / intervalMs) + 1 : 0,
     maxGapMs: widestGapMs,
     gapsOverBound,
+    distinctPools: poolsSeen.size,
   };
   const warnings: string[] = [...(d.initialWarnings ?? [])];
+  if (poolsSeen.size > 1) {
+    // Naming which is free: the pool ids were already in hand from the candles above. `dex:identifier`
+    // (see `poolIdOf`), sorted so the message is stable across runs over the identical data.
+    const pools = [...poolsSeen].sort();
+    const warning = `candle series spans ${poolsSeen.size} pools: ${pools.join(', ')}`;
+    warnings.push(warning);
+    d.log.warn({ strategy: d.strategy.id, pools }, 'candle series spans multiple pools');
+  }
   if (summarizer.orderCount === 0) {
     // A run that emitted nothing is indistinguishable from a run that found no signal unless someone
     // says which it was. Params, warmup, and candle count are what tell them apart (finding I5).

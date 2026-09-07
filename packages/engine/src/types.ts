@@ -62,6 +62,15 @@ export interface RunCoverage {
   maxGapMs: number;
   /** Consecutive pairs wider than the executor's stale-fill bound: an intent decided in one of those is rejected. */
   gapsOverBound: number;
+  /**
+   * Distinct `Candle.poolId` values consumed by this run (candles with a null `poolId` don't count).
+   * The candle builder always picks the single deepest pool per tick, but when a venue drops out the
+   * next-deepest is promoted and the series continues on it — two pools are not the same price series
+   * (different fee, different depth, a quote step that is a venue change, not a market move).
+   * `undefined` on a run persisted before this field existed: never read that as 0 or 1, which would
+   * claim single-venue provenance nothing actually checked (`coverageLine` says "not recorded").
+   */
+  distinctPools?: number;
 }
 export interface RunSummaryStats {
   candles: number; intents: number; filled: number; rejected: number;
