@@ -6,6 +6,7 @@
   "dependencies": {
     "@ctb/candles": "*",
     "@ctb/collector": "*",
+    "@ctb/dashboard": "*",
     "@ctb/db": "*",
     "@ctb/engine": "*",
     "@ctb/reports": "*",

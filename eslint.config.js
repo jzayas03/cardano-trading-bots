@@ -1,7 +1,7 @@
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["node_modules/**", "pgdata/**"] },
+  { ignores: ["node_modules/**", "pgdata/**", "packages/dashboard/vendor/**"] },
   ...tseslint.configs.recommended,
   {
     rules: {

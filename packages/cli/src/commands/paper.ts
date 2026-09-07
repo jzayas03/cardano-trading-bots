@@ -186,6 +186,15 @@ export async function fakeRowsPresent(db: Queryable, baseUnit: string): Promise<
   return { snapshots: Number(snapshots.rows[0]?.n ?? 0), candles: Number(candles.rows[0]?.n ?? 0) };
 }
 
+/** The dashboard's rehearsal-data check (health page) has no single token to scope to like a paper
+ * run does — this is `fakeRowsPresent` without the `base_unit` filter, same two tables, same `Fake`
+ * marker, total across the whole database. */
+export async function fakeRowsTotal(db: Queryable): Promise<{ snapshots: number; candles: number }> {
+  const snapshots = await db.query<{ n: string }>('SELECT count(*) AS n FROM pool_snapshots WHERE dex = $1', [FAKE_DEX]);
+  const candles = await db.query<{ n: string }>('SELECT count(*) AS n FROM candles WHERE pool_id LIKE $1', [`${FAKE_DEX}:%`]);
+  return { snapshots: Number(snapshots.rows[0]?.n ?? 0), candles: Number(candles.rows[0]?.n ?? 0) };
+}
+
 /** The synthetic venue `dev:fake-collector` writes under. One definition, matched in both tables. */
 const FAKE_DEX = 'Fake';
 
