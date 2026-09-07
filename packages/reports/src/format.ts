@@ -44,3 +44,29 @@ export function feedCountersLine(params: Record<string, unknown>): string {
   const n = (k: string): string => (typeof c[k] === 'number' ? String(c[k]) : '?');
   return `feed: ${n('ticks')} ticks | ${n('built')} built | ${n('yielded')} yielded | ${n('skippedStale')} stale-skipped | ${n('emptyBoundaries')} empty | ${n('tickFailures')} failed`;
 }
+
+/**
+ * M4b/M4c, `/universe`: the screener's 24-hour change column. Lives here, not in
+ * `packages/dashboard/src`, because that package's one rule is that it computes no numbers itself —
+ * every figure it shows is the return value of a function imported from `@ctb/reports` (or
+ * `@ctb/candles`/`@ctb/sim-executor` for a figure those packages own), and a percentage change is
+ * exactly the kind of figure this rule exists to keep out of the dashboard's own code. `then`/`now`
+ * are the same 18-place ADA-per-token decimal strings `@ctb/candles`'s `priceAdaPerToken` produces
+ * — this file must never import `@ctb/candles` itself (the purity guard forbids it, since `@ctb/
+ * candles` pulls in `pg`), so `Number()` on a decimal string is the boundary: the same
+ * display-precision crossing `chart.ts` already makes for the equity chart, never a path back into
+ * exact arithmetic.
+ *
+ * `null` — never `0` — for a `then` that is absent, unparseable, or exactly `0`: there is no
+ * percentage of nothing, and printing `0` there would read as "unchanged" when the truth is "no
+ * baseline to compare against" (the same distinction `resumesOf`/`feedCountersLine` above draw
+ * between "not recorded" and an actual zero). Two EQUAL, non-zero prices are `0` — a real, known fact
+ * ("unchanged"), not an absence.
+ */
+export function priceChangePct(then: string | null | undefined, now: string | null | undefined): number | null {
+  if (then === null || then === undefined || now === null || now === undefined) return null;
+  const a = Number(then);
+  const b = Number(now);
+  if (!Number.isFinite(a) || !Number.isFinite(b) || a === 0) return null;
+  return Math.round(((b - a) / a) * 10_000) / 100;
+}

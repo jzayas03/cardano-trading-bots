@@ -1,9 +1,15 @@
 import { Socket } from 'node:net';
 import type { EquityPoint, RunRow, RunSummaryStats } from '@ctb/engine';
 import { checkEnv, type DigestInput } from '@ctb/reports';
+import type { TokenSpec } from '@ctb/universe';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { RunFilter } from '../src/reads.js';
 import { createDashboardServer, listen, type DashboardDeps } from '../src/server.js';
+
+const universeToken: TokenSpec = {
+  ticker: 'TEST', policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', assetNameHex: '746573746f6b656e',
+  decimals: 6, category: 'DeFi', unit: 'testtoken.abcd',
+};
 
 /**
  * `fetch`/WHATWG `URL` cannot even construct a request for a malformed target like `//` or `//runs`
@@ -81,7 +87,16 @@ const equityById = new Map<number, EquityPoint[]>([[1, equity3], [3, equity3]]);
 
 function makeDeps(): DashboardDeps {
   return {
-    reads: { listRuns: async () => [paperRun, backtestRun] },
+    reads: {
+      listRuns: async () => [paperRun, backtestRun],
+      // Task 2 (M4c) widened `DashboardReads` with three more read methods for `/universe`; every
+      // existing literal satisfying this interface needs them too, even a fixture that (like this
+      // one) never exercises `/universe` itself. Kept as trivial empty-array stubs on purpose — the
+      // real behaviour is proven against Postgres in `reads.pg.test.ts`, not re-asserted here.
+      latestSnapshotsPerToken: async () => [],
+      snapshotsAt: async () => [],
+      externalCoverageAll: async () => [],
+    },
     runs: {
       getRun: async (id: number) => runsById.get(id) ?? null,
       listOrders: async () => [],
@@ -98,6 +113,7 @@ function makeDeps(): DashboardDeps {
     tickerOf: (unit: string) => (unit === 'testtoken.abcd' ? 'TEST' : unit),
     unitOf: (ticker: string) => (ticker === 'TEST' ? 'testtoken.abcd' : undefined),
     tickers: () => ['TEST'],
+    universeTokens: () => [universeToken],
     intervalSec: 600,
     venues: ['MinswapV2', 'SundaeSwapV3'],
     now: () => new Date('2026-09-07T12:05:00Z'),
@@ -134,6 +150,7 @@ describe('createDashboardServer / listen', () => {
         { method: 'GET', path: '/runs/1', status: 200, contentType: 'text/html' },
         { method: 'GET', path: '/runs/999', status: 404, contentType: 'text/html' },
         { method: 'GET', path: '/runs/abc', status: 400, contentType: 'text/html' },
+        { method: 'GET', path: '/universe', status: 200, contentType: 'text/html' },
         { method: 'GET', path: '/nope', status: 404, contentType: 'text/html' },
         { method: 'GET', path: '/vendor/uPlot.min.css', status: 200, contentType: 'text/css' },
         // Finding: the previous version of this list stopped at the CSS vendor file and never fetched
@@ -230,7 +247,7 @@ describe('createDashboardServer / listen', () => {
   it('/runs translates ?mode=&strategy=&ticker=&status=&page= into a RunFilter and pagination offset', async () => {
     const deps = makeDeps();
     const calls: Array<{ filter: RunFilter; limit: number; offset: number }> = [];
-    deps.reads = { listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return [paperRun]; } };
+    deps.reads = { ...deps.reads, listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return [paperRun]; } };
     const server = createDashboardServer(deps);
     const { url } = await listen(server, 0);
     try {
@@ -245,7 +262,7 @@ describe('createDashboardServer / listen', () => {
   it('/runs with no query at all filters on nothing and reads page 1', async () => {
     const deps = makeDeps();
     const calls: Array<{ filter: RunFilter; limit: number; offset: number }> = [];
-    deps.reads = { listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return []; } };
+    deps.reads = { ...deps.reads, listRuns: async (filter, limit, offset) => { calls.push({ filter, limit, offset }); return []; } };
     const server = createDashboardServer(deps);
     const { url } = await listen(server, 0);
     try {
@@ -455,20 +472,30 @@ describe('/compare', () => {
     }
   });
 
+  // Task 2 review finding (carried from Task 1): these six cases previously asserted only the status
+  // code, never that the 400's message actually names what IS accepted — the brief requires that
+  // ("400 that names the accepted values"), and the behaviour was already right, but nothing here
+  // proved it. Each row now also carries the exact substring `parseCompareIds`'s own error message
+  // must contain, so a future change that returns a 400 with a vague or wrong message still fails here.
+  // Expected substrings are HTML-escaped the same way `errorPage`'s `<pre>${escape(message)}</pre>`
+  // escapes the real error message before rendering it — `"` becomes `&quot;`, since `parseCompareIds`
+  // quotes the offending value with `JSON.stringify`.
   it.each([
-    ['', 'no ids at all'],
-    ['abc', 'a non-integer id'],
-    ['1,0', 'a non-positive id'],
-    ['1,-2', 'a negative id'],
-    ['1,1', 'a repeated id'],
-    [Array.from({ length: 13 }, (_, i) => i + 1).join(','), 'more than 12 ids'],
-  ])('/compare?ids=%s is refused with 400 (%s)', async (idsValue) => {
+    ['', 'no ids at all', 'ids required: /compare?ids=1,2,3 or repeated ?ids=1&amp;ids=2'],
+    ['abc', 'a non-integer id', 'ids must be positive integers; got &quot;abc&quot;'],
+    ['1,0', 'a non-positive id', 'ids must be positive integers; got &quot;0&quot;'],
+    ['1,-2', 'a negative id', 'ids must be positive integers; got &quot;-2&quot;'],
+    ['1,1', 'a repeated id', 'run 1 listed more than once in ids'],
+    [Array.from({ length: 13 }, (_, i) => i + 1).join(','), 'more than 12 ids', 'at most 12 ids may be compared at once; got 13'],
+  ])('/compare?ids=%s is refused with 400 (%s) naming what is accepted', async (idsValue, _label, expectedMessage) => {
     const server = createDashboardServer(makeCompareDeps());
     const { url } = await listen(server, 0);
     try {
       const target = idsValue === '' ? '/compare' : `/compare?ids=${idsValue}`;
       const res = await fetch(new URL(target, url));
+      const body = await res.text();
       expect(res.status).toBe(400);
+      expect(body).toContain(expectedMessage);
     } finally {
       await new Promise<void>((res) => server.close(() => res()));
     }
@@ -495,6 +522,70 @@ describe('/compare', () => {
       const body = await res.text();
       expect(res.status).toBe(404);
       expect(body).toContain('999999');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+});
+
+describe('/universe', () => {
+  it('GET /universe with no query calls the three reads plus universeTokens(), passing a 24h-ago target and a 26h window to snapshotsAt', async () => {
+    const deps = makeDeps();
+    const calls: { latest: number; snapshotsAt: Array<{ at: Date; withinMs: number }>; coverage: number } = { latest: 0, snapshotsAt: [], coverage: 0 };
+    deps.reads = {
+      ...deps.reads,
+      latestSnapshotsPerToken: async () => { calls.latest++; return []; },
+      snapshotsAt: async (at, withinMs) => { calls.snapshotsAt.push({ at, withinMs }); return []; },
+      externalCoverageAll: async () => { calls.coverage++; return []; },
+    };
+    const server = createDashboardServer(deps);
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/universe', url));
+      expect(res.status).toBe(200);
+      expect(calls.latest).toBe(1);
+      expect(calls.coverage).toBe(1);
+      // deps.now() is fixed at 2026-09-07T12:05:00Z; 24h before that is 2026-09-06T12:05:00Z, and the
+      // window is 26h (93_600_000ms) so a single missed collector tick still finds a token's own
+      // nearest older snapshot rather than nothing.
+      expect(calls.snapshotsAt).toEqual([{ at: new Date('2026-09-06T12:05:00Z'), withinMs: 93_600_000 }]);
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('the page reflects deps.universeTokens() — the ticker it names is whatever the dependency provides, not a hardcoded one', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/universe', url));
+      const body = await res.text();
+      expect(body).toContain('TEST');
+      expect(body).toContain('/runs?ticker=TEST');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it('/universe?sort=bogus is refused with 400 naming the accepted sort values', async () => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL('/universe?sort=bogus', url));
+      const body = await res.text();
+      expect(res.status).toBe(400);
+      expect(body).toContain('rank, ticker, depth, change, coverage');
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it.each(['rank', 'ticker', 'depth', 'change', 'coverage'])('/universe?sort=%s is accepted', async (sort) => {
+    const server = createDashboardServer(makeDeps());
+    const { url } = await listen(server, 0);
+    try {
+      const res = await fetch(new URL(`/universe?sort=${sort}`, url));
+      expect(res.status).toBe(200);
     } finally {
       await new Promise<void>((res) => server.close(() => res()));
     }

@@ -172,6 +172,14 @@ const ALLOWED_ARITHMETIC: ReadonlyArray<{ file: string; expr: string; because: s
   { file: 'pages/runs.ts', expr: 'orders.length - ORDERS_MAX_ROWS', because: 'count of rows past the display cap, for the "N more orders" line', count: 1 },
   { file: 'server.ts', expr: 'query.page - 1', because: 'SQL OFFSET from a 1-based page number, not a financial number (the inner term of the next entry)', count: 1 },
   { file: 'server.ts', expr: '(query.page - 1) * PAGE_SIZE', because: 'SQL OFFSET from a 1-based page number, not a financial number', count: 1 },
+  // M4c (`/universe`): `snapshotsAt(at: Date, withinMs: number)` needs an actual `Date` 24 hours
+  // before "now" to ask for — a time-window boundary for a query parameter, not a financial figure,
+  // the same non-goal this allowlist already carves out for the pager-offset entries above. There is
+  // no way to build that Date without subtracting from `now.getTime()` (a CallExpression, so never a
+  // "numeric constant" by this scan's own rule) — the literal is inlined (86_400_000 ms, i.e. 24h)
+  // rather than routed through a named constant, since a referenced Identifier is just as "not a
+  // numeric constant" as a CallExpression is, and would only move the violation, not remove it.
+  { file: 'server.ts', expr: 'now.getTime() - 86_400_000', because: '"24 hours ago" target for snapshotsAt — a time window, not a financial figure', count: 1 },
 ];
 
 function isAllowed(rel: string, exprText: string): boolean {
@@ -350,7 +358,20 @@ describe('@ctb/dashboard one-rule guard', () => {
         exported.add(isDefault ? 'default' : (stmt.name?.text ?? 'default'));
       } else if (ts.isVariableStatement(stmt) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
         for (const decl of stmt.declarationList.declarations) {
-          if (ts.isIdentifier(decl.name)) exported.add(decl.name.text);
+          if (ts.isIdentifier(decl.name)) {
+            exported.add(decl.name.text);
+          } else {
+            // Round 6 (Task 2 review, carried from Task 1): `export const { pctOf } = smuggleBox;` (or
+            // an array-destructured `export const [a, b] = pair;`) is a REAL, callable runtime export
+            // — importable exactly like a plain `export const name = ...` — but `decl.name` here is an
+            // `ObjectBindingPattern`/`ArrayBindingPattern`, never an `Identifier`, so the `if` above
+            // silently skipped it: a destructured export could smuggle real (including arithmetic)
+            // surface through the one file this guard exempts from the arithmetic scan, and this test
+            // never noticed — the same shape of hole the `export *` branch below already closed for
+            // re-exports. Recorded as that identical non-matching-anything sentinel family so it fails
+            // the exact-set comparison instead of passing through unreviewed.
+            exported.add('*(destructured export — names not read by this scan)');
+          }
         }
       } else if ((ts.isEnumDeclaration(stmt) || ts.isModuleDeclaration(stmt)) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
         // MINOR (final review): the original four export FORMS above did not include `export enum` or

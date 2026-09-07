@@ -4,6 +4,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@ctb/candles": "*",
     "@ctb/collector": "*",
     "@ctb/db": "*",
     "@ctb/engine": "*",

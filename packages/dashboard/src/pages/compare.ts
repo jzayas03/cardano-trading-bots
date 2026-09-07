@@ -10,7 +10,7 @@
  * Order is the order the operator listed the ids in — never sorted, and never re-derived from
  * `compareRunRows`' own return value, which could tempt a re-sort by run id.
  */
-import { compareRunRows, type CompareRunInput, type CompareRunRow } from '@ctb/reports';
+import { compareRunRows, MIXED_TOKENS_WARNING, type CompareRunInput, type CompareRunRow } from '@ctb/reports';
 import { multiChartHtml, normalisedEquitySeries } from '../chart.js';
 import { escape, layout, table } from '../html.js';
 
@@ -47,10 +47,12 @@ export function renderCompare(input: { inputs: CompareRunInput[]; now: Date }): 
   const heading = `compare ${ids.join(',')} | ${tickers.join(', ')} | as of ${now.toISOString()}`;
   const sections: string[] = [`<p>${escape(heading)}</p>`];
 
-  // Worded EXACTLY as `report --compare`'s `printCompare` (packages/cli/src/commands/report.ts) —
-  // an operator reading this page and the CLI output for the same ids must see the identical warning.
+  // `MIXED_TOKENS_WARNING` (`@ctb/reports`) is the one string `report --compare`'s `printCompare`
+  // (packages/cli/src/commands/report.ts) and this page both show — an operator reading this page and
+  // the CLI output for the same ids must see the identical warning, and a shared constant is what
+  // keeps that true instead of merely hoping two copy-pasted literals never drift.
   if (tickers.length > 1) {
-    sections.push('<p class="empty">warning: these runs are on different tokens; their returns are not comparable to each other</p>');
+    sections.push(`<p class="empty">${escape(MIXED_TOKENS_WARNING)}</p>`);
   }
 
   const rows = compareRunRows(inputs, now);

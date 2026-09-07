@@ -1,6 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
-import { adaStr, coverageLine, feedCountersLine, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
+import { adaStr, coverageLine, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -227,7 +227,7 @@ export function printCompare(inputs: CompareRunInput[], now: Date): void {
   if (inputs.some((i) => i.run.rehearsal)) console.log('REHEARSAL — one or more rows are synthetic data — not evidence');
   const tickers = [...new Set(inputs.map((i) => i.ticker))];
   console.log(`\n=== compare ${inputs.map((i) => i.run.id).join(',')} | ${tickers.join(', ')} | as of ${now.toISOString()}`);
-  if (tickers.length > 1) console.log('warning: these runs are on different tokens; their returns are not comparable to each other');
+  if (tickers.length > 1) console.log(MIXED_TOKENS_WARNING);
   console.table(compareRunRows(inputs, now));
 }
 
