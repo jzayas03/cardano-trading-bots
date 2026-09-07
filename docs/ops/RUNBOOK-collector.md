@@ -58,6 +58,17 @@ Read the Blockfrost dashboard alongside it. If the counter is on a pace to cross
 00:00 UTC, stop the collector; a tick that starts past the cap records every venue as
 `discover:<venue>` failures and writes nothing useful.
 
+## A venue that returns no pools
+
+Dexter turns any on-chain error into an empty pool list, and Blockfrost answered HTTP 504 for
+MinswapV2's validity-asset address list at 00:20 UTC on 2026-09-07 while the same request got 200 a
+minute later. So an empty answer is retried: up to 3 more attempts spaced 15 s, 30 s, 60 s inside the
+discovery tick, and if the venue is still empty it is recorded as one `discover:<venue>` failure and
+**retried on every following tick** until it returns. A returning venue's pools are written with the
+tick that found them and its scan cost lands in that row's `discovery_calls` (the digest counts it as
+one-off discovery cost, not recurring refresh). `status --digest` says `venues LOST since the last
+discovery` while it is out and drops the line once it is back. No restart is needed.
+
 ## Stop
 
 ```bash

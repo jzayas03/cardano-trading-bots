@@ -58,7 +58,8 @@ describe('DexterPoolSource.discover', () => {
   it('records a venue-level failure and warns when a venue returns no pools', async () => {
     const { log, warns } = makeLog();
     const fetcher = new FakeFetcher({ MinswapV2: [] });
-    const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2'], fetcher });
+    // discoveryRetryDelaysMs: [] — no retry, so this test keeps asserting the final failure shape; the retry itself is dexterSourceRetry.test.ts.
+    const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2'], fetcher, discoveryRetryDelaysMs: [] });
 
     const result = await source.discover([PAIR]);
 
@@ -66,6 +67,7 @@ describe('DexterPoolSource.discover', () => {
     expect(result.failures).toEqual([
       { scope: 'discover:MinswapV2', message: expect.stringContaining('returned no pools') },
     ]);
+    expect(source.lostVenues()).toEqual(['MinswapV2']);
     expect(warns.length).toBeGreaterThan(0);
   });
 
@@ -224,7 +226,7 @@ describe('DexterPoolSource refreshPolicy', () => {
     const only = shape('MinswapV2', 'only', 'addr-only', 100n);
     const fetcher = new FakeFetcher({ MinswapV2: [only], SundaeSwapV1: [] });
     const source = new DexterPoolSource({
-      blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher, refreshPolicy: 'deepest',
+      blockfrostProjectId: 'unit-test', log, venues: ['MinswapV2', 'SundaeSwapV1'], fetcher, refreshPolicy: 'deepest', discoveryRetryDelaysMs: [],
     });
 
     const result = await source.discover([PAIR, PAIR2]);

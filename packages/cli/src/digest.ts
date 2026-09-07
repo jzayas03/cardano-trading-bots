@@ -21,9 +21,9 @@ export interface DigestInput {
    * half is projected over the day. Read together they still equal the dashboard's count for today. */
   discoveryCallsToday: number;
   refreshCallsToday: number;
-  /** Venues the collector is configured to poll; those with at least one pool in the newest DISCOVERY tick's snapshots; those in the newest tick of any kind. */
+  /** Venues the collector is configured to poll; those with at least one snapshot at or after the newest discovery tick (a venue retried back in later counts); those in the newest tick of any kind. */
   venuesConfigured: string[];
-  venuesInLastDiscovery: string[];
+  venuesSinceLastDiscovery: string[];
   venuesInLastTick: string[];
   /** Universe tokens, and how many of them have at least one pool in the newest snapshot tick. */
   tokensTotal: number;
@@ -67,15 +67,15 @@ export function digestLines(d: DigestInput, now: Date): string[] {
     const verdict = projected > BLOCKFROST_FREE_DAILY_QUOTA ? 'STOP the collector (pkill -TERM -f \'main.ts collect\')' : projected > QUOTA_OK_BELOW ? 'WATCH' : 'OK';
     out.push(`calls since 00:00 UTC: ${callsToday} (${d.discoveryCallsToday} discovery + ${d.refreshCallsToday} refresh over ${hours(elapsedMs)}) -> projected ${projected}/day of ${BLOCKFROST_FREE_DAILY_QUOTA} (${pct}%) | quota: ${verdict}`);
   }
-  // Two different absences, two different meanings. A venue with no pool at the last discovery was
-  // LOST (Dexter returned nothing, counted as a venue failure) and stays out until the next discovery.
-  // A venue found at discovery but missing from a refresh tick was PRUNED by COLLECT_REFRESH=deepest —
-  // it is the deepest pool for no token — which is the policy working, not a failure.
-  const lost = d.venuesConfigured.filter((v) => !d.venuesInLastDiscovery.includes(v));
-  const pruned = d.venuesInLastDiscovery.filter((v) => !d.venuesInLastTick.includes(v));
+  // Two different absences, two different meanings. A venue with no snapshot since the last discovery
+  // is LOST (Dexter returned nothing, counted as a venue failure); the collector retries it on every
+  // tick until it returns. A venue found but missing from a refresh tick was PRUNED by
+  // COLLECT_REFRESH=deepest — it is the deepest pool for no token — which is the policy working.
+  const lost = d.venuesConfigured.filter((v) => !d.venuesSinceLastDiscovery.includes(v));
+  const pruned = d.venuesSinceLastDiscovery.filter((v) => !d.venuesInLastTick.includes(v));
   out.push(lost.length
-    ? `venues LOST at the last discovery: ${lost.join(', ')} (configured: ${d.venuesConfigured.join(', ')}) — a venue that returned no pools stays out until the next discovery; restart the collector to rediscover now`
-    : `venues found at the last discovery: all ${d.venuesConfigured.length} configured`);
+    ? `venues LOST since the last discovery: ${lost.join(', ')} (configured: ${d.venuesConfigured.join(', ')}) — retried every tick until they return; check the run rows' errors if it persists`
+    : `venues found since the last discovery: all ${d.venuesConfigured.length} configured`);
   if (pruned.length) out.push(`venues found but not refreshed (deepest for no token): ${pruned.join(', ')}`);
   const uncovered = d.tokensTotal - d.tokensCoveredInLastTick;
   out.push(uncovered > 0
