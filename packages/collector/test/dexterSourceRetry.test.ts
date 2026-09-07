@@ -26,12 +26,12 @@ class SequencedFetcher implements PoolFetcher {
   async poolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined> { return pool; }
 }
 
-function harness(script: Record<string, Array<LiquidityPoolShape[] | Error>>, venues: DexName[], delays = [15_000, 30_000, 60_000], policy: 'deepest' | 'all' = 'all') {
+function harness(script: Record<string, Array<LiquidityPoolShape[] | Error>>, venues: DexName[], delays = [15_000, 30_000, 60_000], policy: 'deepest' | 'all' = 'all', minDepthLovelace = 0n) {
   const slept: number[] = [];
   const warns: Array<Record<string, unknown>> = [];
   const log: Logger = { info: () => {}, warn: (o) => { warns.push(o as Record<string, unknown>); }, error: () => {} };
   const fetcher = new SequencedFetcher(script);
-  const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues, fetcher, discoveryRetryDelaysMs: delays, sleep: async (ms) => { slept.push(ms); }, refreshPolicy: policy });
+  const source = new DexterPoolSource({ blockfrostProjectId: 'unit-test', log, venues, fetcher, discoveryRetryDelaysMs: delays, sleep: async (ms) => { slept.push(ms); }, refreshPolicy: policy, minDepthLovelace });
   return { source, fetcher, slept, warns };
 }
 
@@ -101,5 +101,40 @@ describe('DexterPoolSource.rediscover', () => {
     const again = await source.rediscover([PAIR]);
     expect(again.failures).toEqual([{ scope: 'discover:MinswapV2', message: expect.stringContaining('returned no pools on 2 attempts') }]);
     expect(source.lostVenues()).toEqual(['MinswapV2']);
+  });
+});
+
+/**
+ * Refresh costs ~14.9 Blockfrost calls per pool per tick (measured over the M1 run, 2026-09-07), so
+ * 20 tokens at a 600-second interval is ~42,800 calls a day — 97% of the free tier once a discovery
+ * is added, and a single restart pushes it over. Liquidity across the seeded universe spans six
+ * orders of magnitude and the shallow end barely moves, so an operator can buy budget back by
+ * refreshing only pools above a depth floor. Discovery is untouched, so a token that gains liquidity
+ * rejoins on its own.
+ */
+describe('DexterPoolSource minDepthLovelace', () => {
+  const deep = (id: string, ada: bigint): LiquidityPoolShape => shape('MinswapV2', id, ada * 1_000_000n);
+
+  it('keeps a pool at exactly the floor and drops one a lovelace below it', async () => {
+    const above = harness({ MinswapV2: [[deep('at-floor', 400_000n)]] }, ['MinswapV2'], [], 'deepest', 400_000_000_000n);
+    await above.source.discover([PAIR]);
+    expect(above.source.knownPoolCount(), 'exactly at the floor stays').toBe(1);
+
+    const below = harness({ MinswapV2: [[shape('MinswapV2', 'under', 400_000_000_000n - 1n)]] }, ['MinswapV2'], [], 'deepest', 400_000_000_000n);
+    await below.source.discover([PAIR]);
+    expect(below.source.knownPoolCount(), 'one lovelace below is dropped').toBe(0);
+  });
+
+  it('is off by default: every pool survives when no floor is set', async () => {
+    const { source } = harness({ MinswapV2: [[shape('MinswapV2', 'dust', 1n)]] }, ['MinswapV2'], [], 'deepest');
+    await source.discover([PAIR]);
+    expect(source.knownPoolCount()).toBe(1);
+  });
+
+  it('leaves DISCOVERY untouched — every pool found is still returned for the snapshot', async () => {
+    const { source } = harness({ MinswapV2: [[shape('MinswapV2', 'dust', 1n)]] }, ['MinswapV2'], [], 'deepest', 400_000_000_000n);
+    const r = await source.discover([PAIR]);
+    expect(r.pools.map((p) => p.identifier), 'the discovery tick still writes it').toEqual(['dust']);
+    expect(source.knownPoolCount(), 'but it is not refreshed afterwards').toBe(0);
   });
 });

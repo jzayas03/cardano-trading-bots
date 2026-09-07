@@ -264,6 +264,23 @@ export interface DexterPoolSourceOptions {
    */
   refreshPolicy?: 'deepest' | 'all';
   /**
+   * Drop a token from the refresh set when its kept pool holds less ADA than this. 0 (the default)
+   * keeps everything, so this is off unless an operator asks for it.
+   *
+   * Why it exists: refresh costs about 14.9 Blockfrost calls per pool per tick (measured over the
+   * M1 run, 2026-09-07), so 20 tokens at a 600-second interval is ~42,800 calls a day, and with one
+   * discovery that is 97% of the free tier's 50,000 — a single restart pushes it over. Liquidity
+   * across the seeded universe spans six orders of magnitude, from 3.18 million ADA down to 5, and
+   * the shallow end also barely moves: the six tokens below 400,000 ADA changed price on between
+   * 1.7% and 15.7% of ticks. Spending a fifth of the budget on them buys almost no signal.
+   *
+   * Applied AFTER the deepest-per-token pruning, so the comparison is against the pool that would
+   * actually be refreshed, and only under `refreshPolicy: 'deepest'` — with `'all'` there is no
+   * single pool per token to judge. Discovery is untouched: every venue is still scanned and every
+   * pool still written on a discovery tick, so a token that gains liquidity rejoins by itself.
+   */
+  minDepthLovelace?: bigint;
+  /**
    * Waits between attempts when a venue's discovery returns no pools (or throws a transient error).
    * Dexter maps an on-chain error to an empty result, and Blockfrost answered a 504 for MinswapV2's
    * validity-asset address list at 00:20 UTC on 2026-09-07 that a request a minute later did not
@@ -309,6 +326,8 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
   private readonly sleep?: (ms: number) => Promise<void>;
   /** See `DexterPoolSourceOptions.refreshPolicy`. Default `'all'`. */
   private readonly refreshPolicy: 'deepest' | 'all';
+  /** See `DexterPoolSourceOptions.minDepthLovelace`. 0n disables the filter. */
+  private readonly minDepthLovelace: bigint;
   /** Blockfrost provider calls spent per venue on the most recent `discover()`/`rediscover()`. Read by `lastDiscoveryCalls`. */
   private callsByVenue: Record<string, number> = {};
   private readonly discoveryRetryDelaysMs: number[];
@@ -324,6 +343,7 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
     this.retryBudgetMs = opts.retryBudgetMs ?? 60_000;
     this.sleep = opts.sleep;
     this.refreshPolicy = opts.refreshPolicy ?? 'all';
+    this.minDepthLovelace = opts.minDepthLovelace ?? 0n;
     this.discoveryRetryDelaysMs = opts.discoveryRetryDelaysMs ?? [15_000, 30_000, 60_000];
     if (opts.fetcher) {
       this.fetcher = opts.fetcher;
@@ -478,6 +498,28 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
     this.known.clear();
     for (const { poolId, shape } of bestByToken.values()) this.known.set(poolId, shape);
     this.log.info({ policy: this.refreshPolicy, discovered, kept: this.known.size }, 'pruned known pools to deepest per token');
+    this.dropBelowMinDepth();
+  }
+
+  /**
+   * Drops kept pools shallower than `minDepthLovelace` (see the option's doc). Named, not inlined,
+   * so the tokens dropped are logged: an operator who narrows the refresh set must be able to see
+   * exactly what stopped being collected, rather than discovering it later as a hole in the candles.
+   */
+  private dropBelowMinDepth(): void {
+    if (this.minDepthLovelace <= 0n) return;
+    const dropped: string[] = [];
+    for (const [poolId, shape] of [...this.known]) {
+      const ada = adaReserveOf(shape);
+      if (ada === undefined || ada < this.minDepthLovelace) {
+        this.known.delete(poolId);
+        dropped.push(poolId);
+      }
+    }
+    this.log.info(
+      { minDepthLovelace: this.minDepthLovelace.toString(), dropped: dropped.length, kept: this.known.size, droppedPools: dropped },
+      dropped.length > 0 ? 'dropped pools below the minimum refresh depth' : 'no pool is below the minimum refresh depth',
+    );
   }
 
   async refresh(): Promise<SourceResult> {
