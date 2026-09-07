@@ -23,7 +23,7 @@ const schema = z.object({
   COLLECT_INTERVAL_SECONDS: z
     .string()
     .optional()
-    .transform((v) => (v === undefined ? 600 : Number(v)))
+    .transform((v) => (v === undefined ? DEFAULT_COLLECT_INTERVAL_SEC : Number(v)))
     .refine((n) => Number.isInteger(n) && n >= 60, 'COLLECT_INTERVAL_SECONDS must be an integer >= 60'),
   LOG_LEVEL: z.string().optional(),
   // Same '' -> undefined preprocessing as BLOCKFROST_PROJECT_ID: .env.example ships a bare
@@ -43,6 +43,9 @@ const schema = z.object({
       'COLLECT_REFRESH must be "deepest" or "all"',
     ),
 });
+
+/** The collector's default boundary; `status` and `paper` fall back to it for a run row that carries no interval of its own. */
+export const DEFAULT_COLLECT_INTERVAL_SEC = 600;
 
 export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean }): Config {
   const parsed = schema.safeParse(env);
