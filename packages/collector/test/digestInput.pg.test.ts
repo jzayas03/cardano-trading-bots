@@ -1,15 +1,14 @@
-import { PgSnapshotRepo } from '@ctb/collector';
 import { migrate } from '@ctb/db';
 import { describe, expect, it } from 'vitest';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';
-import { loadDigestInput } from '../src/commands/status.js';
+import { PgSnapshotRepo } from '../src/index.js';
 
 /**
  * The digest's SQL against a real schema: the UTC-midnight boundary on `started_at`, the 24 h window
  * on `tick_ts`, distinct finished ticks, the newest finished tick by finish time, and the unfinished
  * count. Each fixture row sits on one side of exactly one boundary so a wrong predicate moves one number.
  */
-describe.skipIf(!PG_ENABLED)('loadDigestInput', () => {
+describe.skipIf(!PG_ENABLED)('digestInput', () => {
   it('aggregates collector_runs across the midnight and 24h boundaries', async () => {
     await withTestSchema(async (db) => {
       await migrate(db);
@@ -47,7 +46,7 @@ describe.skipIf(!PG_ENABLED)('loadDigestInput', () => {
 
       // The newest (refresh) tick holds SundaeSwapV3 only. MuesliSwap was found at discovery but is not refreshed (deepest policy); MinswapV2 was lost at discovery and retried back in at 11:40, so it is NOT lost.
       await repo.insertSnapshots(id, [snap('SundaeSwapV3', new Date('2026-09-07T11:50:00Z'))]);
-      const d = await loadDigestInput(db, 600, ['MinswapV2', 'MuesliSwap', 'SundaeSwapV3'], now);
+      const d = await repo.digestInput(600, ['MinswapV2', 'MuesliSwap', 'SundaeSwapV3'], now);
       expect(d.lastFinished).toMatchObject({ tickTs: new Date('2026-09-07T11:50:00Z'), finishedAt: new Date('2026-09-07T11:51:00Z'), poolsWritten: 20, providerCalls: 210, discovered: false });
       expect(d.ticksLast24h).toBe(4);
       expect(d.discoveryCallsToday).toBe(5_691 + 3_300);
