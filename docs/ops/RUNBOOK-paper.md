@@ -14,6 +14,10 @@ feed is still alive.
 (see `.env.example` for the refresh-budget arithmetic) — `paper` inherits the 600s interval from
 `COLLECT_INTERVAL_SECONDS` (below) automatically.
 
+> Running the **7-day acceptance run**? Start at `RUNBOOK-7day-run.md` — it carries the
+> preconditions, the daily protocol, the stop conditions and the laptop hazards. This file is the
+> mechanics of a single process, which that one refers back to.
+
 ## Before anything: `npm run doctor`
 
 Node version, `.env` (key present by length only, interval vs default), database and migrations,
