@@ -29,14 +29,15 @@ Every line below is a precondition, not a suggestion. Record each one's output i
 2. **The M1 report is merged** — 24 hours of `collector_runs` with the gaps explained.
 3. **`npm run test:live` is green** on the dependencies you are about to run for a week. It costs
    about 1,100 Blockfrost calls, so run it when the day's budget allows, not during a discovery tick.
-4. **Real candles exist.** As of 2026-09-07 there are **zero**: `npm run candles` has never run
-   against real snapshots. Paper mode builds its own candles each boundary, but the first backtest
-   over observed reserves needs them, and a run started before anyone has looked at a real candle is
-   a run nobody can interpret.
+4. **Real candles exist.** First built 2026-09-07 — 2,265 across all 20 tokens; see
+   `docs/ops/2026-09-07-first-real-candles.md`, which also carries the price-movement table this
+   run's token should be chosen from, and the finding that a venue outage splices a token's series
+   across pools.
    ```sql
    SELECT count(*), min(tick_ts), max(tick_ts) FROM candles WHERE pool_id NOT LIKE 'Fake:%';
    ```
-5. **One `--source candles` backtest has run and been read.** This is the first time the
+5. **One `--source candles` backtest has run and been read.** Done: runs 129-136 on 2026-09-07,
+   written up in the note above. This is the first time the
    observed-reserve fill path meets real data; every earlier backtest used the synthetic model over
    external history. If that run looks wrong, the week-long run would only produce more of the same.
 6. **No rehearsal data.** `doctor`'s `rehearsal data` check covers this; a non-rehearsal paper run
@@ -103,6 +104,9 @@ Abandon and restart rather than nurse a run through any of these:
 - **A run stops itself** with `stop_reason` beginning `feed failing:`. It hit twelve consecutive
   failing boundaries. Resuming into the same broken feed just aborts again — fix the cause first.
 - **Disk below 5 GB** (`doctor` warns). Postgres and three log files will not end well.
+- **A run's report carries the multi-pool warning and you care about the result.** Its equity curve
+  is not one pool's history and its fees are not one venue's fees. That is a reason to understand the
+  outage, not necessarily to abandon the week — but it is not a result to quote without the caveat.
 - **You changed the strategy code.** A week's equity curve has to come from one git sha. If a fix
   is unavoidable, stop the runs, note it, and start a new week.
 
