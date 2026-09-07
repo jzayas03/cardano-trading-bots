@@ -3,11 +3,13 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunRepo } from '@ctb/engine';
-import { checkFakeRows, checkMigrations, checkProcesses, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
+import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
+import type { TokenSpec } from '@ctb/universe';
 import { escape, layout } from './html.js';
 import { renderCompare } from './pages/compare.js';
 import { renderHealth } from './pages/health.js';
 import { renderRunDetail, renderRunsList } from './pages/runs.js';
+import { renderUniverse, UNIVERSE_SORTS } from './pages/universe.js';
 import { RUN_MODES, RUN_STATUSES, type DashboardReads, type RunFilter } from './reads.js';
 
 const VENDOR_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../vendor');
@@ -35,6 +37,9 @@ export interface DashboardDeps {
    *  options are never limited to whatever happens to be on the current (already-filtered) page — a
    *  pure in-memory list, no query, the same shape as `tickerOf`/`unitOf`. */
   tickers: () => string[];
+  /** `/universe`'s row order and rank column: `loadUniverse().tokens`, a pure in-memory list (array
+   *  position IS market-cap rank — spec's own verified fact), the same shape as `tickers`/`tickerOf`. */
+  universeTokens: () => TokenSpec[];
   intervalSec: number;
   venues: string[];
   now: () => Date;
@@ -120,10 +125,19 @@ const MAX_PAGE = 1_000_000;
  * into a 400 that names the accepted values (spec §6, "never a silent default"). */
 class RunsQueryError extends Error {}
 
-function parseEnumParam<T extends string>(raw: string | null, accepted: readonly T[], field: string): T | undefined {
+/**
+ * Shared by `parseRunsQuery` (`mode`/`status`) and `parseUniverseSort` below — both need the identical
+ * "unrecognised value gets a 400 naming what IS accepted" behaviour, just under a different route's own
+ * error type so each handler's `catch` only ever swallows the error its OWN parser throws (never
+ * accidentally catching a bug from an unrelated code path and turning it into a misleading 400). The
+ * error constructor defaults to `RunsQueryError` so every existing `/runs` call site is unchanged.
+ */
+function parseEnumParam<T extends string>(
+  raw: string | null, accepted: readonly T[], field: string, makeError: (message: string) => Error = (m) => new RunsQueryError(m),
+): T | undefined {
   if (raw === null || raw === '') return undefined;
   if (!(accepted as readonly string[]).includes(raw)) {
-    throw new RunsQueryError(`${field} must be one of ${accepted.join(', ')}; got ${JSON.stringify(raw)}`);
+    throw makeError(`${field} must be one of ${accepted.join(', ')}; got ${JSON.stringify(raw)}`);
   }
   return raw as T;
 }
@@ -269,6 +283,45 @@ async function compareHandler(deps: DashboardDeps, url: URL, path: string): Prom
   return htmlPage(200, body);
 }
 
+/** Thrown only inside `parseUniverseSort` for a bad `?sort=`; caught in `universeHandler` and turned
+ * into a 400 that names the accepted values — the same shape `RunsQueryError`/`CompareQueryError`
+ * follow for their own routes. */
+class UniverseQueryError extends Error {}
+
+function parseUniverseSort(url: URL): (typeof UNIVERSE_SORTS)[number] {
+  return parseEnumParam(url.searchParams.get('sort'), UNIVERSE_SORTS, 'sort', (m) => new UniverseQueryError(m)) ?? 'rank';
+}
+
+/**
+ * `/universe` (spec §4.2, M4c): the screener. This package's own code performs NO date arithmetic at
+ * all — the "24 hours ago" target `snapshotsAt` needs comes from `@ctb/reports`'s `dayAgo(now)` (fix
+ * round, IMPORTANT 2), the same package that already owns the other half of this figure
+ * (`priceChangePct`), rather than from a `now.getTime() - 86_400_000` computed here and separately
+ * allowlisted in `oneRule.guard.test.ts` — a widening that round closed instead of keeping. `withinMs`
+ * is a plain numeric literal (26 hours), not a computed expression, so it needs no allowlist entry
+ * either: wide enough that a single missed collector tick still finds ITS token's own nearest older
+ * snapshot (`snapshotsAt`'s per-token degrade — see `reads.ts`), never nothing, on a collector that
+ * ticks roughly hourly or faster.
+ */
+async function universeHandler(deps: DashboardDeps, url: URL, path: string): Promise<HandlerResult> {
+  let sort: (typeof UNIVERSE_SORTS)[number];
+  try {
+    sort = parseUniverseSort(url);
+  } catch (err) {
+    if (err instanceof UniverseQueryError) return badRequest(path, err.message);
+    throw err;
+  }
+  const now = deps.now();
+  const withinMs = 93_600_000; // 26h
+  const [latest, dayAgoSnapshots, coverage] = await Promise.all([
+    deps.reads.latestSnapshotsPerToken(),
+    deps.reads.snapshotsAt(dayAgo(now), withinMs),
+    deps.reads.externalCoverageAll(),
+  ]);
+  const body = renderUniverse({ tokens: deps.universeTokens(), latest, dayAgo: dayAgoSnapshots, coverage, sort, now });
+  return htmlPage(200, body);
+}
+
 function send(res: ServerResponse, result: HandlerResult): void {
   res.writeHead(result.status, { 'content-type': result.contentType, ...result.headers });
   res.end(result.body);
@@ -279,6 +332,7 @@ async function route(deps: DashboardDeps, url: URL): Promise<HandlerResult> {
   if (path === '/') return healthHandler(deps);
   if (path === '/runs') return runsHandler(deps, url, path);
   if (path === '/compare') return compareHandler(deps, url, path);
+  if (path === '/universe') return universeHandler(deps, url, path);
   if (path === '/vendor/uPlot.iife.min.js') return vendorFile('uPlot.iife.min.js', 'text/javascript; charset=utf-8');
   if (path === '/vendor/uPlot.min.css') return vendorFile('uPlot.min.css', 'text/css; charset=utf-8');
   const runIdMatch = /^\/runs\/([^/]+)$/.exec(path);

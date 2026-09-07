@@ -49,6 +49,9 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
   // query — so the filter form always offers every ticker, not just whatever the current (already
   // filtered) page happens to show.
   const tickers = (): string[] => universe.tokens.map((t) => t.ticker);
+  // `/universe`'s row order and rank column — array position IS market-cap rank (spec's own verified
+  // fact) — a pure in-memory list, no query, the same shape as `tickers`/`tickerOf`/`unitOf` above.
+  const universeTokens = (): typeof universe.tokens => universe.tokens;
 
   const deps: DashboardDeps = {
     reads: new PgDashboardReads(db),
@@ -68,6 +71,7 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
     tickerOf,
     unitOf,
     tickers,
+    universeTokens,
     intervalSec: cfg.intervalSec,
     venues: cfg.venues,
     now: () => new Date(),

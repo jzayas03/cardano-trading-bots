@@ -122,6 +122,15 @@
  * enum` or `export namespace`, either of which can carry callable surface (an enum's reverse mapping;
  * a namespace nesting its own function) inside the one file this guard exempts from the arithmetic
  * scan. `collectChartExports` now also walks `EnumDeclaration` and `ModuleDeclaration` nodes.
+ *
+ * Round 6 (task-2 fix round, IMPORTANT 2): the `server.ts` entry for `now.getTime() - 86_400_000`
+ * (the `/universe` 24h-ago target) is REMOVED, not renamed. That entry was well-formed — pinned to
+ * one file, one exact expression, one occurrence — but avoidable: `@ctb/reports` already owns the
+ * other half of the same figure (`priceChangePct`), so a new `dayAgo(now)` function lives there
+ * instead, and `server.ts` now calls it rather than computing the subtraction itself. The guard is
+ * green again with seven entries, none of them touched; reintroducing the raw subtraction in
+ * `server.ts` (without a matching allowlist entry) turns it red again, proving this file's own scan —
+ * not a since-removed allowlist entry — is what would catch a regression back to the old shape.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
@@ -350,7 +359,20 @@ describe('@ctb/dashboard one-rule guard', () => {
         exported.add(isDefault ? 'default' : (stmt.name?.text ?? 'default'));
       } else if (ts.isVariableStatement(stmt) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
         for (const decl of stmt.declarationList.declarations) {
-          if (ts.isIdentifier(decl.name)) exported.add(decl.name.text);
+          if (ts.isIdentifier(decl.name)) {
+            exported.add(decl.name.text);
+          } else {
+            // Round 6 (Task 2 review, carried from Task 1): `export const { pctOf } = smuggleBox;` (or
+            // an array-destructured `export const [a, b] = pair;`) is a REAL, callable runtime export
+            // — importable exactly like a plain `export const name = ...` — but `decl.name` here is an
+            // `ObjectBindingPattern`/`ArrayBindingPattern`, never an `Identifier`, so the `if` above
+            // silently skipped it: a destructured export could smuggle real (including arithmetic)
+            // surface through the one file this guard exempts from the arithmetic scan, and this test
+            // never noticed — the same shape of hole the `export *` branch below already closed for
+            // re-exports. Recorded as that identical non-matching-anything sentinel family so it fails
+            // the exact-set comparison instead of passing through unreviewed.
+            exported.add('*(destructured export — names not read by this scan)');
+          }
         }
       } else if ((ts.isEnumDeclaration(stmt) || ts.isModuleDeclaration(stmt)) && hasModifier(stmt, ts.SyntaxKind.ExportKeyword)) {
         // MINOR (final review): the original four export FORMS above did not include `export enum` or

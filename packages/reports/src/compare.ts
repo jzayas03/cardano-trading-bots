@@ -3,6 +3,15 @@ import { adaStr } from './format.js';
 import { summarizeRun } from './summary.js';
 import { heartbeatAgeCell } from './heartbeat.js';
 
+/**
+ * The exact wording `report --compare`'s `printCompare` (packages/cli/src/commands/report.ts) and
+ * the dashboard's `/compare` page (packages/dashboard/src/pages/compare.ts) both show when the
+ * compared runs are not all on the same token. It used to be duplicated verbatim in both places — a
+ * warning rather than a figure, so a drift there is cosmetic, but this file is already the shared
+ * home for `compareRunRows`, and one string beats two that can quietly stop matching.
+ */
+export const MIXED_TOKENS_WARNING = 'warning: these runs are on different tokens; their returns are not comparable to each other';
+
 export interface CompareInput { strategyId: string; runId: number; summary: RunSummaryStats }
 export interface CompareRow {
   strategy: string; runId: number; candles: number; intents: number; filled: number; rejected: number;

@@ -119,4 +119,26 @@ describe('multiChartHtml', () => {
     expect(html).toContain('new uPlot(');
     expect(html).toContain('id="compare-chart"');
   });
+
+  /**
+   * Task 1 review finding: `jsonForScript` (the private helper that escapes `<` to `<` before
+   * interpolating JSON into the inline `<script>`) was previously pinned only INCIDENTALLY — by a
+   * fixture label that happened to contain the substring `<script>` (`normalisedEquitySeries` built
+   * from a run's own `strategyId`, so `series[].label` is the one field here that is genuinely
+   * database-derived). A payload like `a</script><b` — a real `</script>` immediately followed by
+   * more attacker/data-controlled content, rather than a whole tag on its own — was never exercised
+   * directly. This test targets `jsonForScript` head-on, through the one field it actually escapes.
+   */
+  it('jsonForScript escapes every "<" (not just a whole "<script>" tag) so a label like "a</script><b" cannot close the inline script early', () => {
+    const series = normalisedEquitySeries([{ label: 'a</script><b', points }]);
+    const html = multiChartHtml('compare-chart', series);
+    expect(html).not.toContain('</script><b');
+    // Only "<" is escaped (to "<"), never ">" — so the ">" right after "script" stays literal;
+    // what makes this safe is that BOTH "<" characters (the one opening "</script" and the one before
+    // "b") are gone, not that the substring is unrecognisable.
+    expect(html).toContain('a\\u003c/script>\\u003cb');
+    // The real closing </script> (uPlot.iife's own, and this file's inline block) must appear exactly
+    // once after the label — a literal "</script>" smuggled in from the label would have added a second.
+    expect((html.match(/<\/script>/g) ?? []).length).toBe(1);
+  });
 });
