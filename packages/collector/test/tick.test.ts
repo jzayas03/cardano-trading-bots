@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Pair } from '@ctb/universe';
 import {
-  isPoolFailure, runTick,
+  freshState, isPoolFailure, runTick,
   type CollectorState, type PoolLike, type PoolSource, type RunError, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult,
 } from '../src/pure.js';
 
@@ -73,15 +73,15 @@ class FakeRepo implements SnapshotRepo {
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const fixedNow = () => new Date('2026-09-05T15:07:41Z');
 
-function deps(source: PoolSource, repo: SnapshotRepo, state: CollectorState = { lastDiscoveryAt: null }) {
-  return { source, repo, pairs: [SNEK_PAIR], log, now: fixedNow, intervalSec: 300, rediscoverAfterMs: 24 * 3600 * 1000, state };
+function deps(source: PoolSource, repo: SnapshotRepo, state: CollectorState = freshState(fixedNow())) {
+  return { source, repo, pairs: [SNEK_PAIR], log, now: fixedNow, intervalSec: 300, rediscoverAfterMs: 24 * 3600 * 1000, state, dailyCallCeiling: 0 };
 }
 
 describe('runTick', () => {
   it('discovers on the first tick, refreshes on the next, writes snapshots at the bucketed tick', async () => {
     const source = new FakeSource([pool('MinswapV2', 'a'), pool('SundaeSwapV3', 'b')]);
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(fixedNow());
     const s1 = await runTick(deps(source, repo, state));
     expect(s1).toMatchObject({ discovered: true, poolsAttempted: 2, poolsWritten: 2, poolsFailed: 0, errors: [] });
     expect(repo.rows[0]?.tickTs).toEqual(new Date('2026-09-05T15:05:00Z'));
@@ -115,7 +115,7 @@ describe('runTick', () => {
   it('rediscovers when the last discovery is older than the threshold', async () => {
     const source = new FakeSource([pool('MinswapV2', 'a')]);
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: new Date('2026-09-04T10:00:00Z') };
+    const state: CollectorState = { ...freshState(fixedNow()), lastDiscoveryAt: new Date('2026-09-04T10:00:00Z') };
     // knownPoolCount() is 0 until discover() ran, so this also covers "process restarted"
     const s = await runTick(deps(source, repo, state));
     expect(s.discovered).toBe(true);
@@ -140,7 +140,7 @@ describe('runTick', () => {
     const refreshFailures: RunError[] = [{ scope: 'refresh:MinswapV2:x', message: 'timeout' }];
     const source = new FakeSource([pool('MinswapV2', 'a')], false, [], refreshFailures);
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(fixedNow());
     await runTick(deps(source, repo, state));
     source.resetProviderCalls();
     const s = await runTick(deps(source, repo, state));
@@ -151,7 +151,7 @@ describe('runTick', () => {
   it('never propagates a throw from refresh(); records it on the run row with no snapshots', async () => {
     const source = new FakeSource([pool('MinswapV2', 'a')], false, [], [], 'refresh');
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(fixedNow());
     await runTick(deps(source, repo, state)); // first tick: discover succeeds, seeds known pools
     const rowsBefore = repo.rows.length;
     await expect(runTick(deps(source, repo, state))).resolves.toBeDefined();
@@ -251,7 +251,7 @@ describe('runTick', () => {
       { MinswapV2: 20, SundaeSwapV3: 9 },
     );
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(fixedNow());
     const s1 = await runTick(deps(source, repo, state));
     expect(s1.discovered).toBe(true);
     expect(s1.discoveryCalls).toEqual({ MinswapV2: 20, SundaeSwapV3: 9 });

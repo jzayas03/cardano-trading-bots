@@ -1,5 +1,5 @@
 import type { Pair } from '@ctb/universe';
-import type { RunError } from './repo.js';
+import type { CachedPool, RunError } from './repo.js';
 import type { PoolLike } from './types.js';
 
 export interface SourceResult {
@@ -46,4 +46,23 @@ export interface RediscoverySource {
   lostVenues(): string[];
   /** Discovers the lost venues only; found pools join the known set (pruned per the refresh policy). */
   rediscover(pairs: Pair[]): Promise<SourceResult>;
+}
+
+/**
+ * Optional capability, structural like the two above: a `PoolSource` whose known-pool set can be
+ * seeded from storage and read back out for persisting.
+ *
+ * This is what stops a RESTART from costing a discovery sweep. `runTick` treats an empty known set
+ * as "discovery is due" -- correct for a genuinely fresh universe, and ruinous for a process that
+ * simply restarted, because the set lives only in memory. Measured on 2026-09-08: five collector
+ * restarts bought five sweeps, 25,174 of the day's 43,469 Blockfrost calls, and the free tier ran
+ * out at 20:15 UTC with the collector then failing closed on every tick for the rest of the day.
+ *
+ * `hydrate` returns the number of pools taken, so a caller can log the difference between a warm
+ * start and a cold one instead of guessing which happened.
+ */
+export interface HydratableSource {
+  hydrate(pools: readonly CachedPool[]): number;
+  /** The known set, in the exact shape `hydrate` accepts. Empty before the first discovery. */
+  cachedPools(): CachedPool[];
 }

@@ -9,7 +9,8 @@ describe('loadConfig', () => {
   it('applies defaults', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
-      databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
+      databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600,
+      dailyCallCeiling: 45_000, logLevel: 'info',
       venues: DEFAULT_VENUES, refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
     });
   });
@@ -37,6 +38,7 @@ describe('loadConfig', () => {
       dashboardDatabaseUrl,
       blockfrostProjectId: null,
       intervalSec: 600,
+      dailyCallCeiling: 45_000,
       logLevel: 'info',
       venues: DEFAULT_VENUES,
       refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
@@ -183,5 +185,23 @@ describe('tiered sampling config', () => {
 
   it('refuses an interval too small to be a real cadence', () => {
     expect(() => loadConfig({ ...base, COLLECT_FOCUS_TICKER: 'SNEK', COLLECT_FOCUS_INTERVAL_SECONDS: '5' }, { blockfrost: false })).toThrow(/>= 20/);
+  });
+
+  it('COLLECT_DAILY_CALL_CEILING defaults to 45,000 and accepts 0 to disable the check', () => {
+    // Default, not zero: an unset ceiling must still bound the day. Zero has to be asked for.
+    expect(loadConfig(base, { blockfrost: false }).dailyCallCeiling).toBe(45_000);
+    // dotenv turns a bare `COLLECT_DAILY_CALL_CEILING=` line into '', which means "use the default",
+    // not "no ceiling" -- the same '' handling BLOCKFROST_PROJECT_ID and COLLECT_VENUES need.
+    expect(loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '' }, { blockfrost: false }).dailyCallCeiling).toBe(45_000);
+    expect(loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '0' }, { blockfrost: false }).dailyCallCeiling).toBe(0);
+    expect(loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '30000' }, { blockfrost: false }).dailyCallCeiling).toBe(30_000);
+  });
+
+  it('refuses a nonsense ceiling instead of coercing it to a number that bounds nothing', () => {
+    // `Number('abc')` is NaN and every comparison against NaN is false, so an unvalidated typo here
+    // would disable the ceiling silently -- which is the failure mode it exists to prevent.
+    expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: 'abc' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
+    expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '-1' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
+    expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '1.5' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
   });
 });

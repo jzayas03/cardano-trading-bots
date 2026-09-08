@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Pair } from '@ctb/universe';
-import { runTick, type CollectorState, type PoolLike, type PoolSource, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult } from '../src/pure.js';
+import { freshState, runTick, type CollectorState, type PoolLike, type PoolSource, type RunSummary, type SnapshotRepo, type SnapshotRow, type SourceResult } from '../src/pure.js';
 
 const SNEK_PAIR: Pair = {
   base: { ticker: 'SNEK', policyId: '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f', assetNameHex: '534e454b', decimals: 0, category: 'Meme',
@@ -47,13 +47,13 @@ class FakeRepo implements SnapshotRepo {
 const log = { info: () => {}, warn: () => {}, error: () => {} };
 const at = (m: number) => () => new Date(Date.UTC(2026, 8, 7, 1, m));
 const deps = (source: PoolSource, repo: SnapshotRepo, state: CollectorState, m: number) =>
-  ({ source, repo, pairs: [SNEK_PAIR], log, now: at(m), intervalSec: 600, rediscoverAfterMs: 24 * 3600 * 1000, state });
+  ({ source, repo, pairs: [SNEK_PAIR], log, now: at(m), intervalSec: 600, rediscoverAfterMs: 24 * 3600 * 1000, state, dailyCallCeiling: 0 });
 
 describe('runTick retries lost venues on refresh ticks', () => {
   it('a refresh tick calls rediscover while a venue is lost, writes the returning pools with that tick, and carries its per-venue calls; then stops once found', async () => {
     const source = new LosingSource(2);
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(at(0)());
     const d0 = await runTick(deps(source, repo, state, 40)); // discovery: loses MinswapV2
     expect(d0.discovered).toBe(true);
     expect(source.rediscoverCalls, 'no rediscovery on the discovery tick itself').toBe(0);
@@ -76,7 +76,7 @@ describe('runTick retries lost venues on refresh ticks', () => {
   it('a throw from rediscover is recorded on the row and the refreshed pools are still written', async () => {
     const source = new LosingSource(1, true);
     const repo = new FakeRepo();
-    const state: CollectorState = { lastDiscoveryAt: null };
+    const state: CollectorState = freshState(at(0)());
     await runTick(deps(source, repo, state, 40));
     const r = await runTick(deps(source, repo, state, 50));
     expect(r.errors).toEqual([{ scope: 'rediscover', message: 'boom' }]);

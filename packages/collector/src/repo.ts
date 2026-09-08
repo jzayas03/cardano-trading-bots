@@ -1,4 +1,4 @@
-import type { Db } from '@ctb/db';
+import { withTransaction, type Db } from '@ctb/db';
 import { utcMidnight, type DigestInput } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';
 import type { SnapshotRow } from './types.js';
@@ -44,10 +44,56 @@ export interface SnapshotRepo {
   lastRuns(limit: number): Promise<RunRow[]>;
 }
 
+/**
+ * The restart-cost controls, kept OFF `SnapshotRepo` and probed structurally -- the same shape as
+ * `DiscoveryCallsSource`/`RediscoverySource` in `source.ts`, and for the same reason: widening the
+ * required interface would break every `SnapshotRepo` fake in the suite over a capability none of
+ * them need. `PgSnapshotRepo` implements it; `runTick` checks for it.
+ */
+export interface PoolCacheRepo {
+  restartState(now: Date): Promise<RestartState>;
+  savePoolCache(pools: readonly CachedPool[], cachedAt: Date): Promise<void>;
+}
+
+/**
+ * One pool exactly as discovery produced it. This is `LiquidityPoolShape` plus the id the rest of
+ * the collector keys on -- deliberately the WHOLE shape, ordering and decimals included, because
+ * Dexter matches a refreshed pool on `${dex}.${assetAName}/${assetBName}.${identifier}` and a
+ * normalised copy would not match. See the migration's header comment.
+ */
+export interface CachedPool {
+  poolId: string;
+  dex: string;
+  identifier: string;
+  address: string;
+  assetA: 'lovelace' | { policyId: string; nameHex: string; decimals: number };
+  assetB: 'lovelace' | { policyId: string; nameHex: string; decimals: number };
+  reserveA: bigint;
+  reserveB: bigint;
+  poolFeePercent: number;
+}
+
+/**
+ * What a starting collector needs from the database so that a restart costs a refresh (~300 calls)
+ * instead of a discovery sweep (~5,700). Both facts were already in the database and neither was
+ * read: `lastDiscoveryAt` only fed the digest, and the pool set was not persisted at all.
+ */
+export interface RestartState {
+  /** Newest finished discovery tick, or null if there has never been one. Seeds the rediscovery clock. */
+  lastDiscoveryAt: Date | null;
+  /** Provider calls already spent this UTC day, from `collector_runs`. A FLOOR: calls made by a tick
+   *  that died before `finishRun`, and anything run by hand, are not in it. */
+  callsSpentToday: number;
+  /** Provider calls the most recent discovery sweep actually cost, used to price the next one. */
+  lastDiscoveryCost: number | null;
+  /** The persisted pool set, newest cache write. Empty when the cache has never been written. */
+  pools: CachedPool[];
+}
+
 /** Number of placeholders contributed by each snapshot row (run_id + 13 pool_snapshots columns). */
 const PARAMS_PER_ROW = 14;
 
-export class PgSnapshotRepo implements SnapshotRepo {
+export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
   constructor(private readonly db: Db) {}
 
   async syncTokens(tokens: TokenSpec[], seed: { seededAt: string; seedSource: string }): Promise<void> {
@@ -116,6 +162,63 @@ export class PgSnapshotRepo implements SnapshotRepo {
       providerCalls: r.provider_calls, discovered: r.discovered, errors: r.errors,
       discoveryCalls: r.discovery_calls ?? null,
     }));
+  }
+
+  /**
+   * The three restart-cost facts in one round trip. Read once at startup, before the first tick.
+   *
+   * `callsSpentToday` counts `provider_calls` ALONE. `discovery_calls` is the per-venue BREAKDOWN of
+   * that same number, not an addend -- summing both double-counts every discovery tick, which is a
+   * mistake this project has already made once and acted on.
+   */
+  async restartState(now: Date): Promise<RestartState> {
+    const agg = await this.db.query<{ last_discovery: Date | null; spent_today: string; last_discovery_cost: string | null }>(
+      `SELECT
+         (SELECT max(started_at) FROM collector_runs WHERE discovered AND finished_at IS NOT NULL) AS last_discovery,
+         (SELECT coalesce(sum(provider_calls), 0) FROM collector_runs WHERE started_at >= $1::timestamptz) AS spent_today,
+         (SELECT provider_calls FROM collector_runs WHERE discovered AND finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 1) AS last_discovery_cost`,
+      [utcMidnight(now)],
+    );
+    const a = agg.rows[0]!;
+    const cache = await this.db.query<{
+      pool_id: string; dex: string; identifier: string; address: string;
+      asset_a: CachedPool['assetA']; asset_b: CachedPool['assetB'];
+      reserve_a: string; reserve_b: string; pool_fee_percent: number;
+    }>('SELECT pool_id, dex, identifier, address, asset_a, asset_b, reserve_a, reserve_b, pool_fee_percent FROM collector_pool_cache ORDER BY pool_id');
+    return {
+      lastDiscoveryAt: a.last_discovery,
+      callsSpentToday: Number(a.spent_today),
+      lastDiscoveryCost: a.last_discovery_cost === null ? null : Number(a.last_discovery_cost),
+      pools: cache.rows.map((r) => ({
+        poolId: r.pool_id, dex: r.dex, identifier: r.identifier, address: r.address,
+        assetA: r.asset_a, assetB: r.asset_b,
+        reserveA: BigInt(r.reserve_a), reserveB: BigInt(r.reserve_b),
+        poolFeePercent: r.pool_fee_percent,
+      })),
+    };
+  }
+
+  /**
+   * Replaces the cache with exactly `pools`, in one transaction. Replace and not upsert: a pool that
+   * discovery no longer finds must LEAVE the cache, or a restart would resurrect a pool that has
+   * been delisted and spend a refresh call per tick failing on it forever.
+   *
+   * An empty `pools` is refused rather than obeyed. Emptying the cache is indistinguishable at read
+   * time from never having written one, and it would silently reinstate the very bug this closes.
+   */
+  async savePoolCache(pools: readonly CachedPool[], cachedAt: Date): Promise<void> {
+    if (pools.length === 0) throw new Error('refusing to empty the pool cache: an empty cache reads as "no cache" and restores the restart-costs-a-sweep bug');
+    await withTransaction(this.db, async (tx) => {
+      await tx.query('DELETE FROM collector_pool_cache');
+      for (const p of pools) {
+        await tx.query(
+          `INSERT INTO collector_pool_cache (pool_id, dex, identifier, address, asset_a, asset_b, reserve_a, reserve_b, pool_fee_percent, cached_at)
+           VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8, $9, $10)`,
+          [p.poolId, p.dex, p.identifier, p.address, JSON.stringify(p.assetA), JSON.stringify(p.assetB),
+            p.reserveA.toString(), p.reserveB.toString(), p.poolFeePercent, cachedAt],
+        );
+      }
+    });
   }
 
   /** The digest's inputs, from `collector_runs` only. Pure aggregation, no writes. */
