@@ -3,11 +3,20 @@
 # Checkout -> running. Run as ROOT, on the host, after provision.sh:
 #
 #   ssh root@<ip> 'bash -s' < infra/vps/deploy.sh
+#   ssh root@<ip> 'bash -s' -- --no-start < infra/vps/deploy.sh
+#
+# --no-start installs and enables the units for boot but does NOT start them now. Use it whenever
+# another machine is still the live one: the collector and this one share a single Blockfrost key
+# with a single 50,000/day quota, and two of them refreshing at 900 s costs ~57,000 — over the cap.
+# They would also back up to the same R2 prefix and prune each other's dumps.
 #
 # Root because installing system units needs it. Everything that touches the repo or the database
 # runs as the ctb user via sudo -u, so nothing in ~ctb ends up root-owned — an ownership mistake
 # there surfaces days later as a unit that cannot write its own log.
 set -euo pipefail
+
+NO_START=0
+[ "${1:-}" = "--no-start" ] && NO_START=1
 
 SERVICE_USER=ctb
 HOME_DIR="/home/$SERVICE_USER"
@@ -58,11 +67,16 @@ asctb "npm run migrate"
 say "systemd units"
 install -m 644 "$REPO/infra/vps/systemd/"*.service "$REPO/infra/vps/systemd/"*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now ctb-collector.service
-for s in ma-crossover rsi-mean-reversion buy-and-hold; do
-  systemctl enable --now "ctb-paper@$s.service"
-done
-systemctl enable --now ctb-backup.timer ctb-watch.timer
+UNITS=(ctb-collector.service ctb-paper@ma-crossover.service ctb-paper@rsi-mean-reversion.service ctb-paper@buy-and-hold.service)
+TIMERS=(ctb-backup.timer ctb-watch.timer)
+if [ "$NO_START" = "1" ]; then
+  # enable (so a reboot brings them up) without starting now. The reboot test still means
+  # something: it proves the units come up on their own, which is the whole point of M5.4.
+  systemctl enable "${UNITS[@]}" "${TIMERS[@]}"
+  echo "  enabled for boot, NOT started (--no-start)"
+else
+  systemctl enable --now "${UNITS[@]}" "${TIMERS[@]}"
+fi
 
 say "state"
 systemctl --no-pager --plain is-active ctb-collector.service ctb-paper@ma-crossover.service \
