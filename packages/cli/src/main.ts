@@ -10,6 +10,7 @@ import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
 import { reportCommand } from './commands/report.js';
 import { statusCommand } from './commands/status.js';
+import { watchCommand } from './commands/watch.js';
 import { doctorCommand } from './commands/doctor.js';
 
 const log = pino({
@@ -43,6 +44,8 @@ async function main(): Promise<void> {
       return devFakeCollectorCommand(log, rest);
     case 'dashboard':
       return dashboardCommand(log, rest);
+    case 'watch':
+      return watchCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
@@ -50,7 +53,7 @@ async function main(): Promise<void> {
         'report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <ids>|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...|' +
         'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]|' +
-        'dashboard [--port 3210]>',
+        'dashboard [--port 3210] | watch [--verbose]>',
       );
       process.exitCode = 2;
   }

@@ -2,8 +2,12 @@
   "name": "cardano-trading-bots",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=24" },
-  "workspaces": ["packages/*"],
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "vitest run",
     "test:pg": "RUN_PG_TESTS=1 vitest run",
@@ -14,6 +18,7 @@
     "collect": "tsx packages/cli/src/main.ts collect",
     "status": "tsx packages/cli/src/main.ts status",
     "doctor": "tsx packages/cli/src/main.ts doctor",
+    "watch": "tsx packages/cli/src/main.ts watch",
     "candles": "tsx packages/cli/src/main.ts candles",
     "backfill": "tsx packages/cli/src/main.ts backfill",
     "backtest": "tsx packages/cli/src/main.ts backtest",
