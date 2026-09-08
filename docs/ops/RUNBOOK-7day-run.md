@@ -85,11 +85,22 @@ Do them on day 2, not day 7, so a failure still leaves time to fix and restart.
   `runs.status = 'finished'` and `stop_reason = 'signal'`, wait one interval, then
   `npm run paper -- rsi-mean-reversion SNEK --resume <id>`. Confirm `paper_orders.seq` continues and
   `params.resumes` gained a timestamp.
+
+  **The `seq` half only means something once that run has orders.** Run the drill on a strategy that
+  has already traded, or accept that the assertion is vacuous and re-check it later — a strategy in
+  warmup has no orders, so `max(seq)` is null before and after and proves nothing. On 2026-09-08 both
+  drills ran against rsi-mean-reversion during its 16-candle warmup and that check tested nothing
+  twice. `run_equity` points are the fallback: they accumulate from the first boundary, so continuity
+  across a restart is visible even with no fills.
 - **Crash recovery.** `kill -9` the same run's real node process, confirm the row is stuck at
   `running`, confirm `/` shows its heartbeat STALE, confirm no process survives, then resume. It
-  succeeds through the stale-heartbeat path and records that fact as a warning on the run. A run
-  whose heartbeat is still fresh must be refused — that refusal is what stops two processes writing
-  one run.
+  succeeds through the stale-heartbeat path and carries that fact as a warning that lands in
+  `runs.summary` when the segment ends. A run whose heartbeat is still fresh must be refused — that
+  refusal is what stops two processes writing one run.
+
+  Budget the wait: the heartbeat only reads STALE past `2 * intervalSec + graceSec`, which is 31
+  minutes at a 900-second interval. Time it from the run's **last boundary**, not from the kill —
+  a run killed 18 minutes after its last beat goes stale 13 minutes later, not 31.
 
 Full procedures are in `RUNBOOK-paper.md`.
 

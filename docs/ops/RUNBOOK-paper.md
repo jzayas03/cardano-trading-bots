@@ -74,7 +74,10 @@ npm run report -- <run-id> --day $(date -u -v-1d +%F)
 ```
 
 - **heartbeat age** is `STALE` past `2 * intervalSec + graceSec`. One missed beat is jitter; two is
-  something to look at.
+  something to look at. **A just-resumed run reads `STALE` until its first boundary** — it still
+  carries the dead segment's heartbeat, for up to one whole interval (15 minutes at 900 s). Check
+  whether a process for that run id is alive before treating it as a problem; measured on
+  2026-09-08, run 138 resumed at 01:32 and read `STALE (1942s)` while perfectly healthy.
 - **`feed:` line** — `ticks / built / yielded / stale-skipped / empty / failed`. `yielded 0` with a
   climbing `empty` count is a dead collector seen from inside the paper process. Cross-reference
   `collector_runs` for the same hour.
@@ -114,8 +117,12 @@ stays `status = 'running'` forever.
    npm run status                     # the run's heartbeat age must read STALE (Ns)
    ```
 2. **Resume it.** `--resume` accepts a `running` row *once its heartbeat is stale* — that is the
-   recovery path, not a bug. It logs `resuming a run whose heartbeat is stale (age Ns)` and records
-   the same sentence as a warning on the run.
+   recovery path, not a bug. It logs `resuming a run whose heartbeat is stale (age Ns)` immediately,
+   and carries the same sentence as a warning that reaches `runs.summary` **when this segment ends**,
+   not now. Until then `runs.summary` still describes the *previous* segment, so checking the
+   warnings array straight after a resume shows the old one — that is expected, and is not the
+   control having failed. To confirm the resume took, read the log line and `params.resumes`, which
+   gains a timestamp per resume.
    ```bash
    npm run paper -- ma-crossover SNEK --resume <run-id>
    ```
