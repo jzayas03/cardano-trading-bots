@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { createPool } from '@ctb/db';
 import type { Logger } from 'pino';
 import { loadConfig } from '../config.js';
+import { objectKey, R2Store, readR2Setting, R2_VARS } from '../r2.js';
 import {
   assertDroppable, compareCounts, dumpFileName, manifestFileName, newestDump, pruneOldDumps,
   verifyDbName, type Manifest, type TableCount,
@@ -113,6 +114,30 @@ export async function backupCommand(log: Logger, args: readonly string[]): Promi
     };
     writeFileSync(join(dir, manifestFileName(file)), `${JSON.stringify(manifest, null, 2)}\n`);
 
+    // Off-machine copy. A same-disk backup survives a bad migration and a wrong DROP; it does not
+    // survive the disk. Partial R2 config throws rather than silently staying local — believing you
+    // have off-site backups when you do not is worse than knowing you have none.
+    const r2 = readR2Setting(process.env);
+    if (r2.kind === 'partial') {
+      throw new Error(`R2 is half-configured: ${r2.missing.join(', ')} missing. Set all of ${R2_VARS.join(', ')} or none.`);
+    }
+    if (r2.kind === 'configured') {
+      const store = new R2Store(r2.config);
+      const manifestJson = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+      await store.put(objectKey(file), readFileSync(path));
+      await store.put(objectKey(manifestFileName(file)), manifestJson, 'application/json');
+      log.info({ bucket: r2.config.bucket, key: objectKey(file) }, 'uploaded to R2');
+      console.log(`        uploaded to r2://${r2.config.bucket}/${objectKey(file)}`);
+      // Retention applies to the remote too, or the bucket grows forever while the local directory
+      // stays trimmed and nobody notices until a bill arrives.
+      const remote = await store.list();
+      const remoteDumps = remote.filter((k) => k.endsWith('.dump')).map((k) => k.replace(/^ctb\//, ''));
+      for (const f of pruneOldDumps(remoteDumps, keep)) {
+        await store.delete(objectKey(f));
+        await store.delete(objectKey(manifestFileName(f)));
+      }
+    }
+
     const removed = pruneOldDumps(readdirSync(dir), keep);
     for (const f of removed) {
       rmSync(join(dir, f), { force: true });
@@ -144,11 +169,35 @@ export async function backupCommand(log: Logger, args: readonly string[]): Promi
  * The comparison is against the MANIFEST, never against the live database — the live database has
  * moved on by every boundary since, and comparing to it would report drift as corruption.
  */
-export async function backupVerifyCommand(log: Logger, args: readonly string[]): Promise<void> {
+export async function backupVerifyCommand(log: Logger, argv: readonly string[]): Promise<void> {
+  let args: readonly string[] = argv;
   const cfg = loadConfig(process.env, { blockfrost: false });
   const dir = arg(args, '--dir') ?? DEFAULT_DIR;
   const container = arg(args, '--container') ?? DEFAULT_CONTAINER;
   if (!existsSync(dir)) throw new Error(`no backup directory at ${dir}; run \`npm run backup\` first`);
+
+  // --remote verifies the copy that would actually be used in a disaster: the one in R2, pulled
+  // back down. A verify that only ever reads the local file proves the local file, which is the
+  // copy least likely to be there when it matters.
+  if (args.includes('--remote')) {
+    const r2 = readR2Setting(process.env);
+    if (r2.kind !== 'configured') {
+      throw new Error(r2.kind === 'absent'
+        ? `--remote needs R2 configured: set ${R2_VARS.join(', ')}`
+        : `R2 is half-configured: ${r2.missing.join(', ')} missing`);
+    }
+    const store = new R2Store(r2.config);
+    const keys = await store.list();
+    const newestKey = keys.filter((k) => k.endsWith('.dump')).sort().at(-1);
+    if (!newestKey) throw new Error(`no .dump objects under ctb/ in r2://${r2.config.bucket}`);
+    const name = newestKey.replace(/^ctb\//, '');
+    mkdirSync(dir, { recursive: true });
+    log.info({ bucket: r2.config.bucket, key: newestKey }, 'downloading from R2 to verify the remote copy');
+    writeFileSync(join(dir, name), await store.get(newestKey));
+    writeFileSync(join(dir, manifestFileName(name)), await store.get(objectKey(manifestFileName(name))));
+    console.log(`downloaded r2://${r2.config.bucket}/${newestKey}`);
+    args = [...args.filter((a) => a !== '--remote'), '--file', name];
+  }
 
   const chosen = arg(args, '--file') ?? newestDump(readdirSync(dir));
   if (!chosen) throw new Error(`no .dump files in ${dir}; run \`npm run backup\` first`);

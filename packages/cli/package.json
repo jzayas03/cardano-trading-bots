@@ -12,6 +12,7 @@
     "@ctb/reports": "*",
     "@ctb/sim-executor": "*",
     "@ctb/universe": "*",
+    "aws4fetch": "^1.0.20",
     "dotenv": "^16.4.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
