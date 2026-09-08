@@ -1,11 +1,12 @@
 import { statfsSync } from 'node:fs';
 import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool } from '@ctb/db';
-import { checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, verdict, type Check, type PaperRunState } from '@ctb/reports';
+import { checkBackupFreshness, checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, verdict, type Check, type PaperRunState } from '@ctb/reports';
 import type { Logger } from 'pino';
 import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';
 import { digestLines } from '../digest.js';
 import { listProcessesWithAge } from '../ps.js';
+import { newestBackupAgeHours } from '../backupAge.js';
 
 /**
  * `watch` is `doctor` inverted: it says nothing when everything is fine, and one line per problem
@@ -36,6 +37,8 @@ export async function watchCommand(log: Logger, args: readonly string[]): Promis
 
     const now = new Date();
     checks.push(...checkDigestLines(digestLines(await new PgSnapshotRepo(pool).digestInput(intervalSec, [...cfg.venues], now), now)));
+
+    checks.push(checkBackupFreshness(newestBackupAgeHours()));
 
     const fs = statfsSync(process.cwd());
     checks.push(checkDisk(fs.bavail * fs.bsize, process.cwd()));
