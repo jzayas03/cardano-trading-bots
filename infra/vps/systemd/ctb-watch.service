@@ -1,0 +1,10 @@
+[Unit]
+Description=CTB watchdog (silent when healthy, non-zero exit is the alarm)
+
+[Service]
+Type=oneshot
+User=ctb
+WorkingDirectory=/home/ctb/cardano-trading-bots
+ExecStart=/usr/bin/npm run watch
+StandardOutput=append:/home/ctb/logs/watch.log
+StandardError=append:/home/ctb/logs/watch.log
