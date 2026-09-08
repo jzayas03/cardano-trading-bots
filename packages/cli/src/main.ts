@@ -8,6 +8,7 @@ import { collectCommand } from './commands/collect.js';
 import { dashboardCommand } from './commands/dashboard.js';
 import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { leadlagCommand } from './commands/leadlag.js';
+import { opportunityCommand } from './commands/opportunity.js';
 import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
 import { reportCommand } from './commands/report.js';
@@ -48,6 +49,8 @@ async function main(): Promise<void> {
       return dashboardCommand(log, rest);
     case 'leadlag':
       return leadlagCommand(log, rest);
+    case 'opportunity':
+      return opportunityCommand(log, rest);
     case 'watch':
       return watchCommand(log, rest);
     case 'backup':
@@ -61,7 +64,8 @@ async function main(): Promise<void> {
         'report <run-id> [--day YYYY-MM-DD] [--csv <dir>] | report --compare <ids>|' +
         'paper <strategy> <TICKER> [--cash-ada N] [--resume RUN_ID] [--interval-sec COLLECT_INTERVAL_SECONDS] [--allow-interval-mismatch] [--grace-sec 60] [--max-gap-min 15] [--max-tick-failures 12] [--rehearsal] [--param k=v]...|' +
         'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]|' +
-        'dashboard [--port 3210] | watch [--verbose] | leadlag [--max-lag 6] [--since ISO]>',
+        'dashboard [--port 3210] | watch [--verbose] | leadlag [--max-lag 6] [--since ISO] |\n' +
+        ' opportunity [TICKER|ALL] [--since ISO] [--floor-bps 216] [--windows 1800,7200,86400]>',
       );
       process.exitCode = 2;
   }

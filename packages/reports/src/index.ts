@@ -7,3 +7,4 @@ export { compareRows, compareRunRows, COMPARE_REHEARSAL_BANNER, MIXED_TOKENS_WAR
 export { gridCombinations, gridRows, gridWarning, type GridInput, type GridRow } from './grid.js';
 export * from './watch.js';
 export * from './leadlag.js';
+export * from './opportunity.js';
