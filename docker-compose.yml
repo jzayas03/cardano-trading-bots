@@ -2,6 +2,15 @@ services:
   postgres:
     image: postgres:16
     container_name: ctb_postgres
+    # Without this Docker does NOT bring the container back after a host reboot, and every service
+    # that depends on it starts into a connection refused. Found by the M5.4 reboot test on
+    # 2026-09-08: the box came back with docker active, ufw up, swap mounted, timers scheduled and
+    # all four units starting — and no database. The units failed loudly, which is the only reason
+    # it was obvious.
+    #
+    # `unless-stopped`, not `always`: a container stopped on purpose (`docker compose stop` during a
+    # cutover or a restore) must stay stopped across a reboot rather than racing the operator.
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ctb
       POSTGRES_PASSWORD: ctb_local_only
