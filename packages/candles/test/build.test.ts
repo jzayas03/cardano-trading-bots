@@ -73,3 +73,79 @@ describe('buildCandles', () => {
     expect(() => buildCandles(SNEK, 0, [snap({ tickTs: t(0), poolId: 'p' })], { tickTs: t(5), poolId: 'p', closeReserveBase: 1n, closeReserveQuote: 1n })).toThrow(/earlier/);
   });
 });
+
+/**
+ * Bucketing several snapshots into one candle — the only way this project gets a real high and low.
+ * Before it, every candle we produced had open = high = low = close: 2,306 of 2,306 on 2026-09-08,
+ * against 0.2% in trade-derived data.
+ */
+describe('buildCandles with a candle interval', () => {
+  const CANDLE_SEC = 900;
+  // Price = quote/base. Rising base at fixed quote means a FALLING price, so these are deliberately
+  // out of order: 100 -> 90 (up) -> 110 (down) -> 95, within one 15-minute bucket.
+  const inOneBucket = [
+    snap({ tickTs: t(0), poolId: 'p', reserveBase: 100n, reserveQuote: 1_000n, tvlLovelace: 1_000n }),
+    snap({ tickTs: t(1), poolId: 'p', reserveBase: 90n,  reserveQuote: 1_000n, tvlLovelace: 1_000n }),
+    snap({ tickTs: t(2), poolId: 'p', reserveBase: 110n, reserveQuote: 1_000n, tvlLovelace: 1_000n }),
+    snap({ tickTs: t(3), poolId: 'p', reserveBase: 95n,  reserveQuote: 1_000n, tvlLovelace: 1_000n }),
+  ];
+
+  it('emits ONE candle for the bucket, with a real range', () => {
+    const rows = buildCandles(SNEK, 0, inOneBucket, undefined, CANDLE_SEC);
+    expect(rows).toHaveLength(1);
+    const c = rows[0]!;
+    expect(Number(c.high)).toBeGreaterThan(Number(c.low));   // the whole point
+    // price = (quote/1e6)/(base/10^decimals); decimals=0 here, so quote/(base*1e6).
+    expect(Number(c.high)).toBeCloseTo(1000 / (90 * 1e6), 12);   // highest price = smallest base
+    expect(Number(c.low)).toBeCloseTo(1000 / (110 * 1e6), 12);
+  });
+
+  it('opens on the FIRST sample and closes on the LAST, not on the deepest', () => {
+    const rows = buildCandles(SNEK, 0, inOneBucket, undefined, CANDLE_SEC);
+    expect(Number(rows[0]!.open)).toBeCloseTo(1000 / (100 * 1e6), 12);
+    expect(Number(rows[0]!.close)).toBeCloseTo(1000 / (95 * 1e6), 12);
+    expect(rows[0]!.closeReserveBase).toBe(95n);             // reserves come from the close too
+  });
+
+  it('stamps the candle at the bucket boundary, so candles land on a regular grid', () => {
+    const rows = buildCandles(SNEK, 0, inOneBucket, undefined, CANDLE_SEC);
+    expect(rows[0]!.tickTs.getTime() % (CANDLE_SEC * 1000)).toBe(0);
+  });
+
+  it('takes prices ONLY from the deepest pool, never mixing two markets into one range', () => {
+    const rows = buildCandles(SNEK, 0, [
+      ...inOneBucket,
+      // A shallower pool quoting a wildly different price in the same bucket. If its price leaked
+      // into the high, the candle would describe a market we never traded.
+      snap({ tickTs: t(2), poolId: 'shallow', reserveBase: 1n, reserveQuote: 1_000_000n, tvlLovelace: 1n }),
+    ], undefined, CANDLE_SEC);
+    expect(rows[0]!.poolId).toBe('p');
+    expect(Number(rows[0]!.high)).toBeCloseTo(1000 / (90 * 1e6), 12);
+  });
+
+  it('splits across buckets and keeps them ascending', () => {
+    const rows = buildCandles(SNEK, 0, [...inOneBucket,
+      snap({ tickTs: t(16), poolId: 'p', reserveBase: 80n, reserveQuote: 1_000n, tvlLovelace: 1_000n }),
+    ], undefined, CANDLE_SEC);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.tickTs.getTime()).toBeGreaterThan(rows[0]!.tickTs.getTime());
+  });
+
+  it('a single sample in a bucket still yields o=h=l=c, exactly as before bucketing existed', () => {
+    const one = [snap({ tickTs: t(3), poolId: 'p', reserveBase: 100n, reserveQuote: 1_000n })];
+    const c = buildCandles(SNEK, 0, one, undefined, CANDLE_SEC)[0]!;
+    expect([c.open, c.high, c.low]).toEqual([c.close, c.close, c.close]);
+  });
+
+  it('compares prices numerically, not as the decimal STRINGS they are formatted to', () => {
+    // priceAdaPerToken returns an 18-place decimal string, where '9…' sorts after '10…'. Selecting
+    // extremes lexically would pick the wrong high whenever the digit count changes.
+    const rows = buildCandles(SNEK, 0, [
+      snap({ tickTs: t(0), poolId: 'p', reserveBase: 1n, reserveQuote: 9n, tvlLovelace: 9n }),   // price 9
+      snap({ tickTs: t(1), poolId: 'p', reserveBase: 1n, reserveQuote: 10n, tvlLovelace: 9n }),  // price 10
+    ], undefined, CANDLE_SEC);
+    // Asserted as a RATIO so the assertion cannot be wrong about magnitude the way my first
+    // attempt was: whatever the scale, the high must be 10/9 of the low.
+    expect(Number(rows[0]!.high) / Number(rows[0]!.low)).toBeCloseTo(10 / 9, 9);
+  });
+});
