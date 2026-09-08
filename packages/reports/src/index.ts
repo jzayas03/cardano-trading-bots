@@ -6,3 +6,4 @@ export { DEFAULT_COLLECT_INTERVAL_SEC, DEFAULT_GRACE_SEC, heartbeatAgeCell, isHe
 export { compareRows, compareRunRows, COMPARE_REHEARSAL_BANNER, MIXED_TOKENS_WARNING, sweepRows, type CompareInput, type CompareRow, type CompareRunInput, type CompareRunRow, type SweepInput, type SweepRow } from './compare.js';
 export { gridCombinations, gridRows, gridWarning, type GridInput, type GridRow } from './grid.js';
 export * from './watch.js';
+export * from './leadlag.js';
