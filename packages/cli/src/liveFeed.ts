@@ -54,7 +54,9 @@ export async function* liveCandleFeed(d: LiveFeedDeps): AsyncIterable<Candle> {
     let skippedStale = 0;
     let emptyBoundary = false;
     try {
-      built = (await buildCandlesForToken(d.repo, d.token)).built;
+      // Bucket at the run's own interval, so several snapshots inside one boundary become ONE
+      // candle with a real high and low rather than several degenerate ones.
+      built = (await buildCandlesForToken(d.repo, d.token, d.intervalSec)).built;
       const from = lastYielded ? new Date(lastYielded.getTime() + 1) : new Date(0);
       const rows = await d.repo.readCandles(d.token.unit, from, boundary);
       for (const r of rows) {

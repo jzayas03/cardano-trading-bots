@@ -120,11 +120,13 @@ export class PgCandleRepo implements CandleRepo {
 export async function buildCandlesForToken(
   repo: CandleRepo,
   token: Pick<TokenSpec, 'unit' | 'decimals' | 'ticker'>,
+  /** Bucket several snapshots into one candle. 0 keeps one candle per snapshot, exactly as before. */
+  candleIntervalSec = 0,
 ): Promise<{ built: number; from: Date | null; to: Date | null }> {
   return repo.transaction(async (tx) => {
     const previous = await tx.lastCandle(token.unit);
     const snapshots = await tx.readSnapshotsSince(token.unit, previous?.tickTs ?? null);
-    const rows = buildCandles(token.unit, token.decimals, snapshots, previous ?? undefined);
+    const rows = buildCandles(token.unit, token.decimals, snapshots, previous ?? undefined, candleIntervalSec);
     const built = await tx.insertCandles(rows);
     return { built, from: rows[0]?.tickTs ?? null, to: rows.at(-1)?.tickTs ?? null };
   });

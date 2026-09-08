@@ -16,7 +16,7 @@ export async function candlesCommand(log: Logger, opts: { ticker?: string }): Pr
     const repo = new PgCandleRepo(db);
     const out: Array<{ ticker: string; built: number; from: string; to: string }> = [];
     for (const t of tokens) {
-      const r = await buildCandlesForToken(repo, t);
+      const r = await buildCandlesForToken(repo, t, cfg.intervalSec);
       out.push({ ticker: t.ticker, built: r.built, from: r.from?.toISOString() ?? '-', to: r.to?.toISOString() ?? '-' });
     }
     console.table(out);
