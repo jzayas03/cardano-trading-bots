@@ -522,8 +522,24 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
     );
   }
 
-  async refresh(): Promise<SourceResult> {
-    const entries = [...this.known.entries()];
+  /** The non-ADA side of a pool, which is the token it belongs to. */
+  private static baseUnitOf(shape: LiquidityPoolShape): string | null {
+    for (const a of [shape.assetA, shape.assetB]) {
+      if (a !== 'lovelace') return `${a.policyId}${a.nameHex}`;
+    }
+    return null; // an ADA/ADA pool cannot exist; treat it as belonging to no token
+  }
+
+  async refresh(onlyBaseUnits?: ReadonlySet<string>): Promise<SourceResult> {
+    const all = [...this.known.entries()];
+    // Filtering here rather than in the caller keeps the known set intact: a token skipped this
+    // tick is still refreshed on the next full one, and is never quietly forgotten.
+    const entries = onlyBaseUnits
+      ? all.filter(([, shape]) => {
+          const u = DexterPoolSource.baseUnitOf(shape);
+          return u !== null && onlyBaseUnits.has(u);
+        })
+      : all;
     const settled = await Promise.allSettled(
       entries.map(([, shape]) => this.fetcher.poolState(shape)),
     );

@@ -35,6 +35,9 @@ export function isPoolFailure(err: RunError): boolean {
 }
 
 export interface TickDeps {
+  /** Refresh only these base units this tick. Omit for every known pool. Lets the traded token be
+   * sampled far more often than the rest inside one Blockfrost budget. */
+  refreshOnly?: ReadonlySet<string>;
   source: PoolSource;
   repo: SnapshotRepo;
   pairs: Pair[];
@@ -93,7 +96,7 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
 
   let result: SourceResult;
   try {
-    result = stale ? await d.source.discover(d.pairs) : await d.source.refresh();
+    result = stale ? await d.source.discover(d.pairs) : await d.source.refresh(d.refreshOnly);
   } catch (err) {
     errors.push({ scope: stale ? 'discover' : 'refresh', message: (err as Error).message ?? String(err) });
     return finish();

@@ -6,6 +6,10 @@ export { DEFAULT_COLLECT_INTERVAL_SEC } from '@ctb/reports';
 
 export interface Config {
   databaseUrl: string;
+  /** Ticker sampled every focus interval; null disables tiered sampling entirely. */
+  focusTicker: string | null;
+  /** 0 when tiered sampling is off. */
+  focusIntervalSec: number;
   dashboardDatabaseUrl: string;
   blockfrostProjectId: string | null;
   intervalSec: number;
@@ -61,6 +65,17 @@ const schema = z.object({
     ),
   // Whole ADA. 0 or unset keeps every token, which is the behaviour before this option existed.
   // See DexterPoolSourceOptions.minDepthLovelace for the measurement that motivates it.
+  // The one token sampled every tick. Several samples inside one candle are the only way a real
+  // high and low exist — before this, 2,306 of 2,306 candles had open = high = low = close. Unset
+  // means every token is sampled at COLLECT_INTERVAL_SECONDS, exactly as before.
+  COLLECT_FOCUS_TICKER: z.preprocess((v) => (v === '' ? undefined : v), z.string().optional()),
+  // How often the focus token is sampled. Must divide COLLECT_INTERVAL_SECONDS, so a whole number
+  // of samples lands in each candle and no sample straddles a boundary.
+  COLLECT_FOCUS_INTERVAL_SECONDS: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 0 : Number(v)))
+    .refine((n) => n === 0 || (Number.isInteger(n) && n >= 20), 'COLLECT_FOCUS_INTERVAL_SECONDS must be 0 or an integer >= 20'),
   COLLECT_MIN_DEPTH_ADA: z
     .string()
     .optional()
@@ -85,6 +100,20 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     if (unknown.length > 0) throw new Error(`config: COLLECT_VENUES: unknown venue(s): ${unknown.join(', ')}`);
     venues = names as DexName[];
   }
+  // Fail closed on a focus interval that does not divide the candle interval: samples would
+  // straddle boundaries and a candle's "first" and "last" would drift, which is a silently wrong
+  // open and close rather than an error.
+  if (v.COLLECT_FOCUS_INTERVAL_SECONDS > 0) {
+    if (!v.COLLECT_FOCUS_TICKER) {
+      throw new Error('COLLECT_FOCUS_INTERVAL_SECONDS is set but COLLECT_FOCUS_TICKER is not; set both or neither');
+    }
+    if (v.COLLECT_INTERVAL_SECONDS % v.COLLECT_FOCUS_INTERVAL_SECONDS !== 0) {
+      throw new Error(`COLLECT_FOCUS_INTERVAL_SECONDS (${v.COLLECT_FOCUS_INTERVAL_SECONDS}) must divide COLLECT_INTERVAL_SECONDS (${v.COLLECT_INTERVAL_SECONDS})`);
+    }
+  }
+  if (v.COLLECT_FOCUS_TICKER && v.COLLECT_FOCUS_INTERVAL_SECONDS === 0) {
+    throw new Error('COLLECT_FOCUS_TICKER is set but COLLECT_FOCUS_INTERVAL_SECONDS is not; set both or neither');
+  }
   return {
     databaseUrl: v.DATABASE_URL,
     dashboardDatabaseUrl: v.DASHBOARD_DATABASE_URL ?? deriveDashboardUrl(v.DATABASE_URL),
@@ -94,5 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     venues,
     refreshPolicy: v.COLLECT_REFRESH,
     minDepthLovelace: BigInt(Math.round(v.COLLECT_MIN_DEPTH_ADA * 1_000_000)),
+    focusTicker: v.COLLECT_FOCUS_TICKER ?? null,
+    focusIntervalSec: v.COLLECT_FOCUS_INTERVAL_SECONDS,
   };
 }

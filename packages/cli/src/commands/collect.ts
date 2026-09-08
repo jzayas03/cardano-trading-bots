@@ -29,9 +29,32 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   process.once('SIGTERM', () => onSignal('SIGTERM'));
 
   log.info(
-    { pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues, refreshPolicy: cfg.refreshPolicy, minDepthAda: Number(cfg.minDepthLovelace) / 1_000_000 },
+    { pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues, refreshPolicy: cfg.refreshPolicy,
+      minDepthAda: Number(cfg.minDepthLovelace) / 1_000_000, focusTicker: cfg.focusTicker, focusIntervalSec: cfg.focusIntervalSec },
     'collector starting',
   );
+
+  // Tiered sampling. The loop runs at the FOCUS interval and refreshes only the focus token, except
+  // every Nth tick where it refreshes everything — so the traded token gets N samples per candle
+  // (a real high and low) while the rest stay fresh enough for the screener, inside one budget.
+  //
+  //   ~15 calls per pool per tick: 1 token at 60s = 21,600/day, 19 at 3600s = 6,840, discovery
+  //   5,692. About 34,100 against the ~34,200 a flat 900s across 20 tokens already costs.
+  const focusUnit = cfg.focusTicker
+    ? universe.pairs.find((p) => p.base.ticker === cfg.focusTicker)?.base.unit ?? null
+    : null;
+  if (cfg.focusTicker && !focusUnit) {
+    // Fail closed: a typo here would silently collect nothing at the fine interval and look healthy.
+    throw new Error(`COLLECT_FOCUS_TICKER=${cfg.focusTicker} is not in the universe`);
+  }
+  const tiered = focusUnit !== null && cfg.focusIntervalSec > 0;
+  const loopSec = tiered ? cfg.focusIntervalSec : cfg.intervalSec;
+  const ticksPerCandle = tiered ? cfg.intervalSec / cfg.focusIntervalSec : 1;
+  const focusOnly = focusUnit ? new Set([focusUnit]) : undefined;
+  if (tiered) {
+    log.info({ focusTicker: cfg.focusTicker, loopSec, ticksPerCandle }, 'tiered sampling: focus token every tick, all tokens every Nth');
+  }
+  let tickIndex = 0;
   // The immediate first tick has no boundary to pin to, so it still derives tickTs from now().
   // Every tick after that writes the exact boundary the loop slept toward (computed below, BEFORE
   // sleeping) instead of re-deriving one from now() on wake — an early wake re-derived from now()
@@ -39,7 +62,17 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
   let pendingTickTs: Date | undefined;
   try {
     do {
-      const tickDeps = { source, repo, pairs: universe.pairs, log, now: () => new Date(), intervalSec: cfg.intervalSec, rediscoverAfterMs: REDISCOVER_AFTER_MS, state, tickTs: pendingTickTs };
+      // Every Nth tick is a full refresh; the rest touch only the focus token. Tick 0 is full, so a
+      // fresh start always has every pool before any partial tick runs.
+      const fullTick = !tiered || tickIndex % ticksPerCandle === 0;
+      const tickDeps = {
+        source, repo, pairs: universe.pairs, log, now: () => new Date(),
+        // The snapshot's own bucket is the LOOP interval, so several samples land inside one candle
+        // at distinct tick_ts instead of colliding on the primary key.
+        intervalSec: loopSec,
+        rediscoverAfterMs: REDISCOVER_AFTER_MS, state, tickTs: pendingTickTs,
+        refreshOnly: fullTick ? undefined : focusOnly,
+      };
       try {
         await runTick(tickDeps);
       } catch (err) {
@@ -48,9 +81,10 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
       }
       if (opts.once || stop.signal.aborted) break;
       const beforeSleep = new Date();
-      const next = new Date(bucketTick(beforeSleep, cfg.intervalSec).getTime() + cfg.intervalSec * 1000);
+      const next = new Date(bucketTick(beforeSleep, loopSec).getTime() + loopSec * 1000);
       await sleep(next.getTime() - beforeSleep.getTime(), stop.signal);
       pendingTickTs = next;
+      tickIndex += 1;
     } while (!stop.signal.aborted);
   } finally {
     await db.end();
