@@ -25,7 +25,9 @@
     "report": "tsx packages/cli/src/main.ts report",
     "paper": "tsx packages/cli/src/main.ts paper",
     "dev:fake-collector": "tsx packages/cli/src/main.ts dev:fake-collector",
-    "dashboard": "tsx packages/cli/src/main.ts dashboard"
+    "dashboard": "tsx packages/cli/src/main.ts dashboard",
+    "backup": "tsx packages/cli/src/main.ts backup",
+    "backup:verify": "tsx packages/cli/src/main.ts backup:verify"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
