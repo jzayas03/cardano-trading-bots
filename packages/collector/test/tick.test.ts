@@ -58,10 +58,13 @@ class FakeRepo implements SnapshotRepo {
   constructor(private readonly throwOnInsert = false) {}
   async syncTokens() {}
   async startRun() { return this.nextId++; }
+  /** Rows to silently drop on insert, imitating ON CONFLICT DO NOTHING on (pool_id, tick_ts). */
+  dropOnInsert = 0;
   async insertSnapshots(_runId: number, rows: SnapshotRow[]) {
     if (this.throwOnInsert) throw new Error('db down');
-    this.rows.push(...rows);
-    return rows.length;
+    const kept = rows.slice(0, Math.max(0, rows.length - this.dropOnInsert));
+    this.rows.push(...kept);
+    return kept.length;
   }
   async finishRun(_runId: number, _at: Date, s: RunSummary) { this.summaries.push(s); }
   async lastRuns() { return []; }
@@ -201,6 +204,34 @@ describe('runTick', () => {
     // bucketTick(15:41:00Z, 300s) = 15:40:00Z: the bucket the clock is really in now, not a
     // backfill of every boundary missed in between.
     expect(repo.rows[0]?.tickTs).toEqual(new Date('2026-09-05T15:40:00Z'));
+  });
+
+  // The cutover found this: `88 attempted, 0 failed, 68 written` in a run row that looked clean.
+  // insertSnapshots is ON CONFLICT DO NOTHING, so a row vanishes whenever this tick's bucket
+  // already holds that pool — and nothing else in the system says a word about it.
+  it('warns when attempted != written + failed, naming the number that went missing', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a'), pool('MinswapV2', 'b'), pool('MinswapV2', 'c')]);
+    const repo = new FakeRepo();
+    repo.dropOnInsert = 2;
+    const warnings: unknown[] = [];
+    const spyLog = { info: () => {}, warn: (o: unknown) => warnings.push(o), error: () => {} };
+    const s = await runTick({ ...deps(source, repo), log: spyLog });
+
+    expect(s.poolsAttempted).toBe(3);
+    expect(s.poolsWritten).toBe(1);
+    expect(s.poolsFailed).toBe(0);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({ attempted: 3, written: 1, failed: 0, unaccounted: 2 });
+  });
+
+  it('says nothing when the accounting reconciles', async () => {
+    const source = new FakeSource([pool('MinswapV2', 'a'), pool('MinswapV2', 'b')]);
+    const repo = new FakeRepo();
+    const warnings: unknown[] = [];
+    const spyLog = { info: () => {}, warn: (o: unknown) => warnings.push(o), error: () => {} };
+    const s = await runTick({ ...deps(source, repo), log: spyLog });
+    expect(s.poolsAttempted).toBe(s.poolsWritten + s.poolsFailed);
+    expect(warnings).toHaveLength(0);
   });
 
   // F16: insertSnapshots is the one thing runTick must NOT swallow — a write failure there means

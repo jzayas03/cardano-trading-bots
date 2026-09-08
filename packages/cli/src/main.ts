@@ -64,7 +64,26 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err: Error) => {
-  log.error({ err: err.message }, 'command failed');
+/**
+ * Everything useful about a thrown value, because `err.message` alone can be empty.
+ *
+ * `pg` fails a connection with an AggregateError whose own message is '' and whose detail lives in
+ * `.errors` — so a collector that died because Postgres was down logged `{"err":""} command failed`
+ * and told the operator nothing. Seen twice on the M5 host, 2026-09-08.
+ */
+export function describeError(err: unknown): Record<string, unknown> {
+  if (!(err instanceof Error)) return { err: String(err) };
+  const out: Record<string, unknown> = { err: err.message || err.name || String(err), name: err.name };
+  if (err.stack) out.stack = err.stack.split('\n').slice(0, 4).join(' | ');
+  const agg = err as { errors?: unknown[] };
+  if (Array.isArray(agg.errors)) {
+    out.causes = agg.errors.map((e) => (e instanceof Error ? e.message || e.name : String(e)));
+  }
+  if (err.cause instanceof Error) out.cause = err.cause.message || err.cause.name;
+  return out;
+}
+
+main().catch((err: unknown) => {
+  log.error(describeError(err), 'command failed');
   process.exitCode = 1;
 });

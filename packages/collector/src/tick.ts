@@ -135,5 +135,20 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   }
   summary.poolsFailed = summary.poolsAttempted - rows.length;
   summary.poolsWritten = await d.repo.insertSnapshots(runId, rows);
+  // attempted = written + failed, or something was dropped between mapping and the database and
+  // NOTHING else would say so. `insertSnapshots` is ON CONFLICT DO NOTHING on (pool_id, tick_ts),
+  // so a row silently disappears whenever this tick's bucket already holds that pool — which is
+  // exactly what happened at the M5 cutover: the restored dump carried the old host's 19:30 tick,
+  // and the new host's 20 MinswapV2 rows for the same bucket vanished into a run row that read
+  // `88 attempted, 0 failed, 68 written` and looked clean.
+  //
+  // That instance was benign. The point is that a harmful one would look identical.
+  const unaccounted = summary.poolsAttempted - summary.poolsWritten - summary.poolsFailed;
+  if (unaccounted !== 0) {
+    d.log.warn(
+      { runId, tickTs, attempted: summary.poolsAttempted, written: summary.poolsWritten, failed: summary.poolsFailed, unaccounted },
+      'pool accounting does not reconcile; rows were dropped on insert (usually this tick already had snapshots for those pools)',
+    );
+  }
   return finish();
 }
