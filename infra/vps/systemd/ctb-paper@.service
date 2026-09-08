@@ -17,7 +17,7 @@ User=ctb
 WorkingDirectory=/home/ctb/cardano-trading-bots
 # NOT `npm run paper` directly: a restart must RESUME this strategy's existing run, never start a
 # second equity curve for it. See infra/vps/paper-start.sh.
-ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i NIGHT --max-gap-min 20
+ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i SNEK --max-gap-min 20
 Restart=always
 RestartSec=60
 StandardOutput=append:/home/ctb/logs/paper-%i.log
