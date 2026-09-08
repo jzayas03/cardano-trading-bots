@@ -46,6 +46,25 @@ fi
 systemctl enable --now docker
 docker --version
 
+say "swap"
+# Hetzner cloud servers ship with NO swap. On a 2 GB box that makes the OOM killer the first
+# response to any transient spike — and `npm ci` (esbuild + the tsx toolchain) is exactly such a
+# spike. The killer picks by heuristic, so the victim can be a paper run in the middle of writing a
+# candle's orders and equity. A swap file is not for running in; it is so a spike costs latency
+# rather than a process.
+if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ]; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  # Swap as insurance, not as memory: only lean on it under real pressure, so ordinary operation
+  # keeps the database's pages in RAM.
+  sysctl -qw vm.swappiness=10
+  grep -q '^vm.swappiness' /etc/sysctl.conf || echo 'vm.swappiness=10' >> /etc/sysctl.conf
+fi
+free -h | awk 'NR<=3 {print "  "$0}'
+
 say "service user ${SERVICE_USER}"
 id -u "$SERVICE_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$SERVICE_USER"
 usermod -aG docker "$SERVICE_USER"
