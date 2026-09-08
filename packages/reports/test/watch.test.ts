@@ -5,9 +5,9 @@ const NOW = new Date('2026-09-08T02:00:00Z');
 const INTERVAL = 900; // stale bound = 2*900 + 60 = 1860s
 
 /** THE running CLI: the node child tsx spawns with --require preflight. Exactly one per run. */
-function proc(pid: number, strategy: string, elapsedSec: number | null): RunningProcess {
+function proc(pid: number, strategy: string, elapsedSec: number | null, ticker = 'NIGHT'): RunningProcess {
   return { pid, elapsedSec,
-    command: `/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs --import file:///r/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20` };
+    command: `/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs --import file:///r/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts paper ${strategy} ${ticker} --max-gap-min 20` };
 }
 /** The tsx wrapper. Must never be counted — it is the same run. */
 function tsxWrapper(pid: number, strategy: string): RunningProcess {
@@ -17,8 +17,8 @@ function tsxWrapper(pid: number, strategy: string): RunningProcess {
 function shWrapper(pid: number, strategy: string): RunningProcess {
   return { pid, elapsedSec: 100, command: `sh -c tsx packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20` };
 }
-function run(id: number, strategyId: string, heartbeatAgeSec: number | null, status = 'running'): PaperRunState {
-  return { id, strategyId, status, heartbeatAt: heartbeatAgeSec === null ? null : new Date(NOW.getTime() - heartbeatAgeSec * 1000) };
+function run(id: number, strategyId: string, heartbeatAgeSec: number | null, status = 'running', ticker = 'NIGHT'): PaperRunState {
+  return { id, strategyId, ticker, status, heartbeatAt: heartbeatAgeSec === null ? null : new Date(NOW.getTime() - heartbeatAgeSec * 1000) };
 }
 
 describe('parseEtime', () => {
@@ -150,5 +150,23 @@ describe('checkBackupFreshness', () => {
   it('scales with the thresholds it is given rather than hardcoding a day', () => {
     expect(checkBackupFreshness(10, 8, 12).status).toBe('warn');
     expect(checkBackupFreshness(13, 8, 12).status).toBe('fail');
+  });
+});
+
+describe('a live run must not mask an orphaned one', () => {
+  // 2026-09-08, the NIGHT -> SNEK switch. Runs 140-142 were left `running` on NIGHT with nothing
+  // writing them, while 143-145 ran THE SAME THREE STRATEGIES on SNEK. Matching on strategy alone,
+  // the watchdog found a live process for each orphan and reported the system healthy.
+  it('FAILS the orphaned NIGHT run even though the same strategy is live on SNEK', () => {
+    const runs = [run(140, 'buy-and-hold', 950, 'running', 'NIGHT'), run(145, 'buy-and-hold', 60, 'running', 'SNEK')];
+    const procs = [proc(1, 'buy-and-hold', 5000, 'SNEK')];   // only the SNEK run is alive
+    const checks = checkPaperRuns(runs, procs, NOW, INTERVAL);
+    expect(checks.find((c) => c.name.includes('140'))!.status).toBe('fail');
+    expect(checks.find((c) => c.name.includes('145'))!.status).toBe('ok');
+  });
+
+  it('names the token in the check, so two runs of one strategy are distinguishable', () => {
+    const checks = checkPaperRuns([run(145, 'buy-and-hold', 60, 'running', 'SNEK')], [proc(1, 'buy-and-hold', 5000, 'SNEK')], NOW, INTERVAL);
+    expect(checks[0]!.name).toContain('buy-and-hold/SNEK');
   });
 });

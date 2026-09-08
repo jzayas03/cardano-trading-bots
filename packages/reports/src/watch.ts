@@ -22,6 +22,11 @@ import type { Check } from './doctor.js';
 export interface PaperRunState {
   id: number;
   strategyId: string;
+  /** The run's token ticker. Required: matching on strategy alone lets a LIVE run of the same
+   * strategy mask an ORPHANED one on a different token. During the NIGHT -> SNEK switch on
+   * 2026-09-08, runs 140-142 sat `running` with nothing writing them and the watchdog said
+   * nothing, because 143-145 ran the same three strategies. */
+  ticker: string | null;
   status: string;
   heartbeatAt: Date | null;
 }
@@ -77,9 +82,15 @@ function isTheProcess(p: RunningProcess): boolean {
  * this unambiguous; two runs of the same strategy would need the run id, and the check says so
  * rather than guessing.
  */
-export function processFor(strategyId: string, procs: readonly RunningProcess[]): RunningProcess[] {
-  const re = new RegExp(`main\\.ts paper (?:--\\S+ \\S+ )*${strategyId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`);
-  return procs.filter(isTheProcess).filter((p) => re.test(p.command));
+export function processFor(strategyId: string, procs: readonly RunningProcess[], ticker?: string | null): RunningProcess[] {
+  const esc = (v: string) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`main\\.ts paper (?:--\\S+ \\S+ )*${esc(strategyId)}(?:\\s|$)`);
+  const matched = procs.filter(isTheProcess).filter((p) => re.test(p.command));
+  // A process argv is `paper <strategy> <TICKER> ...`, so when the caller knows the token it can
+  // tell two runs of the same strategy apart. Without this a live run masks an orphaned one.
+  if (!ticker) return matched;
+  const tickerRe = new RegExp(`main\\.ts paper (?:--\\S+ \\S+ )*${esc(strategyId)}\\s+${esc(ticker)}(?:\\s|$)`);
+  return matched.filter((p) => tickerRe.test(p.command));
 }
 
 /**
@@ -100,8 +111,8 @@ export function checkPaperRuns(
 
   const staleBoundSec = 2 * intervalSec + graceSec;
   return running.map((r) => {
-    const name = `paper run ${r.id} (${r.strategyId})`;
-    const mine = processFor(r.strategyId, procs);
+    const name = `paper run ${r.id} (${r.strategyId}${r.ticker ? `/${r.ticker}` : ''})`;
+    const mine = processFor(r.strategyId, procs, r.ticker);
     const ageSec = r.heartbeatAt === null ? null : Math.round((now.getTime() - r.heartbeatAt.getTime()) / 1000);
 
     // A row that says `running` with nothing running it is wrong whatever the heartbeat says, and it
