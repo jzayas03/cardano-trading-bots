@@ -10,7 +10,7 @@ describe('loadConfig', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
       databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600, logLevel: 'info',
-      venues: DEFAULT_VENUES, refreshPolicy: 'deepest', minDepthLovelace: 0n,
+      venues: DEFAULT_VENUES, refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
     });
   });
 
@@ -39,7 +39,7 @@ describe('loadConfig', () => {
       intervalSec: 600,
       logLevel: 'info',
       venues: DEFAULT_VENUES,
-      refreshPolicy: 'deepest', minDepthLovelace: 0n,
+      refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
     });
     expect(() => loadConfig({ ...base, BLOCKFROST_PROJECT_ID: '' }, { blockfrost: true })).toThrow(
       /BLOCKFROST_PROJECT_ID/,
@@ -151,5 +151,37 @@ describe('COLLECT_MIN_DEPTH_ADA', () => {
   it('refuses a negative or non-numeric value rather than silently disabling itself', () => {
     expect(() => loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: '-1' }, { blockfrost: false })).toThrow(/COLLECT_MIN_DEPTH_ADA/);
     expect(() => loadConfig({ ...base, COLLECT_MIN_DEPTH_ADA: 'deep' }, { blockfrost: false })).toThrow(/COLLECT_MIN_DEPTH_ADA/);
+  });
+});
+
+describe('tiered sampling config', () => {
+  const base = { DATABASE_URL: 'postgres://x/y' } as NodeJS.ProcessEnv;
+
+  it('is off by default, so nothing changes for an existing deployment', () => {
+    const c = loadConfig(base, { blockfrost: false });
+    expect(c.focusTicker).toBeNull();
+    expect(c.focusIntervalSec).toBe(0);
+  });
+
+  it('accepts a focus token whose interval divides the candle interval', () => {
+    const c = loadConfig({ ...base, COLLECT_INTERVAL_SECONDS: '900', COLLECT_FOCUS_TICKER: 'SNEK', COLLECT_FOCUS_INTERVAL_SECONDS: '60' }, { blockfrost: false });
+    expect(c.focusTicker).toBe('SNEK');
+    expect(c.focusIntervalSec).toBe(60);
+  });
+
+  it('REFUSES an interval that does not divide the candle interval', () => {
+    // Samples would straddle boundaries and a candle's first and last would drift — a silently
+    // wrong open and close, which is worse than an error.
+    expect(() => loadConfig({ ...base, COLLECT_INTERVAL_SECONDS: '900', COLLECT_FOCUS_TICKER: 'SNEK', COLLECT_FOCUS_INTERVAL_SECONDS: '70' }, { blockfrost: false }))
+      .toThrow(/must divide/);
+  });
+
+  it('REFUSES half a configuration in either direction', () => {
+    expect(() => loadConfig({ ...base, COLLECT_FOCUS_TICKER: 'SNEK' }, { blockfrost: false })).toThrow(/set both or neither/);
+    expect(() => loadConfig({ ...base, COLLECT_FOCUS_INTERVAL_SECONDS: '60' }, { blockfrost: false })).toThrow(/set both or neither/);
+  });
+
+  it('refuses an interval too small to be a real cadence', () => {
+    expect(() => loadConfig({ ...base, COLLECT_FOCUS_TICKER: 'SNEK', COLLECT_FOCUS_INTERVAL_SECONDS: '5' }, { blockfrost: false })).toThrow(/>= 20/);
   });
 });

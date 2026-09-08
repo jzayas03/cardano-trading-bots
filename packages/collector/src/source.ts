@@ -11,8 +11,14 @@ export interface SourceResult {
 export interface PoolSource {
   /** Expensive: scans every pool of every venue on-chain, keeps the matches for `refresh`. */
   discover(pairs: Pair[]): Promise<SourceResult>;
-  /** Cheap: one provider call per known pool. */
-  refresh(): Promise<SourceResult>;
+  /**
+   * Cheap: one provider call per known pool.
+   *
+   * `onlyBaseUnits`, when given, refreshes just those tokens. That is what lets one token be
+   * sampled far more often than the rest inside the same Blockfrost budget — the point being a
+   * real high and low, which one sample per candle cannot produce.
+   */
+  refresh(onlyBaseUnits?: ReadonlySet<string>): Promise<SourceResult>;
   tip(): Promise<{ height: number; time: Date }>;
   providerCalls(): number;
   resetProviderCalls(): void;
