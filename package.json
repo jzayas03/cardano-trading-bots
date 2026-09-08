@@ -19,6 +19,7 @@
     "status": "tsx packages/cli/src/main.ts status",
     "doctor": "tsx packages/cli/src/main.ts doctor",
     "watch": "tsx packages/cli/src/main.ts watch",
+    "leadlag": "tsx packages/cli/src/main.ts leadlag",
     "candles": "tsx packages/cli/src/main.ts candles",
     "backfill": "tsx packages/cli/src/main.ts backfill",
     "backtest": "tsx packages/cli/src/main.ts backtest",
