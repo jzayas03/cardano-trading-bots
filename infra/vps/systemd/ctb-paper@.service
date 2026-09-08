@@ -18,6 +18,14 @@ WorkingDirectory=/home/ctb/cardano-trading-bots
 # NOT `npm run paper` directly: a restart must RESUME this strategy's existing run, never start a
 # second equity curve for it. See infra/vps/paper-start.sh.
 ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i SNEK --max-gap-min 20
+# SIGINT, not systemd's default SIGTERM. The clean-shutdown path — finish the candle in flight,
+# record status=finished and stop_reason=signal — is wired to SIGINT. With the default, every
+# `systemctl stop` or `restart` killed the process without it, leaving the run `running` with no
+# stop_reason: indistinguishable from a crash, and needing the recovery path to come back.
+# Observed on all three runs during the NIGHT -> SNEK switch, 2026-09-08.
+KillSignal=SIGINT
+# Long enough for the in-flight candle to commit before systemd escalates to SIGKILL.
+TimeoutStopSec=120
 Restart=always
 RestartSec=60
 StandardOutput=append:/home/ctb/logs/paper-%i.log

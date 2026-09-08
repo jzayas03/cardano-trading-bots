@@ -28,10 +28,12 @@ export async function watchCommand(log: Logger, args: readonly string[]): Promis
     const procs = listProcessesWithAge() ?? [];
     checks.push(...checkProcesses(procs.map((p) => ({ pid: p.pid, command: p.command })), process.pid));
 
-    const runs = await pool.query<{ id: number; strategy_id: string; status: string; heartbeat_at: Date | null }>(
-      `SELECT id, strategy_id, status, heartbeat_at FROM runs WHERE mode = 'paper' AND status = 'running' ORDER BY id`,
+    const runs = await pool.query<{ id: number; strategy_id: string; ticker: string | null; status: string; heartbeat_at: Date | null }>(
+      `SELECT r.id, r.strategy_id, t.ticker, r.status, r.heartbeat_at
+         FROM runs r LEFT JOIN tokens t ON t.unit = r.base_unit
+        WHERE r.mode = 'paper' AND r.status = 'running' ORDER BY r.id`,
     );
-    const states: PaperRunState[] = runs.rows.map((r) => ({ id: r.id, strategyId: r.strategy_id, status: r.status, heartbeatAt: r.heartbeat_at }));
+    const states: PaperRunState[] = runs.rows.map((r) => ({ id: r.id, strategyId: r.strategy_id, ticker: r.ticker, status: r.status, heartbeatAt: r.heartbeat_at }));
     checks.push(...checkPaperRuns(states, procs, new Date(), intervalSec));
 
 
