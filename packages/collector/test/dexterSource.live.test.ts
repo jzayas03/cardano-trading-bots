@@ -19,8 +19,8 @@ const SNEK = {
   quote: 'lovelace' as const,
 };
 
-function makeSource(): DexterPoolSource {
-  return new DexterPoolSource({ blockfrostProjectId: process.env.BLOCKFROST_PROJECT_ID as string, log, venues: ['SundaeSwapV3'] });
+function makeSource(overrides: { discoveryRetryDelaysMs?: number[] } = {}): DexterPoolSource {
+  return new DexterPoolSource({ blockfrostProjectId: process.env.BLOCKFROST_PROJECT_ID as string, log, venues: ['SundaeSwapV3'], ...overrides });
 }
 
 describe.skipIf(!LIVE)('DexterPoolSource (live Blockfrost)', () => {
@@ -49,12 +49,20 @@ describe.skipIf(!LIVE)('DexterPoolSource (live Blockfrost)', () => {
     expect(refreshCalls).toBeLessThan(discoverCalls);
   }, 180_000);
 
+  // This test walks the retry path on purpose: SNEK has no ADA pool here, so discovery comes back
+  // empty and #25 retries before reporting a failure. With the production delays that is
+  // 15 + 30 + 60 = 105 seconds of sleeping on top of four full SundaeSwapV3 sweeps, which is what
+  // timed out the original 180 s budget on 2026-09-08 — the timeout predated the retry feature.
+  // The delays are shortened rather than removed: the assertion is about the FINAL outcome after
+  // retries are exhausted, which does not depend on how long each wait was, while removing them
+  // entirely would stop exercising the retry path this test is here to cover. The four sweeps are
+  // the irreducible cost and are what the raised timeout is for.
   it('reports a venue with no ADA pool for the token as one counted failure, not a silent zero', async () => {
-    const source = makeSource();
+    const source = makeSource({ discoveryRetryDelaysMs: [100, 100, 100] });
     const d = await source.discover([SNEK]);
     expect(d.pools).toEqual([]);
     expect(d.failures).toHaveLength(1);
     expect(d.failures[0]?.scope).toBe('discover:SundaeSwapV3');
     expect(d.failures[0]?.message).toMatch(/returned no pools/);
-  }, 180_000);
+  }, 300_000);
 });
