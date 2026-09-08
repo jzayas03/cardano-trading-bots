@@ -1,0 +1,11 @@
+[Unit]
+Description=CTB backup, daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 UTC
+# If the host was down at 03:30, run once on the next boot rather than skipping the day — the same
+# catch-up the launchd agent gets from StartCalendarInterval.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

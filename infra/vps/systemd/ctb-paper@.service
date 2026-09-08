@@ -1,0 +1,27 @@
+[Unit]
+Description=CTB paper run (%i)
+After=network-online.target docker.service ctb-collector.service
+Wants=network-online.target
+Requires=docker.service
+# StartLimit* belong in [Unit], NOT [Service]: systemd silently IGNORES them under [Service]
+# ("Unknown key name ... ignoring"), so a crash-looping unit would have retried for ever. Caught by
+# `systemd-analyze verify` before this reached a host.
+# A resume refused because something really IS still writing the run is a real failure — let the
+# unit stop rather than loop. Five failures in ten minutes and systemd gives up, which is correct.
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+[Service]
+Type=simple
+User=ctb
+WorkingDirectory=/home/ctb/cardano-trading-bots
+# NOT `npm run paper` directly: a restart must RESUME this strategy's existing run, never start a
+# second equity curve for it. See infra/vps/paper-start.sh.
+ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i NIGHT --max-gap-min 20
+Restart=always
+RestartSec=60
+StandardOutput=append:/home/ctb/logs/paper-%i.log
+StandardError=append:/home/ctb/logs/paper-%i.log
+
+[Install]
+WantedBy=multi-user.target
