@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import pino from 'pino';
 import { backfillCommand } from './commands/backfill.js';
+import { backupCommand, backupVerifyCommand } from './commands/backup.js';
 import { backtestCommand } from './commands/backtest.js';
 import { candlesCommand } from './commands/candles.js';
 import { collectCommand } from './commands/collect.js';
@@ -43,6 +44,10 @@ async function main(): Promise<void> {
       return devFakeCollectorCommand(log, rest);
     case 'dashboard':
       return dashboardCommand(log, rest);
+    case 'backup':
+      return backupCommand(log, rest);
+    case 'backup:verify':
+      return backupVerifyCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
