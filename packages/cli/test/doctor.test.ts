@@ -24,24 +24,40 @@ describe('doctor checks', () => {
     expect(checks.find((c) => c.name === 'COLLECT_INTERVAL_SECONDS')!.status).toBe('ok');
     expect(checkEnv({ DATABASE_URL: 'x', COLLECT_INTERVAL_SECONDS: '600' }).find((c) => c.name === 'COLLECT_INTERVAL_SECONDS')!.status).toBe('ok');
   });
-  it('processes: two collectors fail with the stop command; one collector (wrapper + Node child) is ONE; self is never counted; paper and fake are reported', () => {
+  it('processes: one run is ONE however its supervisor wraps it; two runs fail with the stop command', () => {
+    // The node child with --require preflight IS the running CLI: exactly one per run under both
+    // supervisors. Counting wrappers instead was not portable —
+    //   launchd: `npm run collect` -> tsx -> preflight   (npm's argv does not match, so 1)
+    //   systemd: `sh -c tsx ...collect` -> tsx -> preflight (sh's argv DOES match, so 2)
+    // On the M5 host that read every healthy unit as a duplicate. Found 2026-09-08.
+    const collectorRun = (wrapperPid: number, tsxPid: number, nodePid: number) => [
+      { pid: wrapperPid, command: 'sh -c tsx packages/cli/src/main.ts collect' },
+      { pid: tsxPid, command: 'node /x/node_modules/.bin/tsx packages/cli/src/main.ts collect' },
+      { pid: nodePid, command: '/x/bin/node --require /x/node_modules/tsx/dist/preflight.cjs --import file:///x/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts collect' },
+    ];
+    const paperNode = { pid: 13, command: '/x/bin/node --require /x/node_modules/tsx/dist/preflight.cjs packages/cli/src/main.ts paper ma-crossover SNEK' };
     const lines = [
-      { pid: 10, command: 'node /x/node_modules/.bin/tsx packages/cli/src/main.ts collect' },
-      { pid: 11, command: 'node /x/node_modules/.bin/tsx packages/cli/src/main.ts collect' },
-      // each wrapper's Node child, as ps really shows it: not a collector of its own
-      { pid: 20, command: '/x/bin/node --require /x/node_modules/tsx/dist/preflight.cjs --import file:///x/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts collect' },
-      { pid: 21, command: '/x/bin/node --require /x/node_modules/tsx/dist/preflight.cjs --import file:///x/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts collect' },
+      ...collectorRun(10, 11, 20),
+      ...collectorRun(30, 31, 21),
       { pid: 12, command: 'node tsx packages/cli/src/main.ts collector-lookalike' },
-      { pid: 13, command: 'node tsx packages/cli/src/main.ts paper ma-crossover SNEK' },
+      paperNode,
       { pid: 99, command: 'node tsx packages/cli/src/main.ts doctor' },
     ];
     const two = checkProcesses(lines, 99);
-    expect(two.find((c) => c.name === 'collector processes')).toMatchObject({ status: 'fail', detail: expect.stringMatching(/2 running \(pids 10, 11\).*pkill -TERM/) });
+    expect(two.find((c) => c.name === 'collector processes')).toMatchObject({ status: 'fail', detail: expect.stringMatching(/2 running \(pids 20, 21\).*pkill -TERM/) });
     expect(two.find((c) => c.name === 'paper processes')!.detail).toBe('1 running (pids 13)');
-    const one = checkProcesses(lines.filter((l) => l.pid !== 10), 99);
-    expect(one.find((c) => c.name === 'collector processes')).toMatchObject({ status: 'ok', detail: '1 running (pid 11)' });
-    expect(checkProcesses([{ pid: 5, command: 'tsx packages/cli/src/main.ts collect' }], 5).find((c) => c.name === 'collector processes')!.detail).toBe('none running');
-    expect(checkProcesses([{ pid: 7, command: 'tsx packages/cli/src/main.ts dev:fake-collector SNEK' }], 1).find((c) => c.name === 'fake collector')!.status).toBe('warn');
+
+    // ONE collector, wrapped in all three layers, must read as one — not three.
+    const one = checkProcesses([...collectorRun(10, 11, 20), paperNode, { pid: 99, command: 'x' }], 99);
+    expect(one.find((c) => c.name === 'collector processes')).toMatchObject({ status: 'ok', detail: '1 running (pid 20)' });
+
+    // Wrappers with no preflight child at all: a run that is not really running yet.
+    expect(checkProcesses([{ pid: 5, command: 'sh -c tsx packages/cli/src/main.ts collect' }], 1)
+      .find((c) => c.name === 'collector processes')!.detail).toBe('none running');
+    expect(checkProcesses([{ pid: 5, command: 'tsx packages/cli/src/main.ts collect' }], 5)
+      .find((c) => c.name === 'collector processes')!.detail).toBe('none running');
+    expect(checkProcesses([{ pid: 7, command: '/x/bin/node --require /x/node_modules/tsx/dist/preflight.cjs packages/cli/src/main.ts dev:fake-collector SNEK' }], 1)
+      .find((c) => c.name === 'fake collector')!.status).toBe('warn');
   });
   it('migrations: pending fails naming the files, orphans warn, in sync is ok', () => {
     expect(checkMigrations(['0001.sql', '0002.sql'], ['0001.sql'])).toMatchObject({ status: 'fail', detail: expect.stringMatching(/1 not applied: 0002.sql; run npm run migrate/) });

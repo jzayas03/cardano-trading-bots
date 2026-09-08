@@ -47,10 +47,26 @@ export function parseEtime(etime: string): number | null {
   return Number(d ?? 0) * 86400 + Number(h ?? 0) * 3600 + Number(mm) * 60 + Number(ss);
 }
 
-/** The tsx wrapper, not the `--require .../tsx/dist/preflight.cjs` child it spawns: one run is two
- * `ps` entries, and counting both reads one run as two. Same rule `checkProcesses` uses. */
-function isWrapper(p: RunningProcess): boolean {
-  return !/tsx\/dist\/preflight/.test(p.command);
+/**
+ * The one process that IS the running CLI: the node child tsx spawns with
+ * `--require .../tsx/dist/preflight.cjs`.
+ *
+ * Counting the wrappers instead is not portable, and the M5 cutover proved it. The chain differs by
+ * supervisor:
+ *
+ *   macOS/launchd : npm run collect      -> node .bin/tsx ... -> node --require preflight ...
+ *   systemd       : sh -c tsx ...        -> node .bin/tsx ... -> node --require preflight ...
+ *
+ * `npm run collect` does not contain "main.ts collect", so on macOS only two entries matched and
+ * excluding the preflight child left exactly one. Under systemd the chain begins `sh -c tsx
+ * packages/cli/src/main.ts collect`, which DOES match — so the same rule counted two, and the
+ * watchdog reported every healthy unit as a double-writer while `--resume` would have refused every
+ * legitimate resume as "already running".
+ *
+ * The preflight child is exactly one per running CLI under both, so it is the thing to count.
+ */
+function isTheProcess(p: RunningProcess): boolean {
+  return /tsx\/dist\/preflight/.test(p.command);
 }
 
 /**
@@ -63,7 +79,7 @@ function isWrapper(p: RunningProcess): boolean {
  */
 export function processFor(strategyId: string, procs: readonly RunningProcess[]): RunningProcess[] {
   const re = new RegExp(`main\\.ts paper (?:--\\S+ \\S+ )*${strategyId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`);
-  return procs.filter(isWrapper).filter((p) => re.test(p.command));
+  return procs.filter(isTheProcess).filter((p) => re.test(p.command));
 }
 
 /**

@@ -49,10 +49,15 @@ export interface ProcessLine { pid: number; command: string }
  * a start line ran twice 36 s apart. `self` is this process's own pid, never counted.
  */
 export function checkProcesses(lines: ProcessLine[], self: number): Check[] {
-  // One CLI process is TWO entries in ps: the `tsx` wrapper and the Node child it spawns with
-  // `--require .../tsx/dist/preflight.cjs`. Count wrappers only, or one collector reads as two
-  // (the first real run of this check did exactly that).
-  const own = lines.filter((l) => l.pid !== self && !/tsx\/dist\/preflight/.test(l.command));
+  // Count the node child tsx spawns with `--require .../tsx/dist/preflight.cjs` — that IS the
+  // running CLI, and there is exactly one per run under every supervisor we use.
+  //
+  // The previous rule counted the wrappers instead and was not portable. Under launchd the chain is
+  // `npm run collect` -> tsx -> preflight, and `npm run collect` does not match "main.ts collect",
+  // so excluding the preflight child left one. Under systemd it is `sh -c tsx …main.ts collect` ->
+  // tsx -> preflight, which DOES match, so the same rule counted two and reported every healthy
+  // unit as a duplicate. Found on the M5 host, 2026-09-08.
+  const own = lines.filter((l) => l.pid !== self && /tsx\/dist\/preflight/.test(l.command));
   const collectors = own.filter((l) => /main\.ts collect(\s|$)/.test(l.command));
   const papers = own.filter((l) => /main\.ts paper(\s|$)/.test(l.command));
   const fakes = own.filter((l) => /main\.ts dev:fake-collector(\s|$)/.test(l.command));

@@ -4,13 +4,18 @@ import { checkBackupFreshness, checkPaperRuns, parseEtime, processFor, type Pape
 const NOW = new Date('2026-09-08T02:00:00Z');
 const INTERVAL = 900; // stale bound = 2*900 + 60 = 1860s
 
-function proc(pid: number, strategy: string, elapsedSec: number | null, preflight = false): RunningProcess {
-  return {
-    pid, elapsedSec,
-    command: preflight
-      ? `/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs packages/cli/src/main.ts paper ${strategy} NIGHT`
-      : `node /r/node_modules/.bin/tsx packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20`,
-  };
+/** THE running CLI: the node child tsx spawns with --require preflight. Exactly one per run. */
+function proc(pid: number, strategy: string, elapsedSec: number | null): RunningProcess {
+  return { pid, elapsedSec,
+    command: `/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs --import file:///r/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20` };
+}
+/** The tsx wrapper. Must never be counted — it is the same run. */
+function tsxWrapper(pid: number, strategy: string): RunningProcess {
+  return { pid, elapsedSec: 100, command: `node /r/node_modules/.bin/tsx packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20` };
+}
+/** systemd's outermost link. Also the same run, and the shape that broke the old rule. */
+function shWrapper(pid: number, strategy: string): RunningProcess {
+  return { pid, elapsedSec: 100, command: `sh -c tsx packages/cli/src/main.ts paper ${strategy} NIGHT --max-gap-min 20` };
 }
 function run(id: number, strategyId: string, heartbeatAgeSec: number | null, status = 'running'): PaperRunState {
   return { id, strategyId, status, heartbeatAt: heartbeatAgeSec === null ? null : new Date(NOW.getTime() - heartbeatAgeSec * 1000) };
@@ -35,9 +40,18 @@ describe('parseEtime', () => {
 });
 
 describe('processFor', () => {
-  it('matches the wrapper and ignores the preflight child, so one run is not counted twice', () => {
-    const procs = [proc(1, 'ma-crossover', 100), proc(2, 'ma-crossover', 100, true)];
-    expect(processFor('ma-crossover', procs).map((p) => p.pid)).toEqual([1]);
+  it('counts ONE process for a run, whatever the supervisor wrapped it in', () => {
+    // The full systemd chain: sh -c -> tsx -> node(preflight). Three ps entries, one run.
+    const procs = [shWrapper(1, 'ma-crossover'), tsxWrapper(2, 'ma-crossover'), proc(3, 'ma-crossover', 100)];
+    expect(processFor('ma-crossover', procs).map((p) => p.pid)).toEqual([3]);
+  });
+
+  it('does not count the systemd sh -c wrapper as a second writer (the M5 regression)', () => {
+    // Under launchd, `npm run collect` never matched "main.ts collect" so the old wrapper-counting
+    // rule happened to give 1. Under systemd `sh -c tsx ...main.ts...` DOES match, so it gave 2 —
+    // every healthy unit read as a double-writer, and --resume would have refused every resume.
+    const procs = [shWrapper(1, 'rsi-mean-reversion'), tsxWrapper(2, 'rsi-mean-reversion'), proc(3, 'rsi-mean-reversion', 100)];
+    expect(processFor('rsi-mean-reversion', procs)).toHaveLength(1);
   });
 
   it('does not confuse one strategy for another', () => {
@@ -47,7 +61,7 @@ describe('processFor', () => {
   });
 
   it('finds a resumed process, whose argv carries flags before the strategy', () => {
-    const p: RunningProcess = { pid: 9, elapsedSec: 10, command: 'node /r/node_modules/.bin/tsx packages/cli/src/main.ts paper rsi-mean-reversion NIGHT --max-gap-min 20 --resume 138' };
+    const p: RunningProcess = { pid: 9, elapsedSec: 10, command: '/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs packages/cli/src/main.ts paper rsi-mean-reversion NIGHT --max-gap-min 20 --resume 138' };
     expect(processFor('rsi-mean-reversion', [p]).map((x) => x.pid)).toEqual([9]);
   });
 });
