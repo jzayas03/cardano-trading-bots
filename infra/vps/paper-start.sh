@@ -23,10 +23,16 @@ cd "$REPO"
 # shellcheck disable=SC1091
 set -a; . ./.env; set +a
 
+# Matched on strategy AND token. Matching on strategy alone was a latent bug: change the unit's
+# ticker and this would find the OLD token's running row and try to resume it, which runPaper
+# rejects with "run N is <strategy>/<old unit>, not <strategy>/<new unit>". That refusal is correct
+# but the unit would simply fail to start, and the reason lives three layers down in a log.
 RUN_ID="$(psql "$DATABASE_URL" -At -c "
-  SELECT id FROM runs
-   WHERE mode = 'paper' AND status = 'running' AND strategy_id = '${STRATEGY//\'/\'\'}'
-   ORDER BY id DESC LIMIT 1")"
+  SELECT r.id FROM runs r JOIN tokens t ON t.unit = r.base_unit
+   WHERE r.mode = 'paper' AND r.status = 'running'
+     AND r.strategy_id = '${STRATEGY//\'/\'\'}'
+     AND t.ticker = '${TICKER//\'/\'\'}'
+   ORDER BY r.id DESC LIMIT 1")"
 
 if [ -n "$RUN_ID" ]; then
   echo "resuming run $RUN_ID ($STRATEGY)"
