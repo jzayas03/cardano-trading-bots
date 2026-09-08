@@ -7,6 +7,8 @@ import {
 import { SimExecutor } from '@ctb/sim-executor';
 import { retryWithBackoff } from '@ctb/collector/pure';
 import type { Logger } from 'pino';
+import { processFor } from '@ctb/reports';
+import { listProcessesWithAge, ownPids } from '../ps.js';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
 import { assertFakeAllowed } from '../fakeWalk.js';
@@ -116,10 +118,60 @@ export function parsePaperArgs(args: string[]): PaperArgs {
  * `isHeartbeatStale` — the same bound `status` prints — instead of the status alone. A dead-but-
  * `running` row resumes; a live one is still refused.
  */
-export function resumeStatusError(run: Pick<RunRow, 'status' | 'heartbeatAt' | 'params'>, now: Date): string | null {
+export type ResumeLiveness =
+  /** `ps` was read and this many wrapper processes are running this run's strategy. */
+  | { kind: 'counted'; processes: number }
+  /** `ps` could not be read, or the answer would be ambiguous. Treated as "someone might be there". */
+  | { kind: 'unknown' };
+
+/**
+ * `liveness` narrows the fresh-heartbeat case from a guess to a measurement.
+ *
+ * The heartbeat is a LAGGING proxy for liveness: it only goes stale after `2 * intervalSec +
+ * graceSec`, which is 31 minutes at a 900-second interval. So a run that was killed a minute ago is
+ * provably dead — nothing is running it — and yet unresumable for another half hour. Measured
+ * 2026-09-08: run 138 was killed with its heartbeat 275 s old and `--resume` refused it, while
+ * `watch` had already reported it dead.
+ *
+ * The hazard has not changed, and neither has the direction this fails in. A second writer joining a
+ * live run races `paper_orders.seq`, so anything short of PROOF that nobody is there must refuse:
+ *
+ *   - a process is running this strategy  -> refuse, whatever the heartbeat says
+ *   - `ps` unreadable or ambiguous        -> refuse; an unknown is not an absence
+ *   - no process, heartbeat fresh         -> ALLOW, and this is the new case
+ *   - no process, heartbeat stale         -> allow, as before
+ *
+ * Note the ordering: liveness OVERRULES a stale heartbeat too. A wedged process that stopped
+ * beating but is still running would previously have been resumable, giving exactly the two writers
+ * this rule exists to prevent.
+ */
+export function resumeStatusError(
+  run: Pick<RunRow, 'status' | 'heartbeatAt' | 'params'>,
+  now: Date,
+  liveness: ResumeLiveness = { kind: 'unknown' },
+): string | null {
   if (run.status !== 'running') return null;
+  if (liveness.kind === 'counted' && liveness.processes > 0) {
+    return `is already running (${liveness.processes} process${liveness.processes === 1 ? '' : 'es'} for this strategy); stop it (SIGINT) first, then resume`;
+  }
+  if (liveness.kind === 'counted' && liveness.processes === 0) return null;
   if (isHeartbeatStale(run.heartbeatAt, run.params, now)) return null;
   return 'is already running; stop it (SIGINT) first, then resume';
+}
+
+/**
+ * Reads `ps` and counts the processes running this strategy, excluding this invocation's own.
+ *
+ * Injectable through `RunPaperDeps.resumeLiveness` so the refusal can be tested without a process
+ * table. An unreadable `ps` returns `unknown`, never an empty count: the difference decides whether
+ * a fresh-heartbeat run is resumable, and reading "I could not look" as "nobody is there" is how a
+ * second writer joins a live run.
+ */
+export function defaultResumeLiveness(strategyId: string): ResumeLiveness {
+  const procs = listProcessesWithAge();
+  if (procs === null) return { kind: 'unknown' };
+  const own = ownPids();
+  return { kind: 'counted', processes: processFor(strategyId, procs.filter((p) => !own.has(p.pid))).length };
 }
 
 /** Seconds since the last heartbeat, or null when the run never wrote one. Used only for the
@@ -336,6 +388,9 @@ export interface RunPaperDeps {
   now: () => Date;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   signal: AbortSignal;
+  /** How the resume refusal learns whether a process is already running this strategy.
+   * Defaults to reading `ps`; injected in tests. */
+  resumeLiveness?: (strategyId: string) => ResumeLiveness;
   /** Replaces the live feed. A test scripts candles through the same `onTick` contract instead of
    * sleeping to real interval boundaries. */
   feedFactory?: (deps: LiveFeedDeps) => AsyncIterable<Candle>;
@@ -389,15 +444,27 @@ export async function runPaper(d: RunPaperDeps): Promise<RunPaperResult> {
         throw new Error(`run ${a.resume} is ${prior.strategyId}/${prior.baseUnit}, not ${strategy.id}/${token.unit}`);
       }
       const resumeCheckedAt = d.now();
-      const statusError = resumeStatusError(prior, resumeCheckedAt);
+      // Measured, not inferred: the heartbeat only goes stale after 2*interval + grace (31 minutes
+      // at 900 s), so a run killed a minute ago is provably dead and yet unresumable without this.
+      const liveness = (d.resumeLiveness ?? defaultResumeLiveness)(strategy.id);
+      const statusError = resumeStatusError(prior, resumeCheckedAt, liveness);
       if (statusError) throw new Error(`run ${a.resume} ${statusError}`);
       // Finding C2: resuming a row still marked `running` is the recovery path for a process that
       // died without its catch block. It is legitimate but it is not routine, so it goes on the
       // record — a log line AND a run warning — rather than passing silently as a normal resume.
       if (prior.status === 'running') {
         const ageS = heartbeatAgeSec(prior.heartbeatAt, resumeCheckedAt);
-        staleResumeWarning = `resuming a run whose heartbeat is stale (age ${ageS === null ? 'never' : `${ageS}s`}); the previous process died without recording a stop`;
-        log.warn({ runId: a.resume, heartbeatAt: prior.heartbeatAt, ageS }, `resuming a run whose heartbeat is stale (age ${ageS === null ? 'never' : `${ageS}s`})`);
+        const age = ageS === null ? 'never' : `${ageS}s`;
+        // Two different reasons reach here, and the record must say WHICH. Before liveness was
+        // measured there was only one — a stale heartbeat — so this sentence hardcoded it. A run
+        // resumed because `ps` proved nothing was running it is typically NOT stale (run 138,
+        // 2026-09-08: allowed at a heartbeat age of 1222s against a 1860s bound), and a warning
+        // that calls that "stale" is a false statement in the permanent record of the run.
+        const why = isHeartbeatStale(prior.heartbeatAt, prior.params, resumeCheckedAt)
+          ? `whose heartbeat is stale (age ${age})`
+          : `whose heartbeat is still fresh (age ${age}) but which no process was running`;
+        staleResumeWarning = `resuming a run ${why}; the previous process died without recording a stop`;
+        log.warn({ runId: a.resume, heartbeatAt: prior.heartbeatAt, ageS }, `resuming a run ${why}`);
       }
       // Finding F2: refuse to resume under strategy params that differ from the ones this run was
       // started with — a resumed equity curve that quietly switches `slow`/`fast` etc. mid-stream is
