@@ -1,4 +1,4 @@
-import { bucketTick, DexterPoolSource, PgSnapshotRepo, runTick, type CollectorState } from '@ctb/collector';
+import { bucketTick, DexterPoolSource, PgSnapshotRepo, runTick, utcDay, type CollectorState } from '@ctb/collector';
 import { createPool } from '@ctb/db';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -22,7 +22,27 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
     blockfrostProjectId: cfg.blockfrostProjectId as string, log, retryBudgetMs: cfg.intervalSec * 500, venues: cfg.venues,
     refreshPolicy: cfg.refreshPolicy, minDepthLovelace: cfg.minDepthLovelace,
   });
-  const state: CollectorState = { lastDiscoveryAt: null };
+  // THE RESTART FIX. Both of these facts were already in the database and neither was read, so every
+  // process start looked to `runTick` like a universe that had never been discovered: `lastDiscoveryAt`
+  // null AND `knownPoolCount()` zero. Either alone forces a full sweep.
+  //
+  // Measured 2026-09-08: five collector restarts bought five sweeps -- 25,174 of the day's 43,469
+  // Blockfrost calls -- and the free tier ran out at 20:15 UTC, after which every tick failed closed
+  // on a 402 at `/blocks/latest` and the three paper runs sat on a dead feed. A restart now costs a
+  // normal refresh (~300 calls) instead of ~5,700.
+  const restart = await repo.restartState(new Date());
+  const hydrated = source.hydrate(restart.pools);
+  const state: CollectorState = {
+    lastDiscoveryAt: restart.lastDiscoveryAt,
+    callsSpentToday: restart.callsSpentToday,
+    spendDay: utcDay(new Date()),
+    lastDiscoveryCost: restart.lastDiscoveryCost,
+  };
+  log.info(
+    { hydratedPools: hydrated, lastDiscoveryAt: restart.lastDiscoveryAt, callsSpentToday: restart.callsSpentToday,
+      lastDiscoveryCost: restart.lastDiscoveryCost, dailyCallCeiling: cfg.dailyCallCeiling },
+    hydrated > 0 ? 'warm start: pool set restored, no discovery sweep needed' : 'cold start: no pool cache, the first tick will discover',
+  );
   const stop = new AbortController();
   const onSignal = (sig: string) => { log.info({ sig }, 'stopping after current tick'); stop.abort(); };
   process.once('SIGINT', () => onSignal('SIGINT'));
@@ -71,6 +91,7 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
         // at distinct tick_ts instead of colliding on the primary key.
         intervalSec: loopSec,
         rediscoverAfterMs: REDISCOVER_AFTER_MS, state, tickTs: pendingTickTs,
+        dailyCallCeiling: cfg.dailyCallCeiling, poolCache: repo,
         refreshOnly: fullTick ? undefined : focusOnly,
       };
       try {

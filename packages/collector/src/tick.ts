@@ -1,11 +1,43 @@
 import type { Pair } from '@ctb/universe';
-import type { RunError, RunSummary, SnapshotRepo } from './repo.js';
+import type { PoolCacheRepo, RunError, RunSummary, SnapshotRepo } from './repo.js';
 import { bucketTick, poolIdOf, poolToSnapshot, reconcileTickTs } from './snapshot.js';
-import type { DiscoveryCallsSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
+import type { DiscoveryCallsSource, HydratableSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, SnapshotRow } from './types.js';
 
 export interface CollectorState {
   lastDiscoveryAt: Date | null;
+  /**
+   * Provider calls spent so far this UTC day. Seeded from `collector_runs` at startup and advanced
+   * by every tick, so the budget survives a restart instead of resetting to zero with the process.
+   * A FLOOR: calls made by a tick that died before `finishRun` are not in the seed.
+   */
+  callsSpentToday: number;
+  /** The UTC day (`YYYY-MM-DD`) `callsSpentToday` refers to. Compared on every tick so the rollover
+   *  is an explicit reset rather than something inferred from a timestamp comparison. */
+  spendDay: string;
+  /** What the most recent discovery sweep actually cost, used to price the next one. Null until one
+   *  has been observed, when `DEFAULT_DISCOVERY_COST` stands in. */
+  lastDiscoveryCost: number | null;
+}
+
+/** The UTC calendar day of `at`, as `YYYY-MM-DD`. */
+export function utcDay(at: Date): string {
+  return at.toISOString().slice(0, 10);
+}
+
+/**
+ * What to assume a discovery sweep costs before one has been measured on this database. The real
+ * figure on 2026-09-08 was 5,691-5,692 across six venues; rounding UP is the safe direction, because
+ * this number only ever gates whether a sweep is affordable.
+ */
+export const DEFAULT_DISCOVERY_COST = 6_000;
+
+/**
+ * A `CollectorState` for a process with nothing persisted to start from. The `collect` command seeds
+ * the real one from `restartState()`; tests and one-off ticks use this.
+ */
+export function freshState(now: Date): CollectorState {
+  return { lastDiscoveryAt: null, callsSpentToday: 0, spendDay: utcDay(now), lastDiscoveryCost: null };
 }
 
 /** True when `source` also implements `DiscoveryCallsSource` (currently only `DexterPoolSource`).
@@ -17,6 +49,12 @@ function hasDiscoveryCalls(source: PoolSource): source is PoolSource & Discovery
   // `unknown` is the standard way to structurally probe for an optional capability like this one.
   const maybe = source as unknown as Partial<DiscoveryCallsSource>;
   return typeof maybe.lastDiscoveryCalls === 'function';
+}
+
+/** Same structural probe for the optional hydration capability (only `DexterPoolSource` today). */
+function isHydratable(source: PoolSource): source is PoolSource & HydratableSource {
+  const maybe = source as unknown as Partial<HydratableSource>;
+  return typeof maybe.hydrate === 'function' && typeof maybe.cachedPools === 'function';
 }
 
 /** Same structural probe for the optional rediscovery capability (only `DexterPoolSource` today). */
@@ -47,6 +85,20 @@ export interface TickDeps {
   rediscoverAfterMs: number;
   state: CollectorState;
   /**
+   * Refuse a discovery sweep when the day's spend plus the sweep's expected cost would exceed this
+   * many provider calls. 0 disables the check.
+   *
+   * This is the blast-radius bound, not the fix. The fix is that a restart hydrates its pool set and
+   * so does not ask for a sweep at all; this catches every OTHER way a sweep can be asked for when
+   * the quota cannot pay -- a crash loop, a genuinely empty universe, a hand-run tick. Refusing is
+   * fail-closed in the honest direction: the tick writes nothing and says why on the run row, which
+   * is recoverable, where spending the day's last 6,000 calls is not.
+   */
+  dailyCallCeiling: number;
+  /** Persists the pool set after a discovery. Omit and the cache is simply not written -- the
+   *  collector still works, it just pays for a sweep on the next restart. */
+  poolCache?: PoolCacheRepo;
+  /**
    * The tick bucket to write, pinned by the caller. The `collect` loop computes the boundary it is
    * about to sleep toward BEFORE sleeping and passes it back in here; if the tick were instead
    * bucketed from `now()` after an early wake, it could land one bucket EARLIER than the boundary
@@ -63,6 +115,14 @@ export interface TickDeps {
  */
 export async function runTick(d: TickDeps): Promise<RunSummary> {
   const startedAt = d.now();
+  // The spend counter belongs to a UTC day, and Blockfrost's quota resets at 00:00 UTC. Reset here,
+  // before the budget check reads it, so the first tick of a new day is not refused on yesterday's
+  // spend -- which is exactly the tick a restart-free day most needs to be allowed to discover.
+  const today = utcDay(startedAt);
+  if (d.state.spendDay !== today) {
+    d.state.spendDay = today;
+    d.state.callsSpentToday = 0;
+  }
   // A caller-pinned boundary is reconciled against the clock: it may be stale if the caller's sleep
   // overshot (a suspended machine), and `reconcileTickTs` never moves it earlier. Applied here
   // rather than in the collect loop so every caller of runTick gets it, not just that one.
@@ -76,6 +136,8 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
 
   const finish = async (): Promise<RunSummary> => {
     summary.providerCalls = d.source.providerCalls();
+    d.state.callsSpentToday += summary.providerCalls;
+    if (summary.discovered) d.state.lastDiscoveryCost = summary.providerCalls;
     await d.repo.finishRun(runId, d.now(), summary);
     d.log.info({ runId, tickTs, ...summary, errors: summary.errors.length }, 'tick finished');
     return summary;
@@ -93,6 +155,19 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
     d.state.lastDiscoveryAt === null ||
     d.source.knownPoolCount() === 0 ||
     startedAt.getTime() - d.state.lastDiscoveryAt.getTime() > d.rediscoverAfterMs;
+
+  // The sweep is priced BEFORE it is run, against the day's spend. Refusing here rather than inside
+  // `discover` keeps the decision on the run row: the tick finishes, writes nothing, and says why.
+  if (stale && d.dailyCallCeiling > 0) {
+    const cost = d.state.lastDiscoveryCost ?? DEFAULT_DISCOVERY_COST;
+    const projected = d.state.callsSpentToday + cost;
+    if (projected > d.dailyCallCeiling) {
+      const message = `discovery refused: ${d.state.callsSpentToday} calls spent today + ~${cost} for a sweep = ${projected}, over the ${d.dailyCallCeiling} ceiling`;
+      errors.push({ scope: 'budget', message });
+      d.log.warn({ runId, spentToday: d.state.callsSpentToday, sweepCost: cost, ceiling: d.dailyCallCeiling }, message);
+      return finish();
+    }
+  }
 
   let result: SourceResult;
   try {
@@ -114,16 +189,33 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   // A venue lost at discovery is tried again on every later tick until it returns, instead of
   // waiting for the next full discovery. Its pools are written with this tick; its per-venue call
   // counts go on the row so the digest can tell a one-off scan from recurring refresh cost.
+  let setChangedByRediscovery = false;
   if (!stale && hasRediscovery(d.source) && d.source.lostVenues().length > 0) {
     const lost = d.source.lostVenues();
     try {
       const again = await d.source.rediscover(d.pairs);
+      setChangedByRediscovery = again.pools.length > 0;
       result = { pools: [...result.pools, ...again.pools], failures: result.failures };
       errors.push(...again.failures);
       if (hasDiscoveryCalls(d.source)) summary.discoveryCalls = d.source.lastDiscoveryCalls();
       d.log.info({ venues: lost, pools: again.pools.length, stillLost: d.source.lostVenues() }, 'retried lost venues');
     } catch (err) {
       errors.push({ scope: 'rediscover', message: (err as Error).message ?? String(err) });
+    }
+  }
+
+  // The known set changed this tick, so persist it: this is what makes the NEXT restart cost a
+  // refresh instead of a sweep. A save failure is recorded and swallowed -- the tick's snapshots are
+  // worth more than the cache, and the only cost of a missing cache is one sweep later.
+  if ((stale || setChangedByRediscovery) && isHydratable(d.source) && d.poolCache) {
+    const pools = d.source.cachedPools();
+    if (pools.length > 0) {
+      try {
+        await d.poolCache.savePoolCache(pools, startedAt);
+        d.log.info({ runId, pools: pools.length }, 'pool cache written');
+      } catch (err) {
+        errors.push({ scope: 'poolCache', message: (err as Error).message ?? String(err) });
+      }
     }
   }
 

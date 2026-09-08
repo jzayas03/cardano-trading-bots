@@ -13,6 +13,8 @@ export interface Config {
   dashboardDatabaseUrl: string;
   blockfrostProjectId: string | null;
   intervalSec: number;
+  /** Ceiling a discovery sweep is priced against; 0 disables the check. See COLLECT_DAILY_CALL_CEILING. */
+  dailyCallCeiling: number;
   logLevel: string;
   venues: DexName[];
   refreshPolicy: 'deepest' | 'all';
@@ -46,6 +48,19 @@ const schema = z.object({
     .optional()
     .transform((v) => (v === undefined ? DEFAULT_COLLECT_INTERVAL_SEC : Number(v)))
     .refine((n) => Number.isInteger(n) && n >= 60, 'COLLECT_INTERVAL_SECONDS must be an integer >= 60'),
+  /**
+   * The ceiling a discovery sweep is priced against. Default 45,000 of Blockfrost's 50,000/day free
+   * tier, so a refused sweep still leaves ~5,000 calls for the day's refresh ticks rather than
+   * stopping collection outright. 0 disables the check.
+   *
+   * Chosen from the measured numbers, not a round guess: a sweep is ~5,700 and a full day of refresh
+   * at 900 s is ~28,500, so 45,000 refuses a sweep only once the day is genuinely close to the wall.
+   */
+  COLLECT_DAILY_CALL_CEILING: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 45_000 : Number(v)))
+    .refine((n) => Number.isInteger(n) && n >= 0, 'COLLECT_DAILY_CALL_CEILING must be a non-negative integer'),
   LOG_LEVEL: z.string().optional(),
   // Same '' -> undefined preprocessing as BLOCKFROST_PROJECT_ID: .env.example ships a bare
   // `COLLECT_VENUES=` line so dotenv loads '', which must mean "use the default", not "discover
@@ -119,6 +134,7 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     dashboardDatabaseUrl: v.DASHBOARD_DATABASE_URL ?? deriveDashboardUrl(v.DATABASE_URL),
     blockfrostProjectId: v.BLOCKFROST_PROJECT_ID ?? null,
     intervalSec: v.COLLECT_INTERVAL_SECONDS,
+    dailyCallCeiling: v.COLLECT_DAILY_CALL_CEILING,
     logLevel: v.LOG_LEVEL ?? 'info',
     venues,
     refreshPolicy: v.COLLECT_REFRESH,

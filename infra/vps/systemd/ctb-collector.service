@@ -5,6 +5,13 @@ Description=CTB collector
 After=network-online.target docker.service
 Wants=network-online.target
 Requires=docker.service
+# A crash loop must not be able to spend the day's Blockfrost quota. Before the pool cache existed,
+# every start bought a ~5,700-call discovery sweep, so Restart=always with RestartSec=30 could burn
+# the whole 50,000/day tier in about four and a half minutes. The cache closes that, and this bounds
+# whatever the cache cannot: five starts in an hour, then the unit stays down until someone looks.
+# StartLimit* belong in [Unit], not [Service] -- systemd silently ignores them in [Service].
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -14,8 +21,11 @@ WorkingDirectory=/home/ctb/cardano-trading-bots
 ExecStart=/usr/bin/npm run collect
 Restart=always
 RestartSec=30
-# The collector is idempotent per tick and holds no state a restart would lose, so always-restart is
-# correct here — unlike the paper units, which must resume a specific run.
+# The collector is idempotent per tick, and since 0007_collector_pool_cache.sql a restart restores
+# its pool set and spend counter from the database rather than paying for a discovery sweep — so
+# always-restart is correct here, unlike the paper units, which must resume a specific run. It was
+# NOT free before that: this comment used to say the collector "holds no state a restart would lose",
+# and that belief cost 25,174 Blockfrost calls on 2026-09-08.
 StandardOutput=append:/home/ctb/logs/collector.log
 StandardError=append:/home/ctb/logs/collector.log
 

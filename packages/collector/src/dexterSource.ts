@@ -1,7 +1,7 @@
-import { Asset, BlockfrostProvider, Dexter, type LiquidityPool } from '@indigo-labs/dexter';
+import { Asset, BlockfrostProvider, Dexter, LiquidityPool } from '@indigo-labs/dexter';
 import type { Pair } from '@ctb/universe';
-import type { RunError } from './repo.js';
-import type { DiscoveryCallsSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
+import type { CachedPool, RunError } from './repo.js';
+import type { DiscoveryCallsSource, HydratableSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, PoolLike } from './types.js';
 import { discoveryOf, VENUE_NAMES, type DexName } from './venues.js';
 import { collectPoolShapes, collectRefreshedShape, type LiquidityPoolShape } from './poolShape.js';
@@ -106,6 +106,34 @@ export interface DefaultPoolFetcherOptions {
    * re-enable a venue. Omit to use only the derived map.
    */
   discoveryOverride?: Partial<Record<DexName, 'per-token-address'>>;
+}
+
+/**
+ * Rebuilds a plain shape into a real Dexter `LiquidityPool`, and passes a real one straight through.
+ *
+ * This exists because a pool read back from `collector_pool_cache` is a plain object, and
+ * `FetchRequest.getLiquidityPoolState` matches the refreshed pool to the requested one on
+ * `pool.uuid === liquidityPool.uuid`. `uuid` is a GETTER on `LiquidityPool`
+ * (`${dex}.${assetAName}/${assetBName}.${identifier}`, where `assetName` hex-decodes `nameHex`), so
+ * a plain object's `uuid` is `undefined`, nothing ever matches, and every refresh comes back empty —
+ * while `knownPoolCount()` stays non-zero, so discovery never re-runs either. Rebuilding through
+ * Dexter's own classes rather than formatting that string ourselves keeps the derivation in the one
+ * place that owns it.
+ *
+ * A hydrated pool's reserves are whatever discovery last saw; they play no part in matching and the
+ * refresh overwrites them.
+ */
+export function materializePool(pool: LiquidityPoolShape): LiquidityPoolShape {
+  if (pool instanceof LiquidityPool) return pool;
+  const side = (a: LiquidityPoolShape['assetA']): 'lovelace' | Asset =>
+    a === 'lovelace' ? 'lovelace' : new Asset(a.policyId, a.nameHex, a.decimals);
+  const built = new LiquidityPool(
+    pool.dex, side(pool.assetA) as Asset, side(pool.assetB) as Asset,
+    pool.reserveA, pool.reserveB, pool.address,
+  );
+  built.identifier = pool.identifier;
+  built.poolFeePercent = pool.poolFeePercent;
+  return built as unknown as LiquidityPoolShape;
 }
 
 /** The real `PoolFetcher`: wraps Dexter exactly as `DexterPoolSource` always has. Constructing it is
@@ -220,8 +248,9 @@ class DefaultPoolFetcher implements PoolFetcher {
   // refresh failure. Wrapped, not `discoverVenue`: Dexter swallows discovery errors internally
   // (see the venue-failure comment in `discover` below), so a retry there would never fire.
   async poolState(pool: LiquidityPoolShape): Promise<LiquidityPoolShape | undefined> {
+    const subject = materializePool(pool);
     return retryWithBackoff(
-      () => this.poolStateClient.getLiquidityPoolState(pool),
+      () => this.poolStateClient.getLiquidityPoolState(subject),
       {
         attempts: 4, baseMs: 500, maxMs: 8_000, budgetMs: this.retryBudgetMs,
         isTransient: isTransientHttpError,
@@ -313,7 +342,7 @@ function adaReserveOf(shape: LiquidityPoolShape): bigint | undefined {
 
 const TIP_TIMEOUT_MS = 10_000;
 
-export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, RediscoverySource {
+export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, RediscoverySource, HydratableSource {
   private readonly fetcher: PoolFetcher;
   private readonly defaultFetcher: DefaultPoolFetcher | null;
   private readonly known = new Map<string, LiquidityPoolShape>();
@@ -359,6 +388,35 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
   providerCalls(): number { return this.defaultFetcher?.providerCalls() ?? 0; }
   resetProviderCalls(): void { this.defaultFetcher?.resetProviderCalls(); }
   knownPoolCount(): number { return this.known.size; }
+
+  /**
+   * Seeds the known set from the persisted cache, so the first tick after a restart is a ~300-call
+   * refresh instead of a ~5,700-call discovery sweep. Returns how many pools were taken.
+   *
+   * Replaces whatever is there rather than merging: the cache is written as a whole set by the tick
+   * that discovered it, and a half-merged set would refresh pools that discovery has since dropped.
+   * Called before the first tick and never again -- a later discovery owns the set from then on.
+   */
+  hydrate(pools: readonly CachedPool[]): number {
+    this.known.clear();
+    for (const p of pools) {
+      this.known.set(p.poolId, {
+        dex: p.dex, identifier: p.identifier, address: p.address,
+        assetA: p.assetA, assetB: p.assetB,
+        reserveA: p.reserveA, reserveB: p.reserveB, poolFeePercent: p.poolFeePercent,
+      });
+    }
+    return this.known.size;
+  }
+
+  /** The known set in the shape `hydrate` accepts, for the tick to persist after a discovery. */
+  cachedPools(): CachedPool[] {
+    return [...this.known.entries()].map(([poolId, s]) => ({
+      poolId, dex: s.dex, identifier: s.identifier, address: s.address,
+      assetA: s.assetA, assetB: s.assetB,
+      reserveA: s.reserveA, reserveB: s.reserveB, poolFeePercent: s.poolFeePercent,
+    }));
+  }
   /** Provider calls spent per venue on the most recent `discover()` (0 for any venue that made none,
    *  including all of them when `discover()` hasn't run yet, or ran against a fake `fetcher` that
    *  doesn't route through the real counting provider). Copied out so a caller can't mutate our state. */
