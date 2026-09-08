@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { checkPaperRuns, parseEtime, processFor, type PaperRunState, type RunningProcess } from '../src/watch.js';
+import { checkBackupFreshness, checkPaperRuns, parseEtime, processFor, type PaperRunState, type RunningProcess } from '../src/watch.js';
 
 const NOW = new Date('2026-09-08T02:00:00Z');
 const INTERVAL = 900; // stale bound = 2*900 + 60 = 1860s
@@ -108,5 +108,33 @@ describe('checkPaperRuns', () => {
     const at900 = checkPaperRuns([run(1, 'x', 1300)], [proc(1, 'x', 9000)], NOW, 900);   // bound 1860 -> fine
     expect(at600[0]!.status).toBe('fail');
     expect(at900[0]!.status).toBe('ok');
+  });
+});
+
+describe('checkBackupFreshness', () => {
+  it('is ok for a backup taken today', () => {
+    expect(checkBackupFreshness(3).status).toBe('ok');
+  });
+
+  it('warns before it fails, so a slipping schedule is visible before it is broken', () => {
+    expect(checkBackupFreshness(27).status).toBe('warn');
+    expect(checkBackupFreshness(49).status).toBe('fail');
+  });
+
+  it('FAILS when there has never been a backup — an absence is not a pass', () => {
+    // The shape this guards against: a directory that is empty because the schedule never once
+    // fired reads exactly like a directory nobody has looked at.
+    const c = checkBackupFreshness(null);
+    expect(c.status).toBe('fail');
+    expect(c.detail).toMatch(/no backup has ever been taken/);
+  });
+
+  it('names where to look when the schedule has stopped', () => {
+    expect(checkBackupFreshness(72).detail).toMatch(/scheduled-backup\.log/);
+  });
+
+  it('scales with the thresholds it is given rather than hardcoding a day', () => {
+    expect(checkBackupFreshness(10, 8, 12).status).toBe('warn');
+    expect(checkBackupFreshness(13, 8, 12).status).toBe('fail');
   });
 });

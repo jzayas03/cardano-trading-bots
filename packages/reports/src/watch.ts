@@ -113,3 +113,27 @@ export function checkPaperRuns(
     };
   });
 }
+
+/**
+ * Is there a recent backup?
+ *
+ * Scheduling a backup and not watching it just moves the silence: a launchd agent that stops
+ * firing — Docker not running, a rotated R2 key, a `nvm` upgrade that moved node — leaves the
+ * dumps directory quietly ageing while everything else looks healthy. The failure is invisible
+ * precisely because backups are the thing nobody looks at until they need one.
+ *
+ * `newestBackupAgeHours` is null when there is no backup at all, which is a fail, not a skip.
+ */
+export function checkBackupFreshness(newestBackupAgeHours: number | null, warnAfterHours = 26, failAfterHours = 48): Check {
+  if (newestBackupAgeHours === null) {
+    return { name: 'backup', status: 'fail', detail: 'no backup has ever been taken; run `npm run backup`' };
+  }
+  const age = Math.round(newestBackupAgeHours);
+  if (newestBackupAgeHours >= failAfterHours) {
+    return { name: 'backup', status: 'fail', detail: `newest backup is ${age}h old (over ${failAfterHours}h); the schedule has stopped — check ~/ctb-backups/scheduled-backup.log` };
+  }
+  if (newestBackupAgeHours >= warnAfterHours) {
+    return { name: 'backup', status: 'warn', detail: `newest backup is ${age}h old; a daily schedule should keep this under ${warnAfterHours}h` };
+  }
+  return { name: 'backup', status: 'ok', detail: `newest backup ${age}h old` };
+}
