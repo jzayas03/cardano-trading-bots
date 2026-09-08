@@ -25,7 +25,15 @@ ENV_FILE="$REPO/.env"
 
 say() { printf '\n== %s\n' "$*"; }
 die() { echo "FAILED: $*" >&2; exit 1; }
-asctb() { sudo -u "$SERVICE_USER" -H bash -lc "cd '$REPO' && $*"; }
+# `</dev/null` is load-bearing, not tidiness.
+#
+# This script is fed to `bash -s` over ssh, so the script IS stdin. `docker compose exec -T` attaches
+# stdin and therefore SWALLOWS THE REST OF THE SCRIPT — bash then runs out of input and exits 0. No
+# crash, no message, no `die`. On 2026-09-08 that silently ended two deploys immediately after
+# "Container ctb_postgres Running", and only the missing migrations revealed it.
+#
+# Proven: the same script with and without this redirect prints 1 line vs 3.
+asctb() { sudo -u "$SERVICE_USER" -H bash -lc "cd '$REPO' && $*" </dev/null; }
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -d "$REPO/.git" ] || die "$REPO is not a git checkout; clone it as $SERVICE_USER first"
@@ -54,11 +62,18 @@ asctb "npm ci --silent"
 
 say "postgres"
 asctb "docker compose up -d postgres"
-for _ in $(seq 1 30); do
-  asctb "docker compose exec -T postgres pg_isready -U ctb" >/dev/null 2>&1 && break
+# `if` rather than `cmd && break`: clearer, and it keeps the probe a condition regardless of how a
+# future shell treats `set -e` here. (It was NOT the cause of the silent deploys — that was stdin;
+# see asctb above. A minimal repro showed `A && break` surviving `set -e` in this bash.)
+#
+# 90 s, not 60: the first `docker compose up` on a new host runs initdb, which took longer than the
+# original budget allowed.
+ready=0
+for _ in $(seq 1 45); do
+  if asctb "docker compose exec -T postgres pg_isready -U ctb" >/dev/null 2>&1; then ready=1; break; fi
   sleep 2
 done
-asctb "docker compose exec -T postgres pg_isready -U ctb" >/dev/null 2>&1 || die "postgres did not become ready"
+[ "$ready" = "1" ] || die "postgres did not become ready in 90s; check: docker logs ctb_postgres"
 echo "  postgres ready"
 
 say "migrations"
