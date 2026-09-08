@@ -104,6 +104,18 @@ already computes — collector tick freshness, paper heartbeat ages, quota pace,
 disk — and notifies only when something is wrong. Silence must mean healthy, and
 it must be proven to mean healthy by breaking something on purpose once.
 
+**A paper run's heartbeat must not be alerted on naively.** A run writes its
+heartbeat at each boundary, so a run that has just been resumed still carries
+the heartbeat of the segment that died and reads `STALE` until its first
+boundary — up to one full interval, 15 minutes at 900 s. Measured in the day-2
+drill on 2026-09-08: run 138 resumed at 01:32 and reported `STALE (1942s)` while
+perfectly healthy. An alert on `STALE` alone therefore pages the operator on
+every legitimate recovery, which is how a monitor gets muted and then ignored.
+
+The check must combine heartbeat age with liveness — is a process for that run
+id actually running — and treat "stale but the process started less than one
+interval ago" as healthy.
+
 ## 9. Data migration
 
 The database moves once, at cutover, after the week ends. It is not
