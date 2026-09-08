@@ -1,11 +1,11 @@
-import { execFileSync } from 'node:child_process';
 import { statfsSync } from 'node:fs';
 import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool } from '@ctb/db';
-import { checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, parseEtime, verdict, type Check, type PaperRunState, type RunningProcess } from '@ctb/reports';
+import { checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, verdict, type Check, type PaperRunState } from '@ctb/reports';
 import type { Logger } from 'pino';
 import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';
 import { digestLines } from '../digest.js';
+import { listProcessesWithAge } from '../ps.js';
 
 /**
  * `watch` is `doctor` inverted: it says nothing when everything is fine, and one line per problem
@@ -17,17 +17,6 @@ import { digestLines } from '../digest.js';
  * says so, and a run row that says `running` with nothing running it is exactly that.
  */
 
-/** `ps` with elapsed time. `etimes` is Linux-only and macOS yields an EMPTY column for it rather
- * than an error, so the portable `etime` is used and parsed. */
-export function listProcessesWithAge(): RunningProcess[] {
-  const out = execFileSync('ps', ['-axo', 'pid=,etime=,command='], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
-  return out.split('\n').map((l) => l.trim()).filter(Boolean).flatMap((l) => {
-    const m = /^(\d+)\s+(\S+)\s+(.*)$/.exec(l);
-    if (!m) return [];
-    return [{ pid: Number(m[1]), elapsedSec: parseEtime(m[2]!), command: m[3]! }];
-  });
-}
-
 export async function watchCommand(log: Logger, args: readonly string[]): Promise<void> {
   const quiet = !args.includes('--verbose');
   const cfg = loadConfig(process.env, { blockfrost: false });
@@ -35,7 +24,7 @@ export async function watchCommand(log: Logger, args: readonly string[]): Promis
   const pool = createPool(cfg.databaseUrl, (err) => log.error({ err: err.message }, 'watch pool error'));
   const checks: Check[] = [];
   try {
-    const procs = listProcessesWithAge();
+    const procs = listProcessesWithAge() ?? [];
     checks.push(...checkProcesses(procs.map((p) => ({ pid: p.pid, command: p.command })), process.pid));
 
     const runs = await pool.query<{ id: number; strategy_id: string; status: string; heartbeat_at: Date | null }>(

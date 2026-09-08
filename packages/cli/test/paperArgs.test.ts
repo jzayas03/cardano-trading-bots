@@ -126,3 +126,47 @@ describe('resumeStatusError', () => {
     expect(resumeStatusError(run({ status: 'running', heartbeatAt: null }), now)).toBeNull();
   });
 });
+
+describe('resumeStatusError with a liveness measurement', () => {
+  const now = new Date('2026-09-06T12:00:00.000Z');
+  const run = (over: Partial<Pick<RunRow, 'status' | 'heartbeatAt' | 'params'>>): Pick<RunRow, 'status' | 'heartbeatAt' | 'params'> => ({
+    status: 'finished', heartbeatAt: null, params: { intervalSec: 60, graceSec: 5 }, ...over,
+  });
+  const fresh = new Date(now.getTime() - 30_000);   // bound is 2*60 + 5 = 125s
+  const stale = new Date(now.getTime() - 600_000);
+  const counted = (processes: number) => ({ kind: 'counted' as const, processes });
+  const unknown = { kind: 'unknown' as const };
+
+  it('ALLOWS a fresh heartbeat once ps proves nothing is running it', () => {
+    // The gap this closes. The heartbeat only goes stale after 2*interval + grace — 31 minutes at a
+    // 900-second interval — so a run killed a minute ago was provably dead and yet unresumable.
+    // Measured 2026-09-08: run 138 killed with a 275s heartbeat, refused, while `watch` already
+    // reported it dead.
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: fresh }), now, counted(0))).toBeNull();
+  });
+
+  it('refuses when a process IS running it, however fresh or stale the heartbeat', () => {
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: fresh }), now, counted(1))).toMatch(/already running \(1 process for this strategy\)/);
+    // Liveness overrules a STALE heartbeat too: a wedged process that stopped beating but is still
+    // running was previously resumable, which is exactly the two writers this rule exists to stop.
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: stale }), now, counted(1))).toMatch(/already running/);
+  });
+
+  it('refuses when ps could not be read: an unknown is not an absence', () => {
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: fresh }), now, unknown)).toMatch(/already running/);
+  });
+
+  it('still allows a stale heartbeat when nothing is running it', () => {
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: stale }), now, counted(0))).toBeNull();
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: stale }), now, unknown)).toBeNull();
+  });
+
+  it('never blocks a run that is not running', () => {
+    expect(resumeStatusError(run({ status: 'finished' }), now, counted(3))).toBeNull();
+  });
+
+  it('defaults to unknown, so an un-updated caller keeps the old, safer behaviour', () => {
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: fresh }), now)).toMatch(/already running/);
+    expect(resumeStatusError(run({ status: 'running', heartbeatAt: stale }), now)).toBeNull();
+  });
+});
