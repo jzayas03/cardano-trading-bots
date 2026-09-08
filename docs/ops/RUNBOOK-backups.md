@@ -69,3 +69,41 @@ that is a decision, not a routine.
 `~/ctb-backups` is on the same disk as the database. R2 is the copy that survives the disk; the
 local one survives a bad migration and a wrong `DROP`. If R2 is not configured, there is exactly
 one copy of everything.
+
+## Two machines, one R2 bucket, one Blockfrost key
+
+During the M5 cutover both the laptop and the VPS hold the same `.env`. That means one Blockfrost
+key with one 50,000/day quota between them, and one R2 prefix that both would prune with the same
+14-dump retention — each deleting the other's copies.
+
+So exactly one machine backs up at a time, and the handover is ordered. **Stopping the laptop's
+agent is part of the cutover, not preparation for it**: until the VPS is live, the laptop holds the
+only database that matters and must keep protecting it.
+
+```bash
+# 1. Take a final backup on the laptop, and verify the copy that will be restored.
+cd ~/code/cardano-trading-bots
+npm run backup && npm run backup:verify:remote
+
+# 2. Stop the laptop's writers. The collector first, so no tick lands mid-dump.
+pkill -TERM -f 'main.ts collect'
+pkill -INT  -f 'main.ts paper'
+
+# 3. Stop the laptop's backup schedule. From here the VPS owns the bucket.
+./scripts/install-backup-schedule.sh --remove
+
+# 4. On the VPS: restore, then start the units.
+#    (see docs/plans/2026-09-08-m5-vps.md, task 6)
+
+# 5. Confirm exactly one collector exists, across BOTH machines.
+pgrep -f 'main.ts collect' | wc -l          # laptop: must be 0
+ssh ctb@<vps> 'pgrep -f "main.ts collect" | wc -l'   # vps: must be 1
+```
+
+Step 5 is the one to actually run rather than assume. Two collectors on one key is not a loud
+failure — it is a quota that runs out early and 402s that look like a Blockfrost outage.
+
+### Reversing it
+
+The laptop's agent comes back with `./scripts/install-backup-schedule.sh`. Do that only after
+stopping the VPS timer (`systemctl disable --now ctb-backup.timer`), for the same reason.
