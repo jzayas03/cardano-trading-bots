@@ -321,30 +321,88 @@ describe.skipIf(!PG_ENABLED)('runPaper end to end (finding M7)', () => {
     });
   });
 
-  it('refuses to resume a run whose heartbeat is still fresh, and allows one that is stale (finding C2)', async () => {
+  /**
+   * Finding C2, restated after liveness became measurable.
+   *
+   * This test used to assert that a fresh heartbeat alone refuses a resume, on the reasoning that a
+   * recent heartbeat implies a live process. That inference is what `resumeLiveness` replaces: in
+   * this very test nothing was running, so "demonstrably alive" was never demonstrated. Each case
+   * below now says which world it is in instead of leaving it to the clock.
+   */
+  it('refuses a resume while a process is running it, whatever the heartbeat says', async () => {
     await withTestSchema(async (db) => {
       await migrate(db);
       await seedToken(db);
       const runs = new PgRunRepo(db);
-      const candleRepo = new PgCandleRepo(db);
       const id = await runs.createRun({
         mode: 'paper', strategyId: 'ma-crossover', params: { intervalSec: 60, graceSec: 0 }, gitSha: 'testsha', baseUnit: SNEK,
         dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(0), status: 'running', rehearsal: false,
       });
-      // A process that is demonstrably alive: heartbeat five seconds ago, bound is 2*60 + 0 = 120s.
-      await runs.heartbeat(id, new Date(t(10).getTime() - 5_000), null);
-      const args = parsePaperArgs(['ma-crossover', 'SNEK', '--resume', String(id), '--grace-sec', '0']);
+      await runs.heartbeat(id, new Date(t(10).getTime() - 5_000), null); // fresh: bound is 2*60 + 0 = 120s
       const base = {
-        db, runs, candleRepo, token: TOKEN, strategy: testStrategy([]), args,
+        db, runs, candleRepo: new PgCandleRepo(db), token: TOKEN, strategy: testStrategy([]),
+        args: parsePaperArgs(['ma-crossover', 'SNEK', '--resume', String(id), '--grace-sec', '0']),
         collectIntervalSec: 60, log: makeLog(), sleep: async () => {}, gitSha: 'testsha',
-        feedFactory: scriptedFeed([], {}),
+        feedFactory: scriptedFeed([], {}), now: () => t(10), signal: new AbortController().signal,
       };
-      await expect(runPaper({ ...base, now: () => t(10), signal: new AbortController().signal })).rejects.toThrow(/already running/);
+      await expect(runPaper({ ...base, resumeLiveness: () => ({ kind: 'counted', processes: 1 }) }))
+        .rejects.toThrow(/already running \(1 process for this strategy\)/);
 
-      // The same row, judged 10 minutes later: the process is gone and the run is recoverable.
-      await expect(runPaper({ ...base, now: () => t(20), signal: new AbortController().signal })).resolves.toBeDefined();
-      const after = await runs.getRun(id);
-      expect(Array.isArray(after?.params.resumes) ? (after?.params.resumes as unknown[]).length : 0).toBe(1);
+      // A STALE heartbeat does not excuse it either: a wedged process that stopped beating is still
+      // a writer, and resuming into it is the two-writer race this whole rule exists to prevent.
+      await runs.heartbeat(id, new Date(t(10).getTime() - 600_000), null);
+      await expect(runPaper({ ...base, resumeLiveness: () => ({ kind: 'counted', processes: 1 }) }))
+        .rejects.toThrow(/already running/);
     });
   });
+
+  it('refuses a resume when the process table could not be read: an unknown is not an absence', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await seedToken(db);
+      const runs = new PgRunRepo(db);
+      const id = await runs.createRun({
+        mode: 'paper', strategyId: 'ma-crossover', params: { intervalSec: 60, graceSec: 0 }, gitSha: 'testsha', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(0), status: 'running', rehearsal: false,
+      });
+      await runs.heartbeat(id, new Date(t(10).getTime() - 5_000), null);
+      await expect(runPaper({
+        db, runs, candleRepo: new PgCandleRepo(db), token: TOKEN, strategy: testStrategy([]),
+        args: parsePaperArgs(['ma-crossover', 'SNEK', '--resume', String(id), '--grace-sec', '0']),
+        collectIntervalSec: 60, log: makeLog(), sleep: async () => {}, gitSha: 'testsha',
+        feedFactory: scriptedFeed([], {}), now: () => t(10), signal: new AbortController().signal,
+        resumeLiveness: () => ({ kind: 'unknown' }),
+      })).rejects.toThrow(/already running/);
+    });
+  });
+
+  it('allows a resume once nothing is running it, even with a fresh heartbeat (the 31-minute gap)', async () => {
+    await withTestSchema(async (db) => {
+      await migrate(db);
+      await seedToken(db);
+      const runs = new PgRunRepo(db);
+      const id = await runs.createRun({
+        mode: 'paper', strategyId: 'ma-crossover', params: { intervalSec: 60, graceSec: 0 }, gitSha: 'testsha', baseUnit: SNEK,
+        dataSource: 'candles', fillModel: 'cpmm_observed', dataFrom: t(0), dataTo: t(0), status: 'running', rehearsal: false,
+      });
+      // Five seconds old: a run killed moments ago, which the heartbeat cannot know about for
+      // another 2*intervalSec + graceSec. Measured on the real system 2026-09-08: run 138 was dead
+      // and unresumable for half an hour on exactly this reasoning.
+      await runs.heartbeat(id, new Date(t(10).getTime() - 5_000), null);
+      await expect(runPaper({
+        db, runs, candleRepo: new PgCandleRepo(db), token: TOKEN, strategy: testStrategy([]),
+        args: parsePaperArgs(['ma-crossover', 'SNEK', '--resume', String(id), '--grace-sec', '0']),
+        collectIntervalSec: 60, log: makeLog(), sleep: async () => {}, gitSha: 'testsha',
+        feedFactory: scriptedFeed([], {}), now: () => t(10), signal: new AbortController().signal,
+        resumeLiveness: () => ({ kind: 'counted', processes: 0 }),
+      })).resolves.toBeDefined();
+
+      const after = await runs.getRun(id);
+      expect(Array.isArray(after?.params.resumes) ? (after?.params.resumes as unknown[]).length : 0).toBe(1);
+      // The record must say WHY it was allowed. Calling this "stale" would be false: it was 5s old.
+      const warnings = (after?.summary?.warnings ?? []) as string[];
+      expect(warnings.some((w) => /heartbeat is still fresh \(age 5s\) but which no process was running/.test(w))).toBe(true);
+    });
+  });
+
 });
