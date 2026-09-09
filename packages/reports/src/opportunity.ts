@@ -54,6 +54,10 @@ export interface IntraCandleStats {
   clearing: number;
   /** null, not 0, when nothing is measurable. */
   pctClearing: number | null;
+  /** `pctClearing`'s Wilson 95% interval and its verdict on whether the sample can carry it. */
+  ciLowPct: number | null;
+  ciHighPct: number | null;
+  underpowered: boolean;
   medianRangeBps: number | null;
   p90RangeBps: number | null;
   /**
@@ -68,6 +72,12 @@ export interface WindowStats {
   windows: number;
   clearing: number;
   pctClearing: number | null;
+  /** `pctClearing`'s Wilson 95% interval and its verdict on whether the sample can carry it. A
+   * window count in the teens produces an interval spanning most of the range; see `skippedForGaps`,
+   * which is usually why the count is that low. */
+  ciLowPct: number | null;
+  ciHighPct: number | null;
+  underpowered: boolean;
   medianAbsBps: number | null;
   /** Windows rejected because a candle inside them was missing. Information, not noise: a large
    *  number here means the collector had gaps and every other figure rests on less data. */
@@ -114,6 +124,48 @@ export function quantile(values: readonly number[], q: number): number | null {
   const hi = Math.ceil(pos);
   if (lo === hi) return s[lo]!;
   return s[lo]! + (s[hi]! - s[lo]!) * (pos - lo);
+}
+
+/**
+ * A rate whose interval is wider than this cannot support a claim, in percentage points. 20 is a
+ * judgement, not a law: it is the width at which "11.9% versus a noise floor of 8.3%" stops being a
+ * comparison and becomes two overlapping guesses.
+ */
+export const UNDERPOWERED_CI_WIDTH_PCT = 20;
+
+/** 95%. */
+const Z = 1.96;
+
+export interface Rate {
+  /** Numerator and denominator travel WITH the percentage, so it cannot be quoted without them.
+   * That is the whole point of this type: "11.9% of two-hour windows clear the floor" was carried
+   * into a review document as a finding, and it was one window out of fourteen. */
+  clearing: number;
+  of: number;
+  /** null, not 0, at zero trials — a 0% that means "nothing was measured" reads as "no opportunity". */
+  pct: number | null;
+  /** Wilson score interval, in percent. Wilson rather than the normal approximation because the
+   * samples here are small and the rates near zero, which is exactly where the normal interval
+   * returns negative lower bounds and false confidence. */
+  ciLowPct: number | null;
+  ciHighPct: number | null;
+  /** True when the interval is too wide to support a claim, AND at zero trials. Either way: do not
+   * quote the point estimate on its own. */
+  underpowered: boolean;
+}
+
+export function rateOf(clearing: number, of: number): Rate {
+  if (of === 0) return { clearing, of, pct: null, ciLowPct: null, ciHighPct: null, underpowered: true };
+  const p = clearing / of;
+  const denom = 1 + (Z * Z) / of;
+  const centre = (p + (Z * Z) / (2 * of)) / denom;
+  const margin = (Z / denom) * Math.sqrt((p * (1 - p)) / of + (Z * Z) / (4 * of * of));
+  const low = Math.max(0, centre - margin) * 100;
+  const high = Math.min(1, centre + margin) * 100;
+  return {
+    clearing, of, pct: p * 100, ciLowPct: low, ciHighPct: high,
+    underpowered: high - low > UNDERPOWERED_CI_WIDTH_PCT,
+  };
 }
 
 function pct(part: number, whole: number): number | null {
@@ -193,6 +245,7 @@ export function opportunity(candles: readonly OpportunityCandle[], opts: Opportu
     return {
       seconds, windows: moves.length, clearing: cleared,
       pctClearing: pct(cleared, moves.length),
+      ...(({ ciLowPct, ciHighPct, underpowered }) => ({ ciLowPct, ciHighPct, underpowered }))(rateOf(cleared, moves.length)),
       medianAbsBps: quantile(moves, 0.5),
       skippedForGaps,
     };
@@ -206,6 +259,7 @@ export function opportunity(candles: readonly OpportunityCandle[], opts: Opportu
       notMeasurable,
       clearing,
       pctClearing: pct(clearing, measurableRanges.length),
+      ...(({ ciLowPct, ciHighPct, underpowered }) => ({ ciLowPct, ciHighPct, underpowered }))(rateOf(clearing, measurableRanges.length)),
       medianRangeBps: quantile(measurableRanges, 0.5),
       p90RangeBps: quantile(measurableRanges, 0.9),
       missedByCloseOnly,

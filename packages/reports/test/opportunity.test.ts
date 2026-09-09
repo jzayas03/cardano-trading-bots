@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bodyBps, DEFAULT_FLOOR_BPS, MIN_SAMPLES_FOR_RANGE, opportunity, quantile, rangeBps,
+  bodyBps, DEFAULT_FLOOR_BPS, MIN_SAMPLES_FOR_RANGE, opportunity, quantile, rangeBps, rateOf,
   type OpportunityCandle,
 } from '../src/opportunity.js';
 
@@ -203,5 +203,59 @@ describe('opportunity: input contract', () => {
     expect(DEFAULT_FLOOR_BPS).toBe(216);
     expect(opportunity([c(0)], OPTS).floorBps).toBe(216);
     expect(opportunity([c(0)], { ...OPTS, floorBps: 500 }).floorBps).toBe(500);
+  });
+});
+
+describe('a rate is never reportable without its sample size', () => {
+  // The defect this closes, and I shipped it: "11.9% of 2-hour windows clear the floor" was quoted
+  // in a review document as a finding. Run against the real corpus it is 7.1% OF FOURTEEN WINDOWS --
+  // one window -- whose 95% interval runs from about 1% to 32%. The point estimate was not wrong; it
+  // was unsupported, and nothing in the output said so, so it travelled.
+  it('carries a Wilson 95% interval and flags a rate too wide to support a claim', () => {
+    const r = rateOf(1, 14);
+    expect(r.pct).toBeCloseTo(7.14, 2);
+    expect(r.ciLowPct).toBeCloseTo(1.3, 1);
+    expect(r.ciHighPct).toBeCloseTo(31.5, 1);
+    expect(r.underpowered).toBe(true);
+  });
+
+  it('does not cry wolf on a sample that can actually support the claim', () => {
+    const r = rateOf(100, 1000);
+    expect(r.pct).toBeCloseTo(10, 6);
+    expect(r.ciLowPct).toBeCloseTo(8.3, 1);
+    expect(r.ciHighPct).toBeCloseTo(12.0, 1);
+    expect(r.underpowered).toBe(false);
+  });
+
+  it('is null, never 0, at zero trials — and still refuses to be quoted', () => {
+    const r = rateOf(0, 0);
+    expect(r.pct).toBeNull();
+    expect(r.ciLowPct).toBeNull();
+    expect(r.ciHighPct).toBeNull();
+    expect(r.underpowered).toBe(true);
+  });
+
+  it('brackets the point estimate at both extremes without escaping [0, 100]', () => {
+    const none = rateOf(0, 10);
+    expect(none.pct).toBe(0);
+    expect(none.ciLowPct).toBe(0);
+    expect(none.ciHighPct).toBeGreaterThan(0);
+    const all = rateOf(10, 10);
+    expect(all.pct).toBe(100);
+    expect(all.ciHighPct).toBe(100);
+    expect(all.ciLowPct).toBeLessThan(100);
+  });
+
+  it('threads the interval onto the window and intra-candle stats the report returns', () => {
+    const candles = Array.from({ length: 6 }, (_, i) => ({
+      tickTs: new Date(Date.UTC(2026, 8, 6, i)),
+      open: 1, high: 1, low: 1, close: 1 + i * 0.01, samples: 4,
+    }));
+    const r = opportunity(candles, { floorBps: 216, candleIntervalSec: 3600, windowSecs: [7200] });
+    const w = r.windows[0]!;
+    expect(w.underpowered).toBe(true); // a handful of windows can never carry a rate
+    expect(w.ciLowPct).not.toBeNull();
+    expect(w.ciHighPct).not.toBeNull();
+    expect(r.intraCandle.underpowered).toBe(true);
   });
 });

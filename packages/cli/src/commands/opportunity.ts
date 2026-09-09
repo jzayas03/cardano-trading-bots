@@ -29,6 +29,19 @@ function fmt(n: number | null, digits = 1, suffix = ''): string {
   return n === null ? '--' : `${n.toFixed(digits)}${suffix}`;
 }
 
+/**
+ * A rate, its denominator, its 95% interval and — when the interval is too wide to support a claim —
+ * a marker saying so, as ONE string. Composed here rather than left to each call site so a bare
+ * percentage cannot leave this renderer: "11.9% of two-hour windows clear the floor" was quoted into
+ * a review document as a finding when it was one window out of fourteen, whose interval ran from
+ * about 1% to 32%. `opportunityRender.test.ts` asserts the property, not the convention.
+ */
+function rateCell(pct: number | null, of: number, lo: number | null, hi: number | null, underpowered: boolean, noun: string, verb: string): string {
+  if (pct === null) return `NOT MEASURED (no ${noun})`;
+  const ci = lo !== null && hi !== null ? `  [95% CI ${lo.toFixed(1)}-${hi.toFixed(1)}%]` : '';
+  return `${pct.toFixed(1)}% of ${of} ${noun} ${verb}${ci}${underpowered ? '  NOT DECISIVE' : ''}`;
+}
+
 function humanWindow(seconds: number): string {
   if (seconds % 86_400 === 0) return `${seconds / 86_400}d`;
   if (seconds % 3_600 === 0) return `${seconds / 3_600}h`;
@@ -47,7 +60,7 @@ export function renderOpportunity(ticker: string, r: OpportunityReport): string[
     out.push(`  intra-candle   NOT MEASURED -- all ${i.notMeasurable} candles have one sample, so high = low by construction`);
   } else {
     out.push(
-      `  intra-candle   ${fmt(i.pctClearing, 1, '%')} of ${i.measurable} clear the floor` +
+      `  intra-candle   ${rateCell(i.pctClearing, i.measurable, i.ciLowPct, i.ciHighPct, i.underpowered, 'candles', 'clear the floor')}` +
       `   median ${fmt(i.medianRangeBps, 0)} bps, p90 ${fmt(i.p90RangeBps, 0)} bps` +
       (i.notMeasurable > 0 ? `   (${i.notMeasurable} single-sample candles excluded)` : ''),
     );
@@ -55,10 +68,15 @@ export function renderOpportunity(ticker: string, r: OpportunityReport): string[
   }
   for (const w of r.windows) {
     out.push(
-      `  ${humanWindow(w.seconds).padEnd(4)} windows   ${fmt(w.pctClearing, 1, '%')} of ${w.windows} clear` +
+      `  ${humanWindow(w.seconds).padEnd(4)} windows   ${rateCell(w.pctClearing, w.windows, w.ciLowPct, w.ciHighPct, w.underpowered, 'windows', 'clear')}` +
       `   median |move| ${fmt(w.medianAbsBps, 0)} bps` +
       (w.skippedForGaps > 0 ? `   (${w.skippedForGaps} skipped for gaps)` : ''),
     );
+  }
+  // Said once, at the end, so a reader who skims the rows still cannot leave with a bare number.
+  if (r.intraCandle.underpowered || r.windows.some((w) => w.underpowered)) {
+    out.push('  NOT DECISIVE: the sample is too small to tell the marked rates apart from noise.');
+    out.push('               Quote them only with their denominator and interval, or not at all.');
   }
   return out;
 }
