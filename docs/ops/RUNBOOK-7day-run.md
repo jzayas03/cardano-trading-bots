@@ -147,3 +147,29 @@ Write `docs/ops/<date>-m3-report.md` containing:
 
 Then open its PR. The run ids in the report are the whole audit trail: anyone can re-derive every
 number in it with `report <id>` and `report --compare`.
+
+### Rotate the Postgres password once the runs are stopped
+
+Founder decision 2026-09-09: do this **when the run ends**, not during it.
+
+```
+ssh root@<ip> 'bash -s' < infra/vps/rotate-postgres-password.sh
+```
+
+`ctb_local_only` was committed to this repo while it was public and remains in the git history
+forever. The port is no longer exposed (#86 binds it to `127.0.0.1` and the `DOCKER-USER` block
+drops the rest), so this is not urgent — but **M6 puts live order state in this database**, and M6
+is gated on this very run, so the end of the run is the last quiet moment before it matters.
+
+It waits until now because it interrupts every process holding a connection: `createPool` does not
+set `idleTimeoutMillis`, so pg's 10-second default closes idle connections and `ALTER ROLE` breaks
+the next query. Mid-run, a paper run that reaches `maxTickFailures` aborts, marks itself stopped,
+and the next start creates a **new** run — restarting the week. With the runs already stopped there
+is nothing to lose.
+
+Order: stop the paper units and write the report FIRST, so the run rows are final, then rotate, then
+confirm the collector came back. Full detail and the rollback behaviour are in
+`docs/ops/RUNBOOK-postgres-exposure.md` step 3.
+
+Rotate `ctb_dashboard_local_only` (migration `0006`) at the same time — same exposure, lower
+priority only because that role is SELECT-only.

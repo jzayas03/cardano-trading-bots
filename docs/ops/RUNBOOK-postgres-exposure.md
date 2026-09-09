@@ -80,7 +80,9 @@ rolls back — role and `.env` — if any step fails. Nothing is ever printed.
 ssh root@<ip> 'bash -s' < infra/vps/rotate-postgres-password.sh
 ```
 
-**Run it BETWEEN paper runs, not during one.** `createPool` does not set `idleTimeoutMillis`, so
+**Run it BETWEEN paper runs, not during one.** Founder decision 2026-09-09: at the end of the
+7-day run. It is listed as a step in `docs/ops/RUNBOOK-7day-run.md` § At the end, which is the
+document that will actually be open that day. `createPool` does not set `idleTimeoutMillis`, so
 pg's 10-second default applies: idle connections close and the next query opens a fresh one. The
 instant ALTER ROLE lands, every process holding the old credentials fails to authenticate.
 
