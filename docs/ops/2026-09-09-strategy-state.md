@@ -183,3 +183,40 @@ the ADA columns, since two tokens' denominators are unrelated.
 That no strategy can work — only that none of the ones examined has been shown to, on the data
 collected so far, at the costs actually charged. Necessary conditions have been measured. The
 sufficient condition is what the live week is for.
+
+## The promotion gate
+
+Founder sign-off 2026-09-09, **before the seven-day run's results existed**. That order is the point:
+a gate chosen after seeing which side of it the results fall on is fitted to the answer, and this
+project has already published one rate — 7.1% of fourteen windows — as though it were a finding.
+
+Two rungs. `experimental` is the default; `candidate` is the highest anything here can reach, because
+live trading is armed by hand. **The gate bars promotion, it does not warn.**
+
+| Criterion | Threshold |
+|---|---|
+| Completed round trips (a round trip closes on a sell) | **30** |
+| Window coverage | **80%** of expected buckets |
+| Gaps over the stale-fill bound | **5%** of candles |
+| Token-denominated return | strictly beats **both** `scheduled-accumulation` and `buy-and-hold` over the identical window |
+| Every figure in the decision | measurable — a null return bars, it is not read as zero |
+
+**Where 30 comes from.** NIGHT's median absolute two-hour move is 82 bps; for a roughly normal
+distribution `median|X| ≈ 0.674σ`, so per-trade dispersion is about **122 bps**. Detecting an edge `e`
+at 95% needs `n ≥ (1.96σ/e)²` — 6 round trips for a 100 bps edge, **23 for 50 bps**, 92 for 25 bps.
+Thirty sits just above the 50 bps case, deliberately: an edge smaller than that cannot be told apart
+from the cost floor's own error bar, whose batcher component is an assumption worth ±40 bps.
+
+**The consequence, which is the point.** At the current fill rate a seven-day run yields roughly seven
+round trips, so **a week promotes nothing**. The lever for a promotable answer is more instruments in
+parallel, not a longer wait on one. It also puts `scheduled-accumulation` on the critical path: with
+no baseline run over the window, nothing can clear the gate at all.
+
+Measured against the three finished NIGHT runs the day it was built — all three barred, and for two
+different reasons:
+
+```
+run 137 ma-crossover:       0 of 30 round trips
+run 138 rsi-mean-reversion: 0 of 30 round trips
+run 139 buy-and-hold:       buy-and-hold is a baseline, not a promotion candidate
+```

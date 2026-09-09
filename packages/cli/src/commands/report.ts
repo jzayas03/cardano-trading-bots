@@ -242,7 +242,19 @@ export function printCompare(inputs: CompareRunInput[], now: Date): void {
   const tickers = [...new Set(inputs.map((i) => i.ticker))];
   console.log(`\n=== compare ${inputs.map((i) => i.run.id).join(',')} | ${tickers.join(', ')} | as of ${now.toISOString()}`);
   if (tickers.length > 1) console.log(MIXED_TOKENS_WARNING);
-  console.table(compareRunRows(inputs, now));
+  const rows = compareRunRows(inputs, now);
+  // `blocker` is a sentence, not a cell: it triples the table's width and is printed in full below.
+  // Stripped by destructuring rather than by an explicit column list, so adding a future column
+  // cannot silently drop it from the table the way a hand-maintained list would.
+  console.table(rows.map(({ blocker: _blocker, ...rest }) => rest));
+  // The blocker is too long for a table cell and too important to drop. Printed once per barred run,
+  // under the table, so the gate can be audited rather than merely obeyed.
+  const barred = rows.filter((r) => r.promotion !== 'candidate' && r.blocker !== '');
+  if (barred.length > 0) {
+    console.log('\npromotion gate — why each run is still experimental:');
+    for (const r of barred) console.log(`  run ${r.run} ${r.strategy}: ${r.blocker}`);
+    console.log('The gate BARS promotion; thresholds were fixed before this run\'s results existed.');
+  }
 }
 
 export async function reportCommand(log: Logger, args: string[]): Promise<void> {

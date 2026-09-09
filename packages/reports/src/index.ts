@@ -14,4 +14,5 @@ export { gridCombinations, gridRows, gridWarning, type GridInput, type GridRow }
 export * from './watch.js';
 export * from './leadlag.js';
 export * from './opportunity.js';
+export { BASELINE_STRATEGIES, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT, MIN_ROUND_TRIPS, promotionVerdict, type PromotionCheck, type PromotionInput, type PromotionStatus, type PromotionVerdict } from './promotion.js';
 export { lpEntryRows, lpEntrySummary, type LpCandle, type LpEntryRow, type LpEntrySummary } from './lp.js';

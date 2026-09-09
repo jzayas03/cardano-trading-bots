@@ -24,6 +24,9 @@ describe('compareRunRows', () => {
       // These points are priced at 1 ADA/token throughout, so 1050 ADA is 1050 tokens and the token
       // return must equal the ADA return exactly — the flat-price invariant, seen from the table.
       endTokens: '1050.000000', returnTokenPct: 5,
+      // One filled BUY and no sells: zero completed round trips, so the gate bars it — and names the
+      // count rather than calling ma-crossover a baseline, which it is not.
+      promotion: 'experimental', blocker: '0 of 30 round trips',
       filled: 1, rejected: 2, staleRejects: 1, feesAda: '2.200000', resumes: 2, rehearsal: '',
     });
   });
@@ -43,6 +46,7 @@ describe('compareRunRows', () => {
       startAda: '1000.000000', endAda: '900.000000', endExecAda: '-', returnPct: -10,
       // A backtest persists orders but no equity points, so there is no price to restate against.
       endTokens: '-', returnTokenPct: '-',
+      promotion: 'experimental', blocker: '0 of 30 round trips',
       filled: 2, rejected: 1, staleRejects: 1, feesAda: '4.400000', resumes: 0, rehearsal: '',
     });
   });
