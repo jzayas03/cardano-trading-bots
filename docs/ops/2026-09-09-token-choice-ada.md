@@ -3,6 +3,69 @@
 Date: 2026-09-09. **Supersedes `docs/ops/2026-09-08-token-choice.md`**, which measured the right
 thing in the wrong currency.
 
+## Correction, same day: the floor is not 216 bps for everybody
+
+The table below ranked every token against a flat **216 bps**. That figure was calibrated on run
+139's fill, and **run 139 traded NIGHT** — a pool charging 30 bps. Pool fees vary **3.3x** across
+tokens we already collect (NIGHT/MIN/USDA/WMTX/AGIX 30, HOSKY 50, STUFF 60, IAG 75, FLDT 80,
+SNEK/STRIKE/ASCEND 100, USDCx 300), and price impact varies with depth. Charging each token what it
+actually costs changes the ranking and the conclusion.
+
+**One-way cost = pool fee + impact(depth) + 22 bps spread + 22 bps batcher/network.** Impact is
+scaled from the one measurement there is: 34 bps for a 990 ADA order against NIGHT's 2,359,348 ADA
+side, and impact moves with size/depth. On NIGHT this reproduces the measured 216 bps exactly, which
+is the only reason to trust it elsewhere.
+
+| token | fee | ADA depth | impact | **its floor** | n | **2h % vs OWN floor** | 2h % vs flat 216 |
+|---|---|---|---|---|---|---|---|
+| ASCEND | 100 | 850,412 | 94 | 477 | 1111 | **11.9** | 40.5 |
+| STRIKE | 100 | 1,307,542 | 61 | 411 | 907 | **11.6** | 35.6 |
+| **NIGHT** | 30 | **2,359,348** | 34 | **216** | 2322 | **9.5** | 9.5 |
+| *USDA* | 30 | 1,673,615 | 48 | 244 | 1393 | *8.3* | *10.9* |
+| **SNEK** | 100 | 1,941,419 | 41 | **371** | 1152 | **6.8** | 27.6 |
+| WMTX | 30 | 388,606 | 206 | 561 | 554 | 5.8 | 33.8 |
+| STUFF | 60 | 505,719 | 159 | 525 | 414 | 5.6 | 15.7 |
+| MIN | 30 | 3,195,534 | 25 | **198** | 782 | 3.1 | 2.3 |
+| IAG | 75 | 412,123 | 195 | 627 | 570 | 1.9 | 27.2 |
+| HOSKY | 50 | 542,485 | 148 | 484 | 213 | 1.4 | 13.1 |
+| USDCx | 300 | 405,901 | 198 | 1083 | 625 | 1.4 | 28.2 |
+| AGIX | 30 | 64,455 | 1245 | 2637 | 136 | 0.7 | 22.1 |
+
+**Three things follow.**
+
+**SNEK looks much worse: 27.6% -> 6.8%.** It moves more than most AND charges 100 bps, and net of its
+own costs it sits below the noise floor. **This is not a reason to switch, because nothing else
+clears either** — see below.
+
+**A cheap fee does not rescue a thin pool.** WMTX was the obvious candidate on fee alone — 30 bps,
+33.8% against a flat floor. Its pool is a fifth of SNEK's, so a 990 ADA order pays ~206 bps of impact
+and its real floor is 561 bps: **5.8%, worse than SNEK.** The superseded 2026-09-08 doc had this
+right and said so — *"ASCEND and STRIKE move more but sit on pools less than half SNEK's depth, and
+our own price impact is charged against that depth."* Ranking on fee alone repeats the mistake this
+correction exists to fix, one variable over.
+
+**Nothing clears meaningfully.** The best is ASCEND at 11.9% against a stablecoin noise floor of
+8.3%. That is inside noise, not an edge. **No token in this universe demonstrably clears its own cost
+floor**, and the honest reading of this table is that the taker side of these pools is not where a
+profit is.
+
+**NIGHT has the LOWEST floor of any liquid token here (216 bps)** — deepest pool and cheapest fee
+together — while moving least. That combination is bad for trading and is precisely what makes it
+interesting on the *other* side of the fee: see `docs/specs/2026-09-09-cross-pair-collection.md` §1
+and the liquidity-provision note below.
+
+### The maker side, for scale
+
+NIGHT/ADA turned over **~1.07M ADA/day** in the week to 2026-09-08 (3-month average 2.47M, so the
+recent week is the conservative figure) through a pool holding ~4.72M ADA, at 30 bps. That is roughly
+**3,200 ADA/day of fees to the pool**, ~0.068%/day, shared pro rata. The volatility that makes NIGHT
+untradeable — 9.5%, median 2 h move 71 bps — is the same property that keeps impermanent loss small.
+
+**Not a recommendation, and it cuts against the stated goal**: if NIGHT appreciates against ADA, an
+LP position ends up holding *less* NIGHT than simply holding would. Fee income has to beat that, and
+whether it does is a conviction about NIGHT, not a measurement. Recorded here because the cost
+structure is measured and the arithmetic is not obvious.
+
 ## The defect
 
 That table ranked tokens by "% of windows whose absolute return exceeds 2.16%" over 54,050
@@ -51,9 +114,10 @@ SaturnSwap, which serves no OHLCV. SONG is likewise absent — GeckoTerminal 404
 endpoint. Neither was lost in the ADA re-backfill; both were already missing, and the re-backfill
 returned 19 of 20 tokens with slightly MORE rows than the USD pass (55,171 vs 54,118).
 
-## The table
+## The table (flat 216 bps — see the Correction above before citing it)
 
-% of contiguous windows whose absolute return exceeds 216 bps. `n` is 2-hour windows.
+% of contiguous windows whose absolute return exceeds 216 bps. **This flat floor is wrong for every
+token whose pool does not charge 30 bps**; the corrected ranking is at the top of this document. `n` is 2-hour windows.
 
 | token | n | **2h** | 6h | 24h | 2h median bps | USD 2h was |
 |---|---|---|---|---|---|---|
