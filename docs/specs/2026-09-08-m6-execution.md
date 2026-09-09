@@ -184,6 +184,26 @@ explicitly out of scope.
 
 ### 7.2 The batcher fee is not ours to assume — Dexter writes its own
 
+**Verified 2026-09-09, and it is more concrete than this section assumed.** Dexter 5.4.10's
+`minswap-v2.js` `swapOrderFees()` hardcodes `batcherFee: 2000000n` (`isReturned: false`) and
+`deposit: 2000000n` (`isReturned: true`), and its builder sends the sum — **4 ADA leaves the wallet
+per order, of which 2 come back**. No cost table shows the deposit and the floor is right not to
+count it, but it sets the real minimum order size and feeds the open working-capital question.
+
+A reviewer advised lowering the model to 0.20 ADA on the (correct, as venue policy) grounds that
+Minswap removed batcher fees in May 2025. **That would have modelled 176 bps while still paying
+216** — overstating every strategy's edge by 40 bps, in exactly the direction that pushes a losing
+strategy through the promotion gate. Offering a fee in the datum is paying it.
+
+The proof that Dexter's constant is not a reading of current policy: it writes the **identical** 2 ADA
+for Minswap **V1**, which our own table has at zero from a documented source. So the library does not
+distinguish the two, and its V2 figure is evidence about the library, not about Minswap.
+
+**Order of operations, therefore: override the datum parameter at submission first, then lower the
+model.** The model follows the submission path and never leads it.
+`packages/sim-executor/test/dexterWritesTheBatcherFee.guard.test.ts` pins all of this, and fails
+loudly on a Dexter bump — which is news to read, not breakage to patch.
+
 `minswap-v2.js` declares `swapOrderFees()` as `batcherFee: 2_000_000n` and `deposit: 2_000_000n`, and
 `DatumParameterKey.BatcherFee` puts that batcher value **into the order datum**. It is not an estimate
 Dexter displays; it is what Dexter will pay.
