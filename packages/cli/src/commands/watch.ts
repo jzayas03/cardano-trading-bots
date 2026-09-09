@@ -1,8 +1,9 @@
 import { statfsSync } from 'node:fs';
 import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool } from '@ctb/db';
-import { checkBackupFreshness, checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, verdict, type Check, type PaperRunState } from '@ctb/reports';
+import { checkBackupFreshness, checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, checkQuotaSpend, checkRecurringTickErrors, checkTickProductivity, verdict, type Check, type PaperRunState } from '@ctb/reports';
 import type { Logger } from 'pino';
+import { UNPRODUCTIVE_TICKS_FAIL } from '@ctb/reports';
 import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';
 import { digestLines } from '../digest.js';
 import { listProcessesWithAge } from '../ps.js';
@@ -38,7 +39,17 @@ export async function watchCommand(log: Logger, args: readonly string[]): Promis
 
 
     const now = new Date();
-    checks.push(...checkDigestLines(digestLines(await new PgSnapshotRepo(pool).digestInput(intervalSec, [...cfg.venues], now), now)));
+    const repo = new PgSnapshotRepo(pool);
+    const digest = await repo.digestInput(intervalSec, [...cfg.venues], now);
+    checks.push(...checkDigestLines(digestLines(digest, now)));
+
+    // The three checks that would have alarmed on 2026-09-08, when this watchdog ran fifteen times
+    // and exited 0 through four hours of a dead feed. `lastRuns` already returns everything they
+    // need, so this costs one query, not three.
+    const ticks = await repo.lastRuns(UNPRODUCTIVE_TICKS_FAIL);
+    checks.push(checkTickProductivity(ticks));
+    checks.push(checkRecurringTickErrors(ticks));
+    checks.push(checkQuotaSpend(digest.discoveryCallsToday + digest.refreshCallsToday, cfg.dailyCallCeiling));
 
     checks.push(checkBackupFreshness(newestBackupAgeHours()));
 
