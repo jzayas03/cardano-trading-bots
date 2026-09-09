@@ -1,5 +1,13 @@
 # Choosing the token the 7-day run trades
 
+> **SUPERSEDED 2026-09-09 by `docs/ops/2026-09-09-token-choice-ada.md`. The numbers below are in US
+> DOLLARS, compared against an ADA-denominated cost floor.** GeckoTerminal defaults `currency` to
+> `usd` and this project passed no parameter, so `candles_external` held dollars while every cost
+> here is ADA (#89, migration 0008). The measurement is real; the numeraire is wrong. The ADA
+> re-run reaches the SAME instrument choice — SNEK 35.0 -> 27.6%, still ~2.9x NIGHT — but every
+> token the table ranked below ~15% was unranked rather than ranked low, and NIGHT at 9.5% sits
+> BELOW a USD stablecoin's 10.9%. Read the successor before citing anything here.
+
 Date: 2026-09-08. Supersedes the NIGHT choice made the same day.
 
 ## The mistake
