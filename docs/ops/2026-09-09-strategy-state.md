@@ -80,6 +80,48 @@ conditions only.
 
 **4. Arbitrage.** Measured dead at this cost structure. Do not re-derive it.
 
+## NIGHT has a supply schedule, and it is the missing dimension
+
+Founder research, 2026-09-09. **This is not visible in any price series and nothing in this project
+models it.**
+
+NIGHT (Midnight) has a fixed **24 billion** supply. The community allocations — Glacier Drop and
+Scavenger Mine — unlock across a **~360-day thawing window that began around 10 December 2025**, in
+**four equal 25% tranches**: a randomised first unlock day inside the initial 90-day window, then
+every 90 days after. Roughly **70% of total supply was circulating by mid-2026**, with the remainder
+continuing on a roughly monthly cadence into 2027 and beyond, plus a longer Lost-and-Found window and
+other buckets.
+
+**This probably explains the central puzzle in this document.** NIGHT/ADA clears its cost floor in
+9.5% of 2 h windows — *below* a USD stablecoin's 8.3% — and we recorded that as "NIGHT tracks ADA
+more tightly than the dollar does" without a mechanism. Continuous scheduled emission is a mechanism:
+a persistent supply overhang caps upside and damps the pair, which is exactly the shape measured.
+
+**And it gives "accumulate NIGHT" a calendar, which is the first timing signal in this project that
+does not depend on beating the cost floor.** Every strategy examined here needs a price move larger
+than 216-371 bps to pay for itself. An unlock schedule is different in kind: the dates are known in
+advance, the direction of the supply pressure is known, and acting on it costs one one-way fee rather
+than a round trip.
+
+**What follows, and what does not.**
+
+It does **not** follow that buying after an unlock is profitable — that is a claim about how much of
+the supply is sold and how fast, which nothing here measures. What follows is narrower and firmer:
+
+- **A scheduled accumulation rule should be aware of the tranche calendar** rather than being a naive
+  fixed-interval buy. Buying into an unlock is buying into supply.
+- **The 3-month price history this analysis rests on sits entirely inside the thawing window**, so
+  every NIGHT figure in this document describes a token under active emission. It is not evidence
+  about NIGHT after the schedule completes.
+- **Nothing in the collector, the candles or the engine knows the schedule exists.** It would have to
+  be entered as data — a small table of tranche dates — and that is a prerequisite for any
+  calendar-aware rule, not a strategy in itself.
+
+**Unverified here.** These figures come from founder research, not from a source this project reads.
+The exact tranche dates, the randomised first-unlock date, and the current circulating percentage
+should be pinned against Midnight's own published schedule before any rule is built on them — the
+same standard applied to every other number in this document.
+
 ## What is still unknown, in the order it would change the answer
 
 1. **Can clock-sampled reserves see the moves at all?** A pool trading once every ~84 minutes,
@@ -88,7 +130,10 @@ conditions only.
 2. **Does anything survive a week?** Runs 146/147/148 finish ~16 September.
 3. **Is direct cross-pair routing cheaper?** NIGHT/SNEK exists at $280k, so SNEK -> NIGHT is one swap
    rather than two. Spec'd, unmeasured.
-4. **Venue integrity has no signal.** Nothing in this system can tell a healthy market from a
+4. **Does the unlock calendar actually move the price?** The schedule is known; whether tranche
+   dates show up as measurable supply pressure is not. Testable against the price history we already
+   have, once the dates are pinned.
+5. **Venue integrity has no signal.** Nothing in this system can tell a healthy market from a
    compromised one; the Dano Finance case surfaced from the founder's own knowledge, not from
    anything we collect.
 
