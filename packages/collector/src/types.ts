@@ -38,6 +38,13 @@ export interface SnapshotRow {
   tvlLovelace: bigint;
   blockHeight: number;
   observedAt: Date;
+  /**
+   * False for a multi-venue observation — a pool sampled only to measure cross-DEX spread, never to
+   * price a candle. `readSnapshotsSince` filters these out, because `buildCandles` re-picks the
+   * deepest pool per bucket and a secondary pool that was momentarily deeper would splice the
+   * candle series mid-run. See `0009_snapshot_primary_flag.sql`.
+   */
+  isPrimary: boolean;
 }
 
 export interface Logger {

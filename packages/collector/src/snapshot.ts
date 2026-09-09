@@ -41,7 +41,7 @@ function unitOf(asset: Exclude<PoolAsset, 'lovelace'>): string {
 /** Pure. Throws instead of guessing: an unknown venue, a non-ADA pair, or a nonsense fee is a bug upstream. */
 export function poolToSnapshot(
   pool: PoolLike,
-  ctx: { tickTs: Date; blockHeight: number; observedAt: Date },
+  ctx: { tickTs: Date; blockHeight: number; observedAt: Date; isPrimary?: boolean },
 ): SnapshotRow {
   if (!isDexName(pool.dex)) throw new Error(`unknown venue ${pool.dex} for pool ${pool.identifier}`);
   const aIsAda = pool.assetA === 'lovelace';
@@ -67,5 +67,8 @@ export function poolToSnapshot(
     tvlLovelace: 2n * reserveQuote,
     blockHeight: ctx.blockHeight,
     observedAt: ctx.observedAt,
+    // Defaults TRUE: every caller that predates multi-venue sampling produced a deepest-pool
+    // observation, and a row that forgot the flag must not silently become invisible to candles.
+    isPrimary: ctx.isPrimary ?? true,
   };
 }

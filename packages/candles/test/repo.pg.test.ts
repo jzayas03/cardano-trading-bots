@@ -9,7 +9,7 @@ const snek = { ticker: 'SNEK', policyId: '279c909f348e533da5808898f87f9a14bb2c3d
 const t = (m: number) => new Date(Date.UTC(2026, 8, 6, 12, m, 0));
 const row = (tickTs: Date, poolId: string, rb: bigint, rq: bigint, tvl: bigint): SnapshotRow => ({
   tickTs, dex: 'SundaeSwapV3', poolId, poolAddress: 'addr', baseUnit: snek.unit, quoteUnit: 'lovelace', reserveBase: rb, reserveQuote: rq,
-  feeBps: 100, poolType: 'cpmm', tvlLovelace: tvl, blockHeight: 1, observedAt: tickTs,
+  feeBps: 100, poolType: 'cpmm', tvlLovelace: tvl, blockHeight: 1, observedAt: tickTs, isPrimary: true,
 });
 
 describe.skipIf(!PG_ENABLED)('PgCandleRepo + buildCandlesForToken', () => {

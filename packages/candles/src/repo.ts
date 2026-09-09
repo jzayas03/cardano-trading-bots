@@ -67,8 +67,13 @@ export class PgCandleRepo implements CandleRepo {
       // quote_unit is pinned to 'lovelace' by a CHECK today, but candles are ADA-quoted by
       // construction (price = reserve_quote / reserve_base, in ADA). Filtering here means the day
       // that CHECK is widened, a deeper non-ADA pool cannot silently become the candle (finding M5).
+      //
+      // `is_primary` is the same defence one layer over: multi-venue sampling writes the OTHER
+      // venues' pools to measure cross-DEX spread, and buildCandles re-picks the deepest pool per
+      // bucket — so without this filter a secondary pool that was momentarily deeper would splice
+      // the series mid-run. Migration 0009.
       `SELECT tick_ts, pool_id, reserve_base, reserve_quote, fee_bps, pool_type, tvl_lovelace
-         FROM pool_snapshots WHERE base_unit = $1 AND quote_unit = 'lovelace' AND ($2::timestamptz IS NULL OR tick_ts > $2) ORDER BY tick_ts, pool_id`,
+         FROM pool_snapshots WHERE base_unit = $1 AND quote_unit = 'lovelace' AND is_primary AND ($2::timestamptz IS NULL OR tick_ts > $2) ORDER BY tick_ts, pool_id`,
       [baseUnit, afterTick],
     );
     return res.rows.map((r) => ({

@@ -26,7 +26,7 @@ function row(poolId: string, tickTs: Date): SnapshotRow {
     poolType: 'cpmm',
     tvlLovelace: 104_663_941_188n,
     blockHeight: 1,
-    observedAt: tickTs,
+    observedAt: tickTs, isPrimary: true,
   };
 }
 

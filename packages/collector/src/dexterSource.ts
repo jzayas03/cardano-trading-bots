@@ -1,7 +1,7 @@
 import { Asset, BlockfrostProvider, Dexter, LiquidityPool } from '@indigo-labs/dexter';
 import type { Pair } from '@ctb/universe';
 import type { CachedPool, RunError } from './repo.js';
-import type { DiscoveryCallsSource, HydratableSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
+import type { DiscoveryCallsSource, HydratableSource, MultiVenueSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
 import type { Logger, PoolLike } from './types.js';
 import { discoveryOf, VENUE_NAMES, type DexName } from './venues.js';
 import { collectPoolShapes, collectRefreshedShape, type LiquidityPoolShape } from './poolShape.js';
@@ -342,7 +342,7 @@ function adaReserveOf(shape: LiquidityPoolShape): bigint | undefined {
 
 const TIP_TIMEOUT_MS = 10_000;
 
-export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, RediscoverySource, HydratableSource {
+export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, RediscoverySource, HydratableSource, MultiVenueSource {
   private readonly fetcher: PoolFetcher;
   private readonly defaultFetcher: DefaultPoolFetcher | null;
   private readonly known = new Map<string, LiquidityPoolShape>();
@@ -362,6 +362,13 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
   private readonly discoveryRetryDelaysMs: number[];
   /** Venues whose last discovery attempt ended with no pools; `rediscover()` tries exactly these. */
   private readonly lost = new Set<DexName>();
+  /**
+   * Pools discovery found and `'deepest'` pruning set aside — the OTHER venues for a token we already
+   * refresh. Kept rather than discarded so cross-DEX spread can be measured: the same pair, at the
+   * same instant, on two venues. They are refreshed on their own cadence and their snapshots are
+   * written with `isPrimary: false`, so they can never reach a candle (migration 0009).
+   */
+  private readonly secondary = new Map<string, LiquidityPoolShape>();
 
   constructor(opts: DexterPoolSourceOptions) {
     this.url = opts.blockfrostUrl ?? 'https://cardano-mainnet.blockfrost.io/api/v0';
@@ -388,6 +395,46 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
   providerCalls(): number { return this.defaultFetcher?.providerCalls() ?? 0; }
   resetProviderCalls(): void { this.defaultFetcher?.resetProviderCalls(); }
   knownPoolCount(): number { return this.known.size; }
+
+  /** Pools set aside by `'deepest'` pruning that are deep enough to be worth pricing. */
+  secondaryPoolCount(minAdaLovelace: bigint): number {
+    let n = 0;
+    for (const shape of this.secondary.values()) if ((adaReserveOf(shape) ?? 0n) >= minAdaLovelace) n++;
+    return n;
+  }
+
+  /**
+   * Refresh the non-deepest venues for tokens we already track, so the same pair can be compared
+   * across DEXes at the same instant.
+   *
+   * Depth-filtered because a spread against a pool nobody can trade is not an opportunity: measured
+   * 2026-09-09, NIGHT showed a persistent ~404 bps gap between MinswapV2 and a SundaeSwapV3 pool
+   * holding a tenth of the depth — large precisely BECAUSE closing it was uneconomic. Pricing dust
+   * pools would fill the series with spreads of that kind and cost quota to do it.
+   *
+   * Never touches `known`, so the normal refresh, the pool cache and `knownPoolCount()` are
+   * unchanged, and a failure here cannot affect the primary series.
+   */
+  async refreshSecondary(minAdaLovelace: bigint): Promise<SourceResult> {
+    const entries = [...this.secondary.entries()].filter(([, s]) => (adaReserveOf(s) ?? 0n) >= minAdaLovelace);
+    const settled = await Promise.allSettled(entries.map(([, shape]) => this.fetcher.poolState(shape)));
+    const pools: PoolLike[] = [];
+    const failures: RunError[] = [];
+    settled.forEach((r, i) => {
+      const poolId = entries[i]?.[0] ?? '?';
+      if (r.status === 'fulfilled' && r.value) {
+        const { kept, failure } = collectRefreshedShape(poolId, r.value);
+        if (kept) {
+          this.secondary.set(poolId, kept.shape);
+          pools.push(kept.pool);
+        } else if (failure) failures.push(failure);
+      } else {
+        const message = r.status === 'rejected' ? String((r.reason as Error)?.message ?? r.reason) : 'no state returned';
+        failures.push({ scope: `multiVenue:${poolId}`, message });
+      }
+    });
+    return { pools, failures };
+  }
 
   /**
    * Seeds the known set from the persisted cache, so the first tick after a restart is a ~300-call
@@ -424,6 +471,7 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
 
   async discover(pairs: Pair[]): Promise<SourceResult> {
     this.known.clear();
+    this.secondary.clear();
     this.lost.clear();
     this.callsByVenue = {};
     const result = await this.discoverVenues(this.venues, pairs);
@@ -553,6 +601,10 @@ export class DexterPoolSource implements PoolSource, DiscoveryCallsSource, Redis
       const isBetter = !current || ada > currentAda || (ada === currentAda && shape.identifier < current.shape.identifier);
       if (isBetter) bestByToken.set(key, { poolId, shape });
     }
+    // Everything not chosen becomes secondary rather than being dropped.
+    const chosen = new Set([...bestByToken.values()].map((b) => b.poolId));
+    this.secondary.clear();
+    for (const [poolId, shape] of this.known) if (!chosen.has(poolId)) this.secondary.set(poolId, shape);
     this.known.clear();
     for (const { poolId, shape } of bestByToken.values()) this.known.set(poolId, shape);
     this.log.info({ policy: this.refreshPolicy, discovered, kept: this.known.size }, 'pruned known pools to deepest per token');

@@ -90,8 +90,10 @@ export interface RestartState {
   pools: CachedPool[];
 }
 
-/** Number of placeholders contributed by each snapshot row (run_id + 13 pool_snapshots columns). */
-const PARAMS_PER_ROW = 14;
+/** Placeholders per snapshot row (run_id + 14 pool_snapshots columns). Went 14 -> 15 when
+ *  `is_primary` was added (migration 0009): every placeholder is numbered off this, so a stale
+ *  value shifts every column by one. */
+const PARAMS_PER_ROW = 15;
 
 export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
   constructor(private readonly db: Db) {}
@@ -124,14 +126,14 @@ export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
       values.push(
         runId, r.tickTs, r.dex, r.poolId, r.poolAddress, r.baseUnit, r.quoteUnit,
         r.reserveBase.toString(), r.reserveQuote.toString(), r.feeBps, r.poolType,
-        r.tvlLovelace.toString(), r.blockHeight, r.observedAt,
+        r.tvlLovelace.toString(), r.blockHeight, r.observedAt, r.isPrimary,
       );
       const p = Array.from({ length: PARAMS_PER_ROW }, (_, k) => `$${i * PARAMS_PER_ROW + k + 1}`);
       return `(${p.join(', ')})`;
     });
     const res = await this.db.query(
       `INSERT INTO pool_snapshots (run_id, tick_ts, dex, pool_id, pool_address, base_unit, quote_unit,
-         reserve_base, reserve_quote, fee_bps, pool_type, tvl_lovelace, block_height, observed_at)
+         reserve_base, reserve_quote, fee_bps, pool_type, tvl_lovelace, block_height, observed_at, is_primary)
        VALUES ${tuples.join(', ')}
        ON CONFLICT (pool_id, tick_ts) DO NOTHING`,
       values,

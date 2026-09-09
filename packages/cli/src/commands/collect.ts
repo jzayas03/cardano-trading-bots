@@ -50,7 +50,8 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
 
   log.info(
     { pairs: universe.pairs.length, intervalSec: cfg.intervalSec, once: opts.once, venues: cfg.venues, refreshPolicy: cfg.refreshPolicy,
-      minDepthAda: Number(cfg.minDepthLovelace) / 1_000_000, focusTicker: cfg.focusTicker, focusIntervalSec: cfg.focusIntervalSec },
+      minDepthAda: Number(cfg.minDepthLovelace) / 1_000_000, focusTicker: cfg.focusTicker, focusIntervalSec: cfg.focusIntervalSec,
+      multiVenueEveryNTicks: cfg.multiVenueEveryNTicks, multiVenueMinDepthAda: Number(cfg.multiVenueMinDepthLovelace) / 1_000_000 },
     'collector starting',
   );
 
@@ -92,6 +93,13 @@ export async function collectCommand(log: Logger, opts: { once: boolean }): Prom
         intervalSec: loopSec,
         rediscoverAfterMs: REDISCOVER_AFTER_MS, state, tickTs: pendingTickTs,
         dailyCallCeiling: cfg.dailyCallCeiling, poolCache: repo,
+        // Multi-venue pricing rides on FULL ticks only. A focus tick exists to give the traded token
+        // several samples inside one candle; a secondary pool is being priced, not traded, and
+        // pricing it at the focus cadence would multiply the cost for no extra information.
+        multiVenueMinAdaLovelace:
+          cfg.multiVenueEveryNTicks > 0 && fullTick && (tickIndex / ticksPerCandle) % cfg.multiVenueEveryNTicks === 0
+            ? cfg.multiVenueMinDepthLovelace
+            : undefined,
         refreshOnly: fullTick ? undefined : focusOnly,
       };
       try {

@@ -27,7 +27,7 @@ describe.skipIf(!PG_ENABLED)('digestInput', () => {
       id = await repo.startRun(new Date('2026-09-07T00:10:00Z'), new Date('2026-09-07T00:10:01Z'));
       const snap = (dex: 'MuesliSwap' | 'SundaeSwapV3' | 'MinswapV2', tick: Date) => ({
         tickTs: tick, dex, poolId: `${dex}:x`, poolAddress: 'addr', baseUnit: `${P}41`, quoteUnit: 'lovelace' as const,
-        reserveBase: 1n, reserveQuote: 1n, feeBps: 30, poolType: 'cpmm' as const, tvlLovelace: 2n, blockHeight: 1, observedAt: new Date(tick.getTime() + 1000),
+        reserveBase: 1n, reserveQuote: 1n, feeBps: 30, poolType: 'cpmm' as const, tvlLovelace: 2n, blockHeight: 1, observedAt: new Date(tick.getTime() + 1000), isPrimary: true,
       });
       await repo.insertSnapshots(id, [snap('MuesliSwap', new Date('2026-09-07T00:10:00Z')), snap('SundaeSwapV3', new Date('2026-09-07T00:10:00Z'))]);
       await repo.finishRun(id, new Date('2026-09-07T00:19:00Z'), { ...done, discovered: true, providerCalls: 5_691, discoveryCalls: { MinswapV2: 5_691 } });

@@ -15,6 +15,10 @@ export interface Config {
   intervalSec: number;
   /** Ceiling a discovery sweep is priced against; 0 disables the check. See COLLECT_DAILY_CALL_CEILING. */
   dailyCallCeiling: number;
+  /** Price the non-deepest venues every Nth FULL tick; 0 disables. */
+  multiVenueEveryNTicks: number;
+  /** Minimum ADA-side depth for a secondary pool to be priced. */
+  multiVenueMinDepthLovelace: bigint;
   logLevel: string;
   venues: DexName[];
   refreshPolicy: 'deepest' | 'all';
@@ -61,6 +65,31 @@ const schema = z.object({
     .optional()
     .transform((v) => (v === undefined || v === '' ? 45_000 : Number(v)))
     .refine((n) => Number.isInteger(n) && n >= 0, 'COLLECT_DAILY_CALL_CEILING must be a non-negative integer'),
+  /**
+   * Price the OTHER venues for tokens we already track, every Nth full tick. 0 disables it.
+   *
+   * 4 means hourly at a 900 s candle interval, which is deliberate: batcher latency is seconds to
+   * minutes, so a spread that opens and closes inside an hour is not one this system could act on.
+   * Sampling finer than the execution path can react buys precision that has to be thrown away.
+   *
+   * Budget, measured 2026-09-09 at 14.85 calls per pool per tick: 6 extra pools hourly is ~2,140
+   * calls/day, about +4.3% of the 50,000 tier against a day that already runs near 78%.
+   */
+  COLLECT_MULTI_VENUE_EVERY_N_TICKS: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 0 : Number(v)))
+    .refine((n) => Number.isInteger(n) && n >= 0, 'COLLECT_MULTI_VENUE_EVERY_N_TICKS must be a non-negative integer'),
+  /**
+   * Minimum ADA-side depth for a secondary pool to be worth pricing. A spread against a pool nobody
+   * can trade is not an opportunity: NIGHT showed a persistent ~404 bps gap to a pool holding a
+   * tenth of the depth, large precisely BECAUSE closing it was uneconomic.
+   */
+  COLLECT_MULTI_VENUE_MIN_DEPTH_ADA: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v === '' ? 50_000 : Number(v)))
+    .refine((n) => Number.isFinite(n) && n >= 0, 'COLLECT_MULTI_VENUE_MIN_DEPTH_ADA must be a non-negative number'),
   LOG_LEVEL: z.string().optional(),
   // Same '' -> undefined preprocessing as BLOCKFROST_PROJECT_ID: .env.example ships a bare
   // `COLLECT_VENUES=` line so dotenv loads '', which must mean "use the default", not "discover
@@ -135,6 +164,8 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     blockfrostProjectId: v.BLOCKFROST_PROJECT_ID ?? null,
     intervalSec: v.COLLECT_INTERVAL_SECONDS,
     dailyCallCeiling: v.COLLECT_DAILY_CALL_CEILING,
+    multiVenueEveryNTicks: v.COLLECT_MULTI_VENUE_EVERY_N_TICKS,
+    multiVenueMinDepthLovelace: BigInt(Math.round(v.COLLECT_MULTI_VENUE_MIN_DEPTH_ADA * 1_000_000)),
     logLevel: v.LOG_LEVEL ?? 'info',
     venues,
     refreshPolicy: v.COLLECT_REFRESH,

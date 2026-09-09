@@ -66,3 +66,18 @@ export interface HydratableSource {
   /** The known set, in the exact shape `hydrate` accepts. Empty before the first discovery. */
   cachedPools(): CachedPool[];
 }
+
+/**
+ * Optional capability, structural like the others: price the venues that `'deepest'` pruning set
+ * aside, so the same pair can be compared across DEXes at the same instant.
+ *
+ * Measured 2026-09-09, before this existed: 11 total cross-venue observations, all from once-a-day
+ * discovery ticks. Where both venues were deep (USDA, 1.68M and 1.66M ADA) the spread was 14 bps;
+ * where one was shallow (NIGHT, 2.36M against 244k) it was 404 bps and cleared the round-trip floor
+ * in every observation — large because closing it was uneconomic, not because it was an opportunity.
+ * Telling those apart needs many observations, not one a day.
+ */
+export interface MultiVenueSource {
+  secondaryPoolCount(minAdaLovelace: bigint): number;
+  refreshSecondary(minAdaLovelace: bigint): Promise<SourceResult>;
+}
