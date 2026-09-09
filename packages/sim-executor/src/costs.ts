@@ -23,8 +23,18 @@ const MINSWAP_DOC = 'https://docs.minswap.org/courses/how-to-perform-swaps/batch
 export const DEFAULT_COSTS: VenueCosts = { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'plan-2 assumption', readAt: READ_AT };
 
 export const VENUE_COSTS: Record<DexName, VenueCosts> = {
+  // The 0 here is what proves Dexter's constant is not a reading of current policy: Dexter writes the
+  // IDENTICAL 2 ADA for this venue, which documentation puts at zero. The guard asserts that
+  // disagreement on purpose — if it ever stops disagreeing, Dexter has been updated, and that is the
+  // moment to re-examine MinswapV2 above.
   Minswap: { batcherFeeLovelace: 0n, networkFeeLovelace: NETWORK, basis: 'documented', source: MINSWAP_DOC, readAt: READ_AT },
-  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.minswap.org/courses/how-to-perform-swaps/batcher.md ("previously around 2 ADA per order", read 2026-09-07; no current figure, V1/V2 not distinguished; on-chain check pending)', readAt: READ_AT },
+  // 2026-09-09: kept at 2 ADA on EVIDENCE, not inertia. Dexter 5.4.10's minswap-v2 adapter hardcodes
+  // `batcherFee: 2000000n` (isReturned: false) into the order datum, and offering a fee in the datum
+  // is paying it. Minswap's own policy may well be zero since May 2025 — that is a claim about the
+  // VENUE; this number is about our SUBMISSION PATH. Lower it only after the datum parameter is
+  // overridden at submission (M6 spec §7.2), never before: modelling 176 bps while paying 216
+  // overstates every strategy's edge by 40 bps, in the direction that pushes losers through the gate.
+  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'Dexter 5.4.10 minswap-v2.js swapOrderFees() writes batcherFee 2000000n into the datum (read 2026-09-09), so this is what WE would pay regardless of Minswap policy; docs.minswap.org batcher page says only "previously around 2 ADA per order" (read 2026-09-07) and does not distinguish V1/V2. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: READ_AT },
   SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
   SundaeSwapV3: { batcherFeeLovelace: 1_000_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §4.4.3 (documented range 0.5-1.0 ADA per order; the upper bound is charged here, so reported results err on the expensive side)', readAt: READ_AT },
   MuesliSwap: { batcherFeeLovelace: 950_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'https://docs.muesliswap.com', readAt: READ_AT },
