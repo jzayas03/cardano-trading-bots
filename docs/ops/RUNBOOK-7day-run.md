@@ -148,6 +148,31 @@ Write `docs/ops/<date>-m3-report.md` containing:
 Then open its PR. The run ids in the report are the whole audit trail: anyone can re-derive every
 number in it with `report <id>` and `report --compare`.
 
+### Enable multi-venue sampling once the runs are stopped
+
+Founder decision 2026-09-09: merged (#97) but **kept off until the run finishes**.
+
+```
+# in ~ctb/cardano-trading-bots/.env, then: systemctl restart ctb-collector
+COLLECT_MULTI_VENUE_EVERY_N_TICKS=4
+COLLECT_MULTI_VENUE_MIN_DEPTH_ADA=50000
+```
+
+It prices the non-deepest venues hourly so cross-DEX spread can be measured — the one strategy
+category with a plausible edge that this project has never tested properly. It costs **+4.3% of the
+Blockfrost tier** (~2,140 calls/day, taking a normal day from ~78% to ~82%), which is why it waits:
+spending quota during the run for a question that can wait is a bad trade, and the run is the only
+measurement of whether any strategy clears its cost floor.
+
+It is safe to enable at any time — secondary snapshots carry `is_primary=false` and can never reach
+a candle (migration 0009) — so this is a budget decision, not a safety one.
+
+**What it will and will not answer.** It measures whether spreads EXIST above the round-trip floor.
+It does **not** measure whether they SURVIVE batcher latency, which is the question that decides
+whether one is capturable: hourly sampling cannot see a spread that opens and closes in one to five
+minutes. If spreads do clear the floor, that is the evidence to justify the much more expensive
+sub-minute sampling survival analysis needs. Not before.
+
 ### Rotate the Postgres password once the runs are stopped
 
 Founder decision 2026-09-09: do this **when the run ends**, not during it.
