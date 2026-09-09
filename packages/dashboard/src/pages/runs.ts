@@ -158,7 +158,7 @@ ${renderPagerLinks(filter, tickerOf, page, pageSize, runs.length)}
   return layout('Runs', body, { rehearsal });
 }
 
-const PERSISTED_HEADLINE_COLUMNS = ['points', 'startAda', 'endAda', 'startExecAda', 'endExecAda', 'returnPct', 'filled', 'rejected', 'staleRejects', 'feesAda', 'poolFeesIn'];
+const PERSISTED_HEADLINE_COLUMNS = ['points', 'startAda', 'endAda', 'startExecAda', 'endExecAda', 'returnPct', 'startTokens', 'endTokens', 'returnTokenPct', 'filled', 'rejected', 'staleRejects', 'feesAda', 'poolFeesIn'];
 const BACKTEST_HEADLINE_COLUMNS = ['candles', 'intents', 'filled', 'rejected', 'startAda', 'endAda', 'returnPct', 'maxDrawdownPct', 'lovelaceFeesAda', 'poolFeesIn'];
 const ORDERS_COLUMNS = ['seq', 'intent', 'side', 'amountIn', 'status', 'fill', 'amountOut', 'slippageBps', 'priceImpactBps', 'reason'];
 const ORDERS_MAX_ROWS = 200;
@@ -238,6 +238,7 @@ function renderPersistedHeadline(equity: EquityPoint[], orders: Array<OrderRecor
     s.startExecutable !== null ? adaStr(s.startExecutable) : '-',
     s.endExecutable !== null ? adaStr(s.endExecutable) : '-',
     s.returnPct ?? '-',
+    s.startBaseTokens ?? '-', s.endBaseTokens ?? '-', s.returnBasePct ?? '-',
     s.filled, s.rejected, s.staleRejects,
     adaStr(s.feesLovelace), s.poolFeesIn.toString(),
   ];

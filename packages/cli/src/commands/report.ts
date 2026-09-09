@@ -88,6 +88,7 @@ function printPersistedHeadline(run: RunRow, equity: EquityPoint[], orders: Arra
     startExecAda: s.startExecutable !== null ? adaStr(s.startExecutable) : '-',
     endExecAda: s.endExecutable !== null ? adaStr(s.endExecutable) : '-',
     returnPct: s.returnPct ?? '-',
+    startTokens: s.startBaseTokens ?? '-', endTokens: s.endBaseTokens ?? '-', returnTokenPct: s.returnBasePct ?? '-',
     filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
     feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
   }]);
@@ -137,6 +138,7 @@ export function printDayReport(
     startExecAda: s.startExecutable !== null ? adaStr(s.startExecutable) : '-',
     endExecAda: s.endExecutable !== null ? adaStr(s.endExecutable) : '-',
     returnPct: s.returnPct ?? '-',
+    startTokens: s.startBaseTokens ?? '-', endTokens: s.endBaseTokens ?? '-', returnTokenPct: s.returnBasePct ?? '-',
     filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
     feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
   }]);

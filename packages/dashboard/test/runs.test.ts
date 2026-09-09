@@ -129,6 +129,27 @@ describe('renderRunDetail', () => {
   });
 
   /**
+   * The persisted headline renders its headers and its cells from two SEPARATE arrays
+   * (`PERSISTED_HEADLINE_COLUMNS` and the row built beside it in `pages/runs.ts`). Adding a column to
+   * one and not the other does not throw — it shifts every later value one header to the left, so the
+   * token count renders under `filled` and reads as a plausible number. This pins length and position.
+   */
+  it('aligns the persisted-rows headline cells with its own headers, including the base-token columns', () => {
+    const run = makeRun({ id: 31, mode: 'paper', status: 'finished', summary: null });
+    const html = renderRunDetail({ run, ticker: 'TEST', orders: orders2, equity: equity3, now: new Date('2026-09-07T12:00:00Z') });
+    const section = /summary \(from persisted rows\)[\s\S]*?<\/table>/.exec(html);
+    expect(section, 'persisted headline section not found').not.toBeNull();
+    const headers = [...section![0].matchAll(/<th>(.*?)<\/th>/g)].map((m) => m[1] ?? '');
+    const cells = [...section![0].matchAll(/<td>(.*?)<\/td>/g)].map((m) => m[1] ?? '');
+    expect(cells).toHaveLength(headers.length);
+    // equity3: 1000 -> 980 ADA at 0.5 -> 0.53 ADA/token. -2% in ADA, -7.54% in tokens.
+    expect(cells[headers.indexOf('returnPct')]).toBe('-2');
+    expect(cells[headers.indexOf('startTokens')]).toBe('2000.000000');
+    expect(cells[headers.indexOf('endTokens')]).toBe('1849.056603');
+    expect(cells[headers.indexOf('returnTokenPct')]).toBe('-7.54');
+  });
+
+  /**
    * CRITICAL 1 (final review). Measured on rehearsal run 6 (one resume, 27 persisted equity points,
    * 2 fills): `report 6` printed the persisted-rows headline (return -0.16) AND, below it, the stored
    * `runs.summary` table (return -0.09) under the heading naming it the last segment only — while

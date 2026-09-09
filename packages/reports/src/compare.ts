@@ -50,6 +50,10 @@ export interface CompareRunRow {
   /** Where the numbers come from: `rows` = every persisted equity point and order (paper runs); `summary` = `runs.summary` (backtests persist orders but no equity). */
   basis: 'rows' | 'summary';
   points: number; startAda: string; endAda: string; endExecAda: string; returnPct: number | string;
+  /** The same run restated in its BASE TOKEN: did it end with more tokens, or did the token rise?
+   * Comparable only within one token — see `MIXED_TOKENS_WARNING`, which applies harder here than it
+   * does to the ADA columns. '-' on a backtest, whose row has no equity points to restate. */
+  endTokens: string; returnTokenPct: number | string;
   filled: number; rejected: number; staleRejects: number; feesAda: string; resumes: number; rehearsal: string;
 }
 
@@ -74,6 +78,7 @@ export function compareRunRows(inputs: CompareRunInput[], now: Date): CompareRun
         ...common, basis: 'rows' as const, points: s.points,
         startAda: s.startEquity !== null ? adaStr(s.startEquity) : '-', endAda: s.endEquity !== null ? adaStr(s.endEquity) : '-',
         endExecAda: s.endExecutable !== null ? adaStr(s.endExecutable) : '-', returnPct: s.returnPct ?? '-',
+        endTokens: s.endBaseTokens ?? '-', returnTokenPct: s.returnBasePct ?? '-',
         filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects, feesAda: adaStr(s.feesLovelace),
       };
     }
@@ -82,7 +87,13 @@ export function compareRunRows(inputs: CompareRunInput[], now: Date): CompareRun
     return {
       ...common, basis: 'summary' as const, points: 0,
       startAda: s ? adaStr(s.startEquityLovelace) : '-', endAda: s ? adaStr(s.endEquityLovelace) : '-', endExecAda: '-',
-      returnPct: s ? s.returnPct : '-', filled: s?.filled ?? 0, rejected: s?.rejected ?? 0, staleRejects: stale, feesAda: s ? adaStr(s.feesLovelace) : '-',
+      returnPct: s ? s.returnPct : '-',
+      // A backtest persists orders but no equity points, so there is no price to restate against.
+      // Key order matches the `rows` branch above on purpose: `console.table` derives its columns
+      // from the keys of the FIRST row, so a differing order here would move the columns depending
+      // on whether a backtest or a paper run happened to be listed first.
+      endTokens: '-', returnTokenPct: '-',
+      filled: s?.filled ?? 0, rejected: s?.rejected ?? 0, staleRejects: stale, feesAda: s ? adaStr(s.feesLovelace) : '-',
     };
   });
 }

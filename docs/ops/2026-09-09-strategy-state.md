@@ -124,6 +124,35 @@ The exact tranche dates, the randomised first-unlock date, and the current circu
 should be pinned against Midnight's own published schedule before any rule is built on them — the
 same standard applied to every other number in this document.
 
+## Reading the token-denominated column
+
+Every run report now carries `endTokens` / `returnTokenPct` beside the ADA columns. It is the ADA
+return deflated by the price move — `(1 + returnPct) / (1 + priceChange) - 1` — and it answers the
+question the ADA column cannot: **did this strategy end up with more NIGHT, or did NIGHT just move?**
+
+Measured on the three finished NIGHT paper runs:
+
+| run | strategy | ADA | tokens | fills |
+|---|---|---|---|---|
+| 137 | ma-crossover | 0.00% | +2.12% | 0 |
+| 138 | rsi-mean-reversion | 0.00% | +2.12% | 0 |
+| 139 | buy-and-hold | -3.10% | **-1.04%** | 1 |
+
+Two readings, one of them a trap.
+
+**Run 139 is the honest one.** Its -3.10% in ADA is only -1.04% in NIGHT: 2.06 of those points were
+the token getting cheaper, which an accumulator does not care about. What remains is the cost of
+entering, and it lands on the independently measured **108 bps one-way floor** — a different code
+path arriving at the same number, which is the best corroboration the arithmetic has.
+
+**Runs 137 and 138 are the trap.** They never traded. +2.12% is not skill; it is ADA buying 2.12%
+more NIGHT after NIGHT fell. The column restates TOTAL equity in tokens, so idle cash tracks the
+inverse price move. **Always read it beside `filled`.** A strategy that does nothing will look good
+in this column in every falling market, and that is not the same as accumulating.
+
+The column is comparable only WITHIN one token — the mixed-token warning applies harder here than to
+the ADA columns, since two tokens' denominators are unrelated.
+
 ## What is still unknown, in the order it would change the answer
 
 1. **Can clock-sampled reserves see the moves at all?** A pool trading once every ~84 minutes,
