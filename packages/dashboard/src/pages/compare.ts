@@ -25,7 +25,7 @@ import { escape, layout, table } from '../html.js';
  */
 const COMPARE_COLUMNS = [
   'run', 'mode', 'strategy', 'ticker', 'status', 'heartbeat', 'resumes', 'rehearsal',
-  'basis', 'points', 'startAda', 'endAda', 'endExecAda', 'returnPct', 'filled', 'rejected', 'staleRejects', 'feesAda',
+  'basis', 'points', 'startAda', 'endAda', 'endExecAda', 'returnPct', 'endTokens', 'returnTokenPct', 'filled', 'rejected', 'staleRejects', 'feesAda',
 ];
 
 /** One row per `CompareRunRow`, in the exact column order above — every cell is a plain scalar
@@ -34,7 +34,7 @@ const COMPARE_COLUMNS = [
 function compareTableRows(rows: CompareRunRow[]): Array<Array<string | number>> {
   return rows.map((r) => [
     r.run, r.mode, r.strategy, r.ticker, r.status, r.heartbeat, r.resumes, r.rehearsal,
-    r.basis, r.points, r.startAda, r.endAda, r.endExecAda, r.returnPct, r.filled, r.rejected, r.staleRejects, r.feesAda,
+    r.basis, r.points, r.startAda, r.endAda, r.endExecAda, r.returnPct, r.endTokens, r.returnTokenPct, r.filled, r.rejected, r.staleRejects, r.feesAda,
   ]);
 }
 

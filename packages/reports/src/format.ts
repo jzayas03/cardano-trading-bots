@@ -5,11 +5,22 @@ import type { RunCoverage, RunRow } from '@ctb/engine';
  * 2^53 lovelace (~9.007 billion ADA) and, more to the point, prints an approximation of a number the
  * whole report exists to make exact (finding M10).
  */
-export const adaStr = (lovelace: string | bigint): string => {
-  const v = BigInt(lovelace);
+export const adaStr = (lovelace: string | bigint): string => fixed6(BigInt(lovelace));
+
+/** A bigint carrying six implied decimal places, rendered. The body `adaStr` used to hold inline;
+ * shared so the ADA column and the token column can never format the same magnitude differently. */
+const fixed6 = (v: bigint): string => {
   const abs = v < 0n ? -v : v;
   return `${v < 0n ? '-' : ''}${abs / 1_000_000n}.${(abs % 1_000_000n).toString().padStart(6, '0')}`;
 };
+
+/**
+ * Whole base tokens from a count carrying six implied decimals. Identical arithmetic to `adaStr`
+ * and a separate name on purpose: these columns sit next to each other on the same report, and a
+ * cell labelled in ADA that is really in tokens is the whole class of error this column exists to
+ * end. Six places regardless of the token's own `decimals`, which this package never sees.
+ */
+export const tokenStr = (microTokens: bigint): string => fixed6(microTokens);
 
 /**
  * Coverage belongs in the header, next to the provenance: a return figure computed over 4400 sparse

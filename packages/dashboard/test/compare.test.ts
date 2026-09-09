@@ -123,6 +123,21 @@ describe('renderCompare', () => {
     expect(html).toMatch(/<td>-?\d+(\.\d+)?<\/td>/); // returnPct cell is numeric
   });
 
+  it('pins the base-token columns to their own header names, and shows them disagreeing with ADA', () => {
+    // `equity3` runs 1000 -> 980 ADA while the price runs 0.5 -> 0.53. In ADA that is -2%; in TOKENS
+    // it is -7.54%, because the token got 6% dearer. A run can look nearly flat in ADA and be a clear
+    // loss against an accumulation goal, and this is the pair of cells that says so.
+    const html = renderCompare({ inputs: [input({ run: makeRun({ id: 6 }), ticker: 'TEST', equity: equity3, orders: orders2 })], now });
+    const cells = compareRowCellsFor(html, 6);
+    const cellNamed = (columnName: string): string | undefined => cells[compareColumnIndex(html, columnName)];
+    expect(cellNamed('returnPct')).toBe('-2');
+    expect(cellNamed('returnTokenPct')).toBe('-7.54');
+    expect(cellNamed('endTokens')).toBe('1849.056603');
+    // Read by header name, so an inserted column moves the NAME and this still reads the right cell
+    // rather than silently reading its neighbour — the reason this file indexes headers at all.
+    expect(cells).toHaveLength(compareColumnIndex(html, 'feesAda') + 1);
+  });
+
   it('pins basis, startAda, endAda and returnPct to the column position their OWN header names claim (IMPORTANT 2, final review)', () => {
     const run6 = makeRun({ id: 6 });
     const html = renderCompare({ inputs: [input({ run: run6, ticker: 'TEST', equity: equity3, orders: orders2 })], now });

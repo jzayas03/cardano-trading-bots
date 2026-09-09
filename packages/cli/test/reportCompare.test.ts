@@ -20,7 +20,11 @@ describe('compareRunRows', () => {
     const [row] = compareRunRows([{ run: run({ params: { intervalSec: 600, graceSec: 60, resumes: ['a', 'b'] } }), ticker: 'SNEK', equity: [eq(0, 1_000_000_000n, 1_000_000_000n), eq(10, 1_050_000_000n, 1_047_000_000n)], orders: [filled, stale, dust] }], now);
     expect(row).toEqual({
       run: 1, mode: 'paper', strategy: 'ma-crossover', ticker: 'SNEK', status: 'running', heartbeat: '60', basis: 'rows', points: 2,
-      startAda: '1000.000000', endAda: '1050.000000', endExecAda: '1047.000000', returnPct: 5, filled: 1, rejected: 2, staleRejects: 1, feesAda: '2.200000', resumes: 2, rehearsal: '',
+      startAda: '1000.000000', endAda: '1050.000000', endExecAda: '1047.000000', returnPct: 5,
+      // These points are priced at 1 ADA/token throughout, so 1050 ADA is 1050 tokens and the token
+      // return must equal the ADA return exactly — the flat-price invariant, seen from the table.
+      endTokens: '1050.000000', returnTokenPct: 5,
+      filled: 1, rejected: 2, staleRejects: 1, feesAda: '2.200000', resumes: 2, rehearsal: '',
     });
   });
   it('a stale paper run shows STALE with its age; a run with no equity yet shows dashes', () => {
@@ -36,7 +40,10 @@ describe('compareRunRows', () => {
     const [row] = compareRunRows([{ run: run({ id: 12, mode: 'backtest', strategyId: 'rsi-mean-reversion', status: 'finished', summary }), ticker: 'SNEK', equity: [], orders: [filled, filled, stale] }], now);
     expect(row).toEqual({
       run: 12, mode: 'backtest', strategy: 'rsi-mean-reversion', ticker: 'SNEK', status: 'finished', heartbeat: '-', basis: 'summary', points: 0,
-      startAda: '1000.000000', endAda: '900.000000', endExecAda: '-', returnPct: -10, filled: 2, rejected: 1, staleRejects: 1, feesAda: '4.400000', resumes: 0, rehearsal: '',
+      startAda: '1000.000000', endAda: '900.000000', endExecAda: '-', returnPct: -10,
+      // A backtest persists orders but no equity points, so there is no price to restate against.
+      endTokens: '-', returnTokenPct: '-',
+      filled: 2, rejected: 1, staleRejects: 1, feesAda: '4.400000', resumes: 0, rehearsal: '',
     });
   });
   it('keeps the operator\'s order and marks a rehearsal row', () => {
