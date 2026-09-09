@@ -13,10 +13,27 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: ctb
-      POSTGRES_PASSWORD: ctb_local_only
+      # NOT a literal, and not defaulted. `${VAR:?message}` makes compose REFUSE to start when the
+      # variable is unset or empty, which is the only safe failure here: a default would be a
+      # password in a public repo again, and an empty value would hand Postgres `trust`-like
+      # behaviour on a container that other machines may one day reach.
+      #
+      # Read from `.env` in this directory, which is gitignored (.gitignore:3).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env — see docs/ops/RUNBOOK-postgres-exposure.md}
       POSTGRES_DB: ctb
     ports:
-      - "5433:5432"
+      # 127.0.0.1, NOT the bare "5433:5432" this used to be.
+      #
+      # A published port with no bind address listens on 0.0.0.0 AND [::]. On the VPS that put the
+      # database on the public internet, and `ufw` did not stop it: Docker writes its own rules into
+      # the DOCKER chain, which is traversed BEFORE ufw's, so `ufw status` truthfully reported
+      # "OpenSSH only" while Postgres answered the world. Verified 2026-09-09 by connecting from a
+      # laptop over the internet with the password that was committed three lines above this one,
+      # and reading 2,375 rows.
+      #
+      # Loopback is sufficient: every consumer (the CLI, the dashboard, migrations, backups) runs on
+      # the host. Nothing reaches this database from another machine.
+      - "127.0.0.1:5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

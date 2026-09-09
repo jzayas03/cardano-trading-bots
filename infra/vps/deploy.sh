@@ -43,7 +43,10 @@ say "secrets"
 PERMS="$(stat -c '%a' "$ENV_FILE")"
 [ "$PERMS" = "600" ] || die ".env is mode $PERMS; must be 600 (chmod 600 $ENV_FILE)"
 [ "$(stat -c '%U' "$ENV_FILE")" = "$SERVICE_USER" ] || die ".env is not owned by $SERVICE_USER"
-for v in DATABASE_URL BLOCKFROST_PROJECT_ID; do
+# POSTGRES_PASSWORD joined this list when the password came OUT of docker-compose.yml. Compose
+# would refuse to start without it anyway (`${VAR:?}`), but failing here names the file to edit
+# instead of surfacing three steps later as a compose interpolation error.
+for v in DATABASE_URL BLOCKFROST_PROJECT_ID POSTGRES_PASSWORD; do
   grep -q "^$v=." "$ENV_FILE" || die "$v is missing or empty in .env"
 done
 echo "  .env present, mode 600, owned by $SERVICE_USER, required keys set"
