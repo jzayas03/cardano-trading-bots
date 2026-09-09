@@ -32,7 +32,7 @@ describe('backfillToken', () => {
     const page2 = [candle(t0 - 1 * day), candle(t0 + 1 * day)]; // reaches below `from`
     const client = new FakeClient([page1, page2]);
     const repo = new FakeRepo();
-    const r = await backfillToken({ client: client as never, repo, token: { unit: 'u', ticker: 'X' }, from: new Date(t0), to: new Date(t0 + 4 * day), log });
+    const r = await backfillToken({ client: client as never, repo, token: { unit: 'u', ticker: 'X' }, denomination: 'ada', from: new Date(t0), to: new Date(t0 + 4 * day), log });
     expect(r).toEqual({ pages: 2, rows: 3, pool: 'aaa', method: 'pair_largest_reserve' });
     expect(client.requestedBefore[0]).toEqual(new Date(t0 + 4 * day));
     expect(client.requestedBefore[1]).toEqual(new Date(t0 + 2 * day)); // oldest row of page1
@@ -43,17 +43,17 @@ describe('backfillToken', () => {
   it('stops on an empty page and is idempotent', async () => {
     const repo = new FakeRepo();
     const c1 = new FakeClient([[candle(t0 + day)], []]);
-    const r1 = await backfillToken({ client: c1 as never, repo, token: { unit: 'u', ticker: 'X' }, from: new Date(t0 - 10 * day), to: new Date(t0 + 4 * day), log });
+    const r1 = await backfillToken({ client: c1 as never, repo, token: { unit: 'u', ticker: 'X' }, denomination: 'ada', from: new Date(t0 - 10 * day), to: new Date(t0 + 4 * day), log });
     expect(r1.pages).toBe(2);
     const c2 = new FakeClient([[candle(t0 + day)], []]);
-    const r2 = await backfillToken({ client: c2 as never, repo, token: { unit: 'u', ticker: 'X' }, from: new Date(t0 - 10 * day), to: new Date(t0 + 4 * day), log });
+    const r2 = await backfillToken({ client: c2 as never, repo, token: { unit: 'u', ticker: 'X' }, denomination: 'ada', from: new Date(t0 - 10 * day), to: new Date(t0 + 4 * day), log });
     expect(r2.rows).toBe(0);
   });
 
   it('fails closed when no ADA pool exists', async () => {
     const client = new FakeClient([]);
     client.listAdaPools = async () => [];
-    await expect(backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, from: new Date(t0), to: new Date(t0 + day), log }))
+    await expect(backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, denomination: 'ada', from: new Date(t0), to: new Date(t0 + day), log }))
       .rejects.toThrow(/no ADA pool on geckoterminal for X/);
   });
 
@@ -68,7 +68,7 @@ describe('backfillToken', () => {
     const noisy = { info: () => {}, warn: (o: Record<string, unknown>) => { warned.push(o); }, error: () => {} };
     const stuck = [candle(t0 + 2 * day), candle(t0 + 3 * day)];
     const client = new FakeClient([stuck, [...stuck], [...stuck], [...stuck]]);
-    const r = await backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, from: new Date(t0), to: new Date(t0 + 4 * day), log: noisy });
+    const r = await backfillToken({ client: client as never, repo: new FakeRepo(), token: { unit: 'u', ticker: 'X' }, denomination: 'ada', from: new Date(t0), to: new Date(t0 + 4 * day), log: noisy });
     expect(r.pages, 'one page to see the oldest row, one more to see it did not move').toBe(2);
     expect(warned.some((w) => 'oldest' in w)).toBe(true);
   });

@@ -92,9 +92,21 @@ export class GeckoTerminalClient {
     return out;
   }
 
-  async ohlcv5m(poolHex: string, beforeTs?: Date): Promise<GeckoCandle[]> {
+  /**
+   * `currency: 'ada'` asks for the pool's QUOTE token, `'usd'` for dollars.
+   *
+   * GeckoTerminal defaults `currency` to `usd`, and this client omitted the parameter entirely until
+   * 2026-09-09 — so three months of `candles_external` are dollars while `candles` are ADA, and
+   * nothing recorded the difference. Verified against the SNEK/ADA MinswapV2 pool on the same
+   * 5-minute bar: default 0.000511568, `currency=token` 0.002337 (which matches our own
+   * reserve-derived close), `currency=token&token=quote` 427.9 (the inverse).
+   *
+   * ADA is the default here because every cost this project compares against is ADA-denominated.
+   * Dollars must now be asked for by name.
+   */
+  async ohlcv5m(poolHex: string, beforeTs?: Date, currency: 'ada' | 'usd' = 'ada'): Promise<GeckoCandle[]> {
     const before = beforeTs ? `&before_timestamp=${Math.floor(beforeTs.getTime() / 1000)}` : '';
-    const body = (await this.get(`/networks/cardano/pools/${poolHex}/ohlcv/minute?aggregate=5&limit=1000${before}`)) as {
+    const body = (await this.get(`/networks/cardano/pools/${poolHex}/ohlcv/minute?aggregate=5&limit=1000${currency === 'ada' ? '&currency=token' : ''}${before}`)) as {
       data?: { attributes?: { ohlcv_list?: Array<[number, number, number, number, number, number]> } };
     };
     const list = body.data?.attributes?.ohlcv_list ?? [];

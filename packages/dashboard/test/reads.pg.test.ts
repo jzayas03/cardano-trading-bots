@@ -111,7 +111,7 @@ describe.skipIf(!PG_ENABLED)('PgDashboardReads.latestSnapshotsPerToken / snapsho
     await external.upsertExternal(deep.unit, 'ext-deep', [
       { tickTs: t(0), open: '0.001', high: '0.001', low: '0.001', close: '0.001', volumeQuote: '1' },
       { tickTs: t(5), open: '0.001', high: '0.001', low: '0.001', close: '0.001', volumeQuote: '1' },
-    ]);
+    ], 'ada');
   }
 
   it('latestSnapshotsPerToken: deepest pool wins over alphabetical order, ties break on smallest pool_id, and a token whose only snapshot is older than the newest tick is absent', async () => {

@@ -1,3 +1,4 @@
+import type { Denomination } from '@ctb/candles';
 import { backfillToken, GeckoTerminalClient, PgExternalRepo } from '@ctb/candles';
 import { createPool } from '@ctb/db';
 import { loadUniverse } from '@ctb/universe';
@@ -35,13 +36,25 @@ export async function backfillAll(
   return { rows, failures };
 }
 
-const USAGE = 'usage: backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]';
+const USAGE = 'usage: backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3] [--currency ada|usd]';
 
-/** `--spacing-sec N`: the base wait between GeckoTerminal calls (the client widens it on 429s and decays back). Null when not given. */
-export function parseBackfillFlags(rest: string[]): { spacingSec: number | null } {
-  const out = { spacingSec: null as number | null };
+/**
+ * `--spacing-sec N`: the base wait between GeckoTerminal calls (the client widens it on 429s and
+ * decays back). Null when not given.
+ *
+ * `--currency ada|usd`, default **ada**. GeckoTerminal defaults to USD and this project asked for
+ * neither until 2026-09-09, so three months of `candles_external` are dollars while every cost the
+ * project compares against is ADA. ADA is the default now; dollars must be named.
+ */
+export function parseBackfillFlags(rest: string[]): { spacingSec: number | null; denomination: Denomination } {
+  const out = { spacingSec: null as number | null, denomination: 'ada' as Denomination };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
+    if (flag === '--currency') {
+      const v = rest[i + 1];
+      if (v !== 'ada' && v !== 'usd') throw new Error(`--currency must be ada or usd\n${USAGE}`);
+      out.denomination = v; i++; continue;
+    }
     if (flag === '--spacing-sec') {
       const n = Number(rest[i + 1]);
       if (rest[i + 1] === undefined || !Number.isFinite(n) || n < 0) throw new Error(`--spacing-sec needs a non-negative number of seconds\n${USAGE}`);
@@ -54,7 +67,7 @@ export function parseBackfillFlags(rest: string[]): { spacingSec: number | null 
 export async function backfillCommand(log: Logger, args: string[]): Promise<void> {
   const [ticker, fromArg, toArg, ...rest] = args;
   if (!ticker) throw new Error(USAGE);
-  const { spacingSec } = parseBackfillFlags(rest);
+  const { spacingSec, denomination } = parseBackfillFlags(rest);
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   const cfg = loadConfig(process.env, { blockfrost: false });
@@ -69,8 +82,8 @@ export async function backfillCommand(log: Logger, args: string[]): Promise<void
     const one = async (tk: string): Promise<BackfillRow> => {
       const token = universe.tokens.find((t) => t.ticker === tk)!;
       const callsBefore = client.calls();
-      const r = await backfillToken({ client, repo, token, from, to, log });
-      const cov = await repo.coverage(token.unit);
+      const r = await backfillToken({ client, repo, token, from, to, log, denomination });
+      const cov = await repo.coverage(token.unit, denomination);
       const row: BackfillRow = { ticker: tk, pool: r.pool, method: r.method, pages: r.pages, newRows: r.rows, calls: client.calls() - callsBefore,
         coverageFirst: cov.first?.toISOString() ?? '-', coverageLast: cov.last?.toISOString() ?? '-', coverageRows: cov.rows };
       log.info(row, 'token backfilled');

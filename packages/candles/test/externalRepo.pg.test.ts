@@ -24,17 +24,17 @@ describe.skipIf(!PG_ENABLED)('PgExternalRepo', () => {
 
       const c1 = candle(t(0), '0.002200000000000000');
       const c2 = candle(t(5), '0.002300000000000000');
-      const inserted = await repo.upsertExternal(snek.unit, 'bbb', [c1, c2]);
+      const inserted = await repo.upsertExternal(snek.unit, 'bbb', [c1, c2], 'ada');
       expect(inserted).toBe(2);
-      const reinserted = await repo.upsertExternal(snek.unit, 'bbb', [c1, c2]);
+      const reinserted = await repo.upsertExternal(snek.unit, 'bbb', [c1, c2], 'ada');
       expect(reinserted).toBe(0);
 
-      const rows = await repo.readExternal(snek.unit, t(0), t(5));
+      const rows = await repo.readExternal(snek.unit, t(0), t(5), 'ada');
       expect(rows.map((r) => r.tickTs)).toEqual([t(0), t(5)]);
       expect(rows[0]?.volumeQuote).toBe('123.456789');
       expect(rows[1]?.close).toBe('0.002300000000000000');
 
-      const cov = await repo.coverage(snek.unit);
+      const cov = await repo.coverage(snek.unit, 'ada');
       expect(cov).toEqual({ first: t(0), last: t(5), rows: 2 });
 
       const run = await snaps.startRun(t(0), t(0));
@@ -64,20 +64,20 @@ describe.skipIf(!PG_ENABLED)('PgExternalRepo is scoped to the mapped pool (findi
       const repo = new PgExternalRepo(db);
 
       await repo.putMap({ unit: snek.unit, externalPoolId: 'old', externalDex: 'minswap-cardano', matchMethod: 'pair_largest_reserve', reserveUsd: 10 });
-      expect(await repo.upsertExternal(snek.unit, 'old', [candle(t(0), '0.001000000000000000'), candle(t(5), '0.001100000000000000')])).toBe(2);
+      expect(await repo.upsertExternal(snek.unit, 'old', [candle(t(0), '0.001000000000000000'), candle(t(5), '0.001100000000000000')], 'ada')).toBe(2);
       // Same ticks, different pool: under the old PK these two rows vanished silently.
-      expect(await repo.upsertExternal(snek.unit, 'new', [candle(t(0), '0.002000000000000000'), candle(t(5), '0.002200000000000000')])).toBe(2);
+      expect(await repo.upsertExternal(snek.unit, 'new', [candle(t(0), '0.002000000000000000'), candle(t(5), '0.002200000000000000')], 'ada')).toBe(2);
       const total = await db.query<{ n: string }>('SELECT count(*) AS n FROM candles_external');
       expect(total.rows[0]?.n, 'both pools coexist').toBe('4');
 
-      const fromOld = await repo.readExternal(snek.unit, t(0), t(5));
+      const fromOld = await repo.readExternal(snek.unit, t(0), t(5), 'ada');
       expect(fromOld.map((r) => r.close)).toEqual(['0.001000000000000000', '0.001100000000000000']);
-      expect(await repo.coverage(snek.unit)).toEqual({ first: t(0), last: t(5), rows: 2 });
+      expect(await repo.coverage(snek.unit, 'ada')).toEqual({ first: t(0), last: t(5), rows: 2 });
 
       await repo.putMap({ unit: snek.unit, externalPoolId: 'new', externalDex: 'minswap-cardano', matchMethod: 'identifier', reserveUsd: 99 });
-      const fromNew = await repo.readExternal(snek.unit, t(0), t(5));
+      const fromNew = await repo.readExternal(snek.unit, t(0), t(5), 'ada');
       expect(fromNew.map((r) => r.close), 're-pinning the map switches the series, it does not mix them').toEqual(['0.002000000000000000', '0.002200000000000000']);
-      expect(await repo.coverage(snek.unit)).toEqual({ first: t(0), last: t(5), rows: 2 });
+      expect(await repo.coverage(snek.unit, 'ada')).toEqual({ first: t(0), last: t(5), rows: 2 });
     });
   });
 });

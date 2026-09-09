@@ -47,8 +47,8 @@ describe('autoDepthLovelace', () => {
   });
 
   it('parseBackfillFlags: --spacing-sec is optional, numeric, non-negative; unknown flags are refused', () => {
-    expect(parseBackfillFlags([])).toEqual({ spacingSec: null });
-    expect(parseBackfillFlags(['--spacing-sec', '8'])).toEqual({ spacingSec: 8 });
+    expect(parseBackfillFlags([])).toEqual({ spacingSec: null, denomination: 'ada' });
+    expect(parseBackfillFlags(['--spacing-sec', '8'])).toEqual({ spacingSec: 8, denomination: 'ada' });
     expect(() => parseBackfillFlags(['--spacing-sec'])).toThrow(/non-negative number/);
     expect(() => parseBackfillFlags(['--spacing-sec', 'fast'])).toThrow(/non-negative number/);
     expect(() => parseBackfillFlags(['--bogus'])).toThrow(/unknown flag --bogus/);
@@ -63,5 +63,15 @@ describe('autoDepthLovelace', () => {
     expect(sweepSkipReason(false, 0)).toMatch(/run backfill first/);
     expect(sweepSkipReason(true, 0)).toMatch(/empty in this window/);
     expect(sweepSkipReason(true, 1)).toBeNull();
+  });
+
+  it('--currency defaults to ada and refuses anything else', () => {
+    // ADA is the default because every cost this project compares against is ADA-denominated. Asking
+    // for neither is what put three months of USD rows into candles_external in the first place.
+    expect(parseBackfillFlags([]).denomination).toBe('ada');
+    expect(parseBackfillFlags(['--currency', 'usd']).denomination).toBe('usd');
+    expect(parseBackfillFlags(['--currency', 'ada']).denomination).toBe('ada');
+    expect(() => parseBackfillFlags(['--currency', 'eur'])).toThrow(/--currency must be ada or usd/);
+    expect(() => parseBackfillFlags(['--currency'])).toThrow(/--currency must be ada or usd/);
   });
 });
