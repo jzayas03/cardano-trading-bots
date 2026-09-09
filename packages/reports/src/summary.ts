@@ -43,7 +43,11 @@ export interface DaySummary {
    * Comparable only WITHIN one token: see `MIXED_TOKENS_WARNING`.
    */
   returnBasePct: number | null;
-  filled: number; rejected: number; rejectReasons: Record<string, number>; staleRejects: number;
+  filled: number;
+  /** Split by side, because a completed ROUND TRIP closes on a sell: a strategy that only ever buys
+   * has no round trips by design and is a baseline, not a candidate (see `promotion.ts`). */
+  filledBuys: number; filledSells: number;
+  rejected: number; rejectReasons: Record<string, number>; staleRejects: number;
   feesLovelace: bigint; poolFeesIn: bigint;
 }
 
@@ -78,6 +82,8 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
       : null;
 
   let filled = 0;
+  let filledBuys = 0;
+  let filledSells = 0;
   let rejected = 0;
   let staleRejects = 0;
   let feesLovelace = 0n;
@@ -86,6 +92,8 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
   for (const o of orders) {
     if (o.result.status === 'filled') {
       filled++;
+      if (o.intent.side === 'sell') filledSells++;
+      else filledBuys++;
       feesLovelace += o.result.batcherFeeLovelace + o.result.networkFeeLovelace;
       poolFeesIn += o.result.poolFeeIn;
     } else {
@@ -100,7 +108,7 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
     startExecutable: first ? first.equityExecutableLovelace : null,
     endExecutable: last ? last.equityExecutableLovelace : null,
     returnPct, startBaseTokens, endBaseTokens, returnBasePct,
-    filled, rejected, rejectReasons, staleRejects, feesLovelace, poolFeesIn,
+    filled, filledBuys, filledSells, rejected, rejectReasons, staleRejects, feesLovelace, poolFeesIn,
   };
 }
 
