@@ -34,8 +34,30 @@ These are gates, not preferences.
    Every buy/sell cycle must beat 2.16% before a cent is kept — and that is the OPTIMISTIC figure.
 2. **The 7-day run is from the VPS**, not the laptop, whose 16-of-64 boundaries make it a soak test
    rather than evidence.
-3. **Dexter's swap path is proven against `MockWalletProvider`, then on preprod with worthless
-   ADA.** That it exists is not evidence it works; we have only ever used its read path.
+3. **Dexter's swap path is proven on preprod with worthless ADA.** That it exists is not evidence
+   it works; we have only ever used its read path.
+
+   **Corrected 2026-09-09: this gate originally said "proven against `MockWalletProvider`, then on
+   preprod", and the mock half cannot be met.** The M6.1 spike got as far as a real quote —
+   SundaeSwapV3, 3 NIGHT pools, estimated receive 92.701025 NIGHT, minimum 92.239825, price impact
+   0.0042%, fees reported as 1.28 ADA protocol + 2.00 ADA deposit — and then died building the
+   order:
+
+   ```
+   JsValue("Deserialization failed in Ed25519KeyHash because:
+            Invalid cbor: expected tuple 'hash length' of length 28 but got length Len(2).")
+   ```
+
+   `MockWalletProvider.loadWallet()` ignores its argument entirely and only flips `isWalletLoaded`;
+   its `address()` returns a placeholder. Dexter needs a real bech32 address with a valid 28-byte
+   payment key hash to build the order datum. **The mock proves the QUOTE path and nothing beyond
+   it.** Order construction requires preprod and a real, worthless key — which is more work than the
+   original gate implied, and is the reason to know now rather than at M6.1.
+
+   Also measured there, and not yet reconciled: SundaeSwapV3 quoted a **1.28 ADA** protocol fee
+   against the 1.00 ADA this project's cost table carries as the documented upper bound. Our model
+   therefore errs CHEAP on that venue, inverting the conservatism §2.1 claims. Re-measure before
+   quoting the floor for any SundaeSwapV3 fill.
 
 ## 3. Decisions already made
 
@@ -100,11 +122,50 @@ Enforced in code, checked before every submission, and each one proven by making
 | Daily loss limit | stop for the day at a realised loss of N |
 | Slippage ceiling | **abort** the order if quoted slippage exceeds N bps — never accept a worse price |
 | Minimum edge | refuse any round trip whose expected move does not clear the measured cost floor |
-| Kill switch | one command, reachable from a phone, that stops trading and leaves positions untouched |
+| Kill switch | one command, reachable from a phone, that stops trading and leaves positions untouched — and it must reach **per venue**, not only globally (§7.1) |
+| Venue allowlist | execute only on venues on an explicit **execution** allowlist, which is NOT the collection list (§7.1) |
+| Approval staleness | a venue approval older than N days is treated as **absent**, not as approved (§7.1) |
 | Dry run | build and log the real order without submitting; the default until explicitly armed |
 
 Fail closed everywhere: an unreadable price, an unknown venue, a stale candle, a failed
 reconciliation all mean **do not trade**, never "assume and proceed".
+
+### 7.1 Venue integrity, which nothing in this system currently models
+
+**Trigger, 2026-09-09.** DefiLlama listed Dano Finance as Cardano's highest-volume DEX of the
+previous 24 hours ($403,267). The founder's own knowledge of the ecosystem was that it had been
+**compromised days earlier** — so that figure is plausibly an exploit being drained, not a market
+being traded.
+
+Nothing we had could tell the difference. `costsForPoolId` knows what a venue charges and
+`pool_snapshots` knows how deep it is; **no part of this system knows whether a venue is safe.**
+"Route to the cheapest pool that clears the floor" would have walked straight into it and looked
+correct by every metric the code models. A volume ranking is not a health signal, and depth on a
+drained contract is not depth.
+
+We were protected by accident, not by design: `VENUES` in `venues.ts` is a static table and
+`DEFAULT_VENUES` filters it, so adding a venue takes a code change and a Dexter adapter. That is a
+collection-time property. It is not an execution control, and it is not what should be relied on once
+funds move.
+
+Three requirements, deliberately blunt, because blunt survives:
+
+1. **An explicit EXECUTION allowlist, separate from the collection list.** Collecting a venue's
+   prices is a research decision and cheap to be wrong about. Sending funds to it is neither. A venue
+   appearing in `COLLECT_VENUES` must never imply it may be traded on.
+2. **Approvals expire.** Each entry carries the date and the person who approved it, and an approval
+   older than the bound reads as **absent** — the same shape as
+   `docs/ops/RUNBOOK-collector.md`'s treatment of a stale control, and the same reason: "approved
+   eight months ago" is not a statement about today. Fail closed: expired means do not trade there,
+   not warn and proceed.
+3. **The kill switch reaches one venue.** A single compromised venue must be removable without
+   stopping every strategy, or the operator faces a choice between over-reacting and doing nothing —
+   and under time pressure that choice is made badly.
+
+**What this does not do.** It does not detect a compromise; it bounds the blast radius of one we
+learn about by other means. Detection is a human reading the ecosystem, which is exactly how this
+one surfaced. Any automated venue-health signal would be a new dependency to be wrong about, and is
+explicitly out of scope.
 
 ## 8. Custody and the sweep
 
