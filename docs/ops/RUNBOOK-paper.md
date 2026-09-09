@@ -54,6 +54,10 @@ report. Give each its own log and pid file:
 caffeinate -is npm run paper -- ma-crossover SNEK > paper-ma.log 2>&1 &
 caffeinate -is npm run paper -- rsi-mean-reversion SNEK > paper-rsi.log 2>&1 &
 caffeinate -is npm run paper -- buy-and-hold SNEK > paper-bah.log 2>&1 &
+# The zero-edge benchmark: one fixed buy per calendar period, never sells.
+# --param periodHours=24 --param buyAda=100 are the defaults; it pays the ~2.2 ADA fixed
+# cost once PER INSTALLMENT, where buy-and-hold pays it once.
+caffeinate -is npm run paper -- scheduled-accumulation SNEK > paper-dca.log 2>&1 &
 ```
 
 `npm run status` lists them together. Compare them from their persisted rows at any time, in the
