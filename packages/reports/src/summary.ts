@@ -1,33 +1,6 @@
 import type { EquityPoint, OrderRecord } from '@ctb/engine';
+import { PRICE_UNIT, priceScaled } from './decimal.js';
 import { tokenStr } from './format.js';
-
-/**
- * `@ctb/candles` owns this constant, and `@ctb/reports` may not import it — this package imports
- * nothing at runtime (`purity.guard.test.ts`), because two consumers (cli, dashboard) must agree on
- * these functions without either dragging a database in. So it is restated here, and the parse below
- * is pinned to candles' real output by `baseDenominatedParity.test.ts` in the cli package, which can
- * see both.
- *
- * That pin covers the Decimal SHAPE and the truncation rule, not this constant: the restatement
- * divides by the parsed price, so a uniformly different scale cancels and is harmless. A misread
- * FORMAT is not harmless — it turns the whole column null — and that is what the pin catches.
- */
-const PRICE_SCALE = 18;
-const PRICE_UNIT = 10n ** BigInt(PRICE_SCALE);
-
-/**
- * `EquityPoint.price` (a Decimal string, ADA per WHOLE token) to a bigint scaled by 10^PRICE_SCALE.
- *
- * Null for anything not strictly positive, and null rather than 0 for an unparseable one: the
- * restatement below divides by this, so a bad price makes the token figure UNMEASURABLE. Reporting
- * 0% there would read as "the token count did not move" — a claim nothing in the data supports.
- */
-function priceScaled(price: string): bigint | null {
-  const m = /^(-?\d+)(?:\.(\d*))?$/.exec(price.trim());
-  if (!m) return null;
-  const scaled = BigInt(m[1]! + (m[2] ?? '').padEnd(PRICE_SCALE, '0').slice(0, PRICE_SCALE));
-  return scaled > 0n ? scaled : null;
-}
 
 /**
  * Total equity restated in whole base tokens, carrying six decimals: `equity / (1e6 * price)`.

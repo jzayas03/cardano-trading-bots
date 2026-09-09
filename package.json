@@ -21,6 +21,7 @@
     "watch": "tsx packages/cli/src/main.ts watch",
     "leadlag": "tsx packages/cli/src/main.ts leadlag",
     "opportunity": "tsx packages/cli/src/main.ts opportunity",
+    "lp": "tsx packages/cli/src/main.ts lp",
     "candles": "tsx packages/cli/src/main.ts candles",
     "backfill": "tsx packages/cli/src/main.ts backfill",
     "backtest": "tsx packages/cli/src/main.ts backtest",
