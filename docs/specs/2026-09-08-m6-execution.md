@@ -125,6 +125,8 @@ Enforced in code, checked before every submission, and each one proven by making
 | Kill switch | one command, reachable from a phone, that stops trading and leaves positions untouched — and it must reach **per venue**, not only globally (§7.1) |
 | Venue allowlist | execute only on venues on an explicit **execution** allowlist, which is NOT the collection list (§7.1) |
 | Approval staleness | a venue approval older than N days is treated as **absent**, not as approved (§7.1) |
+| Live batcher fee | the fee written into the order datum is read live, never inherited from Dexter's hardcoded default (§7.2) |
+| Order visibility | assume size and slippage tolerance are **public before execution** and size accordingly (§7.3) |
 | Dry run | build and log the real order without submitting; the default until explicitly armed |
 
 Fail closed everywhere: an unreadable price, an unknown venue, a stale candle, a failed
@@ -132,10 +134,23 @@ reconciliation all mean **do not trade**, never "assume and proceed".
 
 ### 7.1 Venue integrity, which nothing in this system currently models
 
-**Trigger, 2026-09-09.** DefiLlama listed Dano Finance as Cardano's highest-volume DEX of the
-previous 24 hours ($403,267). The founder's own knowledge of the ecosystem was that it had been
-**compromised days earlier** — so that figure is plausibly an exploit being drained, not a market
-being traded.
+**Trigger, 2026-09-09 — and the trigger turned out to be wrong, which is the more useful lesson.**
+DefiLlama listed Dano Finance as Cardano's highest-volume DEX of the previous 24 hours ($403,267).
+The working assumption in this session was that it had been *compromised*, and this section was first
+written on that basis.
+
+**It had not been.** Danogo (Dano Finance) is a Cardano lending protocol that was disrupted by the
+**November 2025 chain-partition incident** — a malformed delegation transaction exploiting a node
+deserialization bug — because its node lagged. It recovered after upgrade and resync **with no
+user-fund loss and no protocol-level exploit**. Nothing about it contaminates Minswap or SundaeSwap
+pools, and DefiLlama's Cardano figures remain usable subject to the ordinary caveats about
+double-counting and aggregator-vs-direct attribution.
+
+So the requirement below was justified by an event that did not happen. **It survives anyway, and
+the near-miss is the argument for it**: for several hours a plausible-sounding compromise was treated
+as fact, and nothing in this system could have confirmed or refuted it. A control that depends on
+correctly identifying which venues are unsafe will fail exactly when the identification is wrong —
+in either direction.
 
 Nothing we had could tell the difference. `costsForPoolId` knows what a venue charges and
 `pool_snapshots` knows how deep it is; **no part of this system knows whether a venue is safe.**
@@ -166,6 +181,57 @@ Three requirements, deliberately blunt, because blunt survives:
 learn about by other means. Detection is a human reading the ecosystem, which is exactly how this
 one surfaced. Any automated venue-health signal would be a new dependency to be wrong about, and is
 explicitly out of scope.
+
+### 7.2 The batcher fee is not ours to assume — Dexter writes its own
+
+`minswap-v2.js` declares `swapOrderFees()` as `batcherFee: 2_000_000n` and `deposit: 2_000_000n`, and
+`DatumParameterKey.BatcherFee` puts that batcher value **into the order datum**. It is not an estimate
+Dexter displays; it is what Dexter will pay.
+
+Minswap's live figure has moved a great deal: historically ~2 ADA, discounted to ~1 ADA (as low as
+0.75 with MIN/MIN-ADA LP holdings) in July 2024, **removed entirely for roughly eleven months** from
+March 2025, and reintroduced in late February 2026 at a level not pinned to a single public number
+(community discussion suggests 0.7-1.3 ADA). It is protocol-controlled and can change again.
+
+**Two consequences.**
+
+The cost table's 2 ADA is **correct for Dexter-as-is** and must not be lowered on its own. Lowering
+the estimate while Dexter still writes 2 ADA into the datum would understate what we actually pay —
+the error would be invisible and in the expensive direction.
+
+Reading the live fee is therefore an **execution** requirement, not a bookkeeping one: the value must
+be read from the protocol and injected, and the estimate follows the injection rather than leading
+it. **Underpaying is worse than overpaying** — an order carrying too small a fee is simply never
+scooped, and sits in the queue looking submitted. That is precisely the "submitted, outcome unknown"
+state §6 exists for.
+
+**The deposit is NOT a cost.** Dexter lists it separately, and the minimum-ADA that a Cardano UTxO
+must carry to hold native assets is returned to the receiver with the swapped assets. It is
+temporary float. This project's cost table counts the batcher fee only and therefore does **not**
+double-count it — verified 2026-09-09 rather than assumed.
+
+**SundaeSwapV3's fee is dynamic and our table's SHAPE is wrong for it.** `sundaeswap-v3.js` uses
+`protocolFeeDefault`, and the real protocol charges a base fee shared across a batch plus an
+incremental per-order fee, DAO-settable via the settings datum. Cost therefore depends on **batch
+fullness**: alone you pay nearly all of it, in a full batch it amortises. Our entry is a single
+number with `basis: 'documented'`, which cannot express that — the M6.1 spike's live quote of
+**1.28 ADA** against our 1.00 "documented upper bound" is the symptom, not the disease.
+
+### 7.3 Our orders are public before they execute
+
+A Cardano DEX order is a UTxO whose datum encodes size, direction and minimum-receive. It sits in an
+observable queue until a batcher scoops it. **Size and slippage tolerance are therefore public
+information before the trade happens.**
+
+Two things follow that paper mode cannot show. The measured 34 bps of own price impact is a
+*lower* bound for real capital, because informed flow can react to a visible order. And the slippage
+ceiling in §7 — a control that exists to protect us — is itself the number being leaked.
+
+Latency compounds it: orders wait seconds to minutes for a batch, longer under congestion or when
+price moves outside the stated slippage. **A signal computed on a 15-minute candle can be stale
+before the batch lands**, and nothing in paper mode models the delay. Measuring it needs timestamped
+submission-versus-settlement data, which M6.2 defers — that deferral is now a known gap rather than
+an oversight.
 
 ## 8. Custody and the sweep
 
