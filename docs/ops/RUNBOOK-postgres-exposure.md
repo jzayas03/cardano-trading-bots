@@ -69,7 +69,33 @@ candle build is the worst moment to take the database away.
 5. Verify **from another machine**: `nc -z -w 8 <ip> 5433; echo rc=$?` — non-zero is the pass.
    And on the host: `ss -lntp | grep 5433` should show `127.0.0.1:5433`, not `0.0.0.0:5433`.
 
-## Step 3 — rotate the password (still outstanding)
+## Step 3 — rotate the password (scripted; timing is the whole question)
+
+`infra/vps/rotate-postgres-password.sh` does all of it: generates the new value **on the host** with
+`openssl` so it never leaves the box, ALTERs the role, rewrites `POSTGRES_PASSWORD` and
+`DATABASE_URL` together, verifies **both** directions (new authenticates AND old is refused), and
+rolls back — role and `.env` — if any step fails. Nothing is ever printed.
+
+```
+ssh root@<ip> 'bash -s' < infra/vps/rotate-postgres-password.sh
+```
+
+**Run it BETWEEN paper runs, not during one.** `createPool` does not set `idleTimeoutMillis`, so
+pg's 10-second default applies: idle connections close and the next query opens a fresh one. The
+instant ALTER ROLE lands, every process holding the old credentials fails to authenticate.
+
+The collector is fine — it holds no run state and the script restarts it. The paper runs are the
+risk. They *should* crash, be restarted by systemd, and resume the same run id, because a crash
+leaves `runs.status = 'running'` and `paper-start.sh` resumes a running row. But a run that reaches
+`maxTickFailures` (12) aborts and marks itself stopped, and the next start then creates a **new
+run** — on a 7-day run, that is starting the week again. Observed 2026-09-09: a clean
+`systemctl stop` produced `finished`/`stop_reason: signal`, and the following start created new ids
+146/147/148.
+
+The script deliberately does **not** restart the paper units, and prints the query to check whether
+the ids survived.
+
+### The old notes on why this is fiddly
 
 `ctb_local_only` is public and stays public in git history. The port is closed, so this is no longer
 urgent, but it must happen **before M6**.
