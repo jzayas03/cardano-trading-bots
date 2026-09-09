@@ -62,10 +62,29 @@ describe('GeckoTerminalClient', () => {
     const { f, calls } = fakeFetch([() => json(body)]);
     const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, log });
     const rows = await c.ohlcv5m('aaa', new Date(1_788_700_000 * 1000));
-    expect(calls[0]).toContain('/pools/aaa/ohlcv/minute?aggregate=5&limit=1000&before_timestamp=1788700000');
+    expect(calls[0]).toContain('/pools/aaa/ohlcv/minute?aggregate=5&limit=1000&currency=token&before_timestamp=1788700000');
     expect(rows.map((r) => r.tickTs.getTime() / 1000)).toEqual([1_788_692_400, 1_788_692_700]);
     expect(rows[1]?.close).toBe('0.00222');
     expect(rows[1]?.volumeQuote).toBe('2272.72725');
+  });
+
+  it('asks for the pool token by default, and only says usd when told to', async () => {
+    // GeckoTerminal defaults `currency` to usd. Omitting the parameter -- which this client did until
+    // 2026-09-09 -- silently imported dollars into a table read as if it held ADA, next to a cost
+    // floor that is ADA-denominated. Verified live on the SNEK/ADA MinswapV2 pool, same 5-minute bar:
+    // no parameter gave 0.000511568, `currency=token` gave 0.002337, which matches this project's own
+    // reserve-derived close for that pool.
+    const urls: string[] = [];
+    const f = (async (u: string) => { urls.push(u); return { ok: true, status: 200, json: async () => ({ data: { attributes: { ohlcv_list: [] } } }) }; }) as unknown as typeof fetch;
+    const c = new GeckoTerminalClient({ fetch: f, sleep: async () => {}, log: { info: () => {}, warn: () => {}, error: () => {} } });
+
+    await c.ohlcv5m('aaa');
+    await c.ohlcv5m('aaa', undefined, 'ada');
+    await c.ohlcv5m('aaa', undefined, 'usd');
+
+    expect(urls[0]).toContain('currency=token');   // default
+    expect(urls[1]).toContain('currency=token');
+    expect(urls[2]).not.toContain('currency=');    // usd is GeckoTerminal's own default
   });
 
   it('backs off on 429 and succeeds on a later attempt', async () => {

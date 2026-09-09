@@ -1,11 +1,14 @@
 import type { Logger } from '@ctb/collector/pure';
 import type { TokenSpec } from '@ctb/universe';
-import type { ExternalRepo } from './externalRepo.js';
+import type { Denomination, ExternalRepo } from './externalRepo.js';
 import { chooseExternalPool, type GeckoCandle, type GeckoTerminalClient } from './geckoTerminal.js';
 
 const MAX_PAGES = 400; // 400 pages x ~600 sparse rows covers well over a year at 5 minutes
 
 export async function backfillToken(d: {
+  /** Which currency to import. ADA is what every cost in this project is denominated in; see
+   *  `0008_external_candle_denomination.sql` for why this is now explicit everywhere. */
+  denomination: Denomination;
   client: Pick<GeckoTerminalClient, 'listAdaPools' | 'ohlcv5m'>;
   repo: ExternalRepo;
   token: Pick<TokenSpec, 'unit' | 'ticker'>;
@@ -27,11 +30,11 @@ export async function backfillToken(d: {
   let pages = 0;
   let rows = 0;
   while (pages < MAX_PAGES) {
-    const page: GeckoCandle[] = await d.client.ohlcv5m(map.externalPoolId, before);
+    const page: GeckoCandle[] = await d.client.ohlcv5m(map.externalPoolId, before, d.denomination);
     pages++;
     if (page.length === 0) break;
     const inWindow = page.filter((c) => c.tickTs.getTime() >= d.from.getTime() && c.tickTs.getTime() <= d.to.getTime());
-    rows += await d.repo.upsertExternal(d.token.unit, map.externalPoolId, inWindow);
+    rows += await d.repo.upsertExternal(d.token.unit, map.externalPoolId, inWindow, d.denomination);
     const oldest = page[0]!.tickTs;
     if (oldest.getTime() < d.from.getTime()) break;
     // Paging backwards only works while each page reaches further back than the last. A pool whose

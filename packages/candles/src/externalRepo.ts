@@ -1,4 +1,11 @@
 import { withTransaction, type Db, type Queryable } from '@ctb/db';
+
+/**
+ * Which currency a `candles_external` row's prices are in. NOT defaulted anywhere in this file:
+ * three months of rows are USD because nobody knew to ask, and a default is how that happened.
+ * Callers state it. See `0008_external_candle_denomination.sql`.
+ */
+export type Denomination = 'usd' | 'ada';
 import type { GeckoCandle } from './geckoTerminal.js';
 import { INSERT_CHUNK_ROWS } from './repo.js';
 
@@ -9,14 +16,16 @@ export interface ExternalRepo {
   putMap(m: { unit: string; externalPoolId: string; externalDex: string; matchMethod: 'identifier' | 'pair_largest_reserve'; reserveUsd: number | null }): Promise<void>;
   /** Hex suffixes of MinswapV2 pool_ids we have snapshotted for this token; empty until the collector has run. */
   knownMinswapV2Identifiers(unit: string): Promise<string[]>;
-  upsertExternal(unit: string, poolId: string, candles: GeckoCandle[]): Promise<number>;
+  upsertExternal(unit: string, poolId: string, candles: GeckoCandle[], denomination: Denomination): Promise<number>;
   /** Only rows of the pool `external_pool_map` currently points at — never a mix of pools. */
-  readExternal(unit: string, from: Date, to: Date): Promise<GeckoCandle[]>;
-  coverage(unit: string): Promise<{ first: Date | null; last: Date | null; rows: number }>;
+  readExternal(unit: string, from: Date, to: Date, denomination: Denomination): Promise<GeckoCandle[]>;
+  coverage(unit: string, denomination: Denomination): Promise<{ first: Date | null; last: Date | null; rows: number }>;
 }
 
 const SOURCE = 'geckoterminal';
-const COLS = 9;
+/** Bind parameters per row. Went 9 -> 10 when `denomination` was added (migration 0008): every
+ *  placeholder is numbered off this, so a stale value silently shifts every column by one. */
+const COLS = 10;
 
 /**
  * Finding I3: `candles_external` can now hold more than one pool per token (migration 0003 widened
@@ -58,43 +67,43 @@ export class PgExternalRepo implements ExternalRepo {
   }
 
   /** Chunked at INSERT_CHUNK_ROWS inside one transaction: 9 columns x N rows hits the 65535-parameter Bind cap at 7282 rows (finding C1). */
-  async upsertExternal(unit: string, poolId: string, candles: GeckoCandle[]): Promise<number> {
+  async upsertExternal(unit: string, poolId: string, candles: GeckoCandle[], denomination: Denomination): Promise<number> {
     if (candles.length === 0) return 0;
     const run = async (q: Queryable): Promise<number> => {
       let inserted = 0;
       for (let i = 0; i < candles.length; i += INSERT_CHUNK_ROWS) {
-        inserted += await upsertExternalChunk(q, unit, poolId, candles.slice(i, i + INSERT_CHUNK_ROWS));
+        inserted += await upsertExternalChunk(q, unit, poolId, candles.slice(i, i + INSERT_CHUNK_ROWS), denomination);
       }
       return inserted;
     };
     return this.q === this.db ? withTransaction(this.db, run) : run(this.q);
   }
 
-  async readExternal(unit: string, from: Date, to: Date): Promise<GeckoCandle[]> {
+  async readExternal(unit: string, from: Date, to: Date, denomination: Denomination): Promise<GeckoCandle[]> {
     const r = await this.q.query<{ tick_ts: Date; open: string; high: string; low: string; close: string; volume_quote: string }>(
       `SELECT ce.tick_ts, ce.open, ce.high, ce.low, ce.close, ce.volume_quote FROM candles_external ce${MAPPED_POOL_JOIN}
-        WHERE ce.base_unit = $1 AND ce.source = $2 AND ce.tick_ts BETWEEN $3 AND $4 ORDER BY ce.tick_ts`,
-      [unit, SOURCE, from, to]);
+        WHERE ce.base_unit = $1 AND ce.source = $2 AND ce.denomination = $5 AND ce.tick_ts BETWEEN $3 AND $4 ORDER BY ce.tick_ts`,
+      [unit, SOURCE, from, to, denomination]);
     return r.rows.map((x) => ({ tickTs: x.tick_ts, open: x.open, high: x.high, low: x.low, close: x.close, volumeQuote: x.volume_quote }));
   }
 
-  async coverage(unit: string): Promise<{ first: Date | null; last: Date | null; rows: number }> {
+  async coverage(unit: string, denomination: Denomination): Promise<{ first: Date | null; last: Date | null; rows: number }> {
     const r = await this.q.query<{ first: Date | null; last: Date | null; rows: string }>(
       `SELECT min(ce.tick_ts) AS first, max(ce.tick_ts) AS last, count(*) AS rows FROM candles_external ce${MAPPED_POOL_JOIN}
-        WHERE ce.base_unit = $1 AND ce.source = $2`, [unit, SOURCE]);
+        WHERE ce.base_unit = $1 AND ce.source = $2 AND ce.denomination = $3`, [unit, SOURCE, denomination]);
     const x = r.rows[0];
     return { first: x?.first ?? null, last: x?.last ?? null, rows: Number(x?.rows ?? 0) };
   }
 }
 
-async function upsertExternalChunk(q: Queryable, unit: string, poolId: string, candles: GeckoCandle[]): Promise<number> {
+async function upsertExternalChunk(q: Queryable, unit: string, poolId: string, candles: GeckoCandle[], denomination: Denomination): Promise<number> {
   const values: unknown[] = [];
   const tuples = candles.map((c, i) => {
-    values.push(unit, c.tickTs, SOURCE, poolId, c.open, c.high, c.low, c.close, c.volumeQuote);
+    values.push(unit, c.tickTs, SOURCE, poolId, c.open, c.high, c.low, c.close, c.volumeQuote, denomination);
     return `(${Array.from({ length: COLS }, (_, k) => `$${i * COLS + k + 1}`).join(', ')})`;
   });
   const r = await q.query(
-    `INSERT INTO candles_external (base_unit, tick_ts, source, external_pool_id, open, high, low, close, volume_quote)
-     VALUES ${tuples.join(', ')} ON CONFLICT (base_unit, tick_ts, source, external_pool_id) DO NOTHING`, values);
+    `INSERT INTO candles_external (base_unit, tick_ts, source, external_pool_id, open, high, low, close, volume_quote, denomination)
+     VALUES ${tuples.join(', ')} ON CONFLICT (base_unit, tick_ts, source, external_pool_id, denomination) DO NOTHING`, values);
   return r.rowCount ?? 0;
 }

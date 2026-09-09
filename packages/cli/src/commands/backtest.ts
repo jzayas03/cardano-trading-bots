@@ -1,4 +1,4 @@
-import { EXTERNAL_CANDLE_INTERVAL_SEC, PgCandleRepo, PgExternalRepo } from '@ctb/candles';
+import { EXTERNAL_CANDLE_INTERVAL_SEC, PgCandleRepo, PgExternalRepo, type Denomination } from '@ctb/candles';
 import { createPool } from '@ctb/db';
 import { gitShaOrUnknown, PgRunRepo, runEngine, STRATEGIES } from '@ctb/engine';
 import { SimExecutor, VENUE_COSTS, type FillModel, type VenueCosts } from '@ctb/sim-executor';
@@ -18,6 +18,8 @@ export interface BacktestArgs {
   strategyIds: string[];
   /** A universe ticker, or `ALL`: every universe token that has data for the chosen source. */
   ticker: string; from: Date; to: Date; source: 'candles' | 'candles_external';
+  /** Which `candles_external` rows to read. ADA by default; `--currency usd` for the pre-2026-09-09 dollar history. */
+  denomination: Denomination;
   cashAda: number;
   /** ADA of synthetic depth (external source only); `'auto'` = each token's own latest deepest-pool ADA reserve from `pool_snapshots`. Default `'auto'` for `ALL`, required otherwise. */
   depthAda: number | 'auto' | null; batcherAda: number | null; networkAda: number | null; maxGapMin: number; params: Record<string, number>;
@@ -70,7 +72,8 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
   const from = parseIsoDate('from', fromArg);
   const to = parseIsoDate('to', toArg);
   if (from.getTime() >= to.getTime()) throw new Error(`from must be before to\n${USAGE}`);
-  const out: BacktestArgs = { strategyIds, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close', grid: {} };
+  const out: BacktestArgs = { strategyIds, ticker, from, to, source: 'candles', cashAda: 1000, depthAda: null, batcherAda: null, networkAda: null, maxGapMin: DEFAULT_MAX_GAP_MIN, params: {}, syntheticPrice: 'close',
+    denomination: 'ada', grid: {} };
   for (let i = 0; i < rest.length; i++) {
     const flag = rest[i]!;
     const val = rest[i + 1];
@@ -78,6 +81,11 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
       case '--source':
         if (val !== 'candles' && val !== 'external') throw new Error(`--source must be candles or external\n${USAGE}`);
         out.source = val === 'external' ? 'candles_external' : 'candles'; i++; break;
+      case '--currency': {
+        const v = args[i + 1];
+        if (v !== 'ada' && v !== 'usd') throw new Error(`--currency must be ada or usd\n${USAGE}`);
+        out.denomination = v; i++; break;
+      }
       case '--cash-ada': out.cashAda = num(flag, val); i++; break;
       case '--depth-ada': out.depthAda = val === 'auto' ? 'auto' : num(flag, val); i++; break;
       case '--batcher-ada': out.batcherAda = num(flag, val); i++; break;
@@ -232,7 +240,7 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
       // A sweep token with nothing to run on is a row in the skipped table, not the end of the sweep.
       if (a.source === 'candles_external' && sweep) {
         const hasMap = (await external.getMap(token.unit)) !== null;
-        const rows = hasMap ? (await external.readExternal(token.unit, a.from, a.to)).length : 0;
+        const rows = hasMap ? (await external.readExternal(token.unit, a.from, a.to, a.denomination)).length : 0;
         const reason = sweepSkipReason(hasMap, rows);
         if (reason) { skipped.push({ ticker: token.ticker, reason }); continue; }
       }
@@ -269,7 +277,7 @@ export async function backtestCommand(log: Logger, args: string[]): Promise<void
             params: buildRunParams(strategy.defaultParams, params, a.cashAda, depthAdaForParams, costOverrides, maxGapMs, { ...extra, ...gridExtra }),
           });
           console.log(`run id: ${runId} (${token.ticker} ${strategy.id}${isGrid ? ` ${Object.entries(combo).map(([k, v]) => `${k}=${v}`).join(' ')}` : ''})`);
-          const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to);
+          const feed = a.source === 'candles' ? localCandleFeed(new PgCandleRepo(db), token.unit, a.from, a.to) : externalCandleFeed(external, token.unit, a.from, a.to, a.denomination);
           const executor = new SimExecutor({ decimals: token.decimals, baseUnit: token.unit, fillModel, costOverrides, maxGapMs });
           const result = await runEngine({ feed, strategy, params, executor, initial: { cashLovelace: ada(a.cashAda), positionBase: 0n }, decimals: token.decimals, log,
             intervalSec: runIntervalSecFor(a.source, cfg.intervalSec), maxGapMs });
