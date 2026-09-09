@@ -8,6 +8,7 @@ import { collectCommand } from './commands/collect.js';
 import { dashboardCommand } from './commands/dashboard.js';
 import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { leadlagCommand } from './commands/leadlag.js';
+import { lpCommand } from './commands/lp.js';
 import { opportunityCommand } from './commands/opportunity.js';
 import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
@@ -51,6 +52,8 @@ async function main(): Promise<void> {
       return leadlagCommand(log, rest);
     case 'opportunity':
       return opportunityCommand(log, rest);
+    case 'lp':
+      return lpCommand(log, rest);
     case 'watch':
       return watchCommand(log, rest);
     case 'backup':
@@ -66,6 +69,7 @@ async function main(): Promise<void> {
         'dev:fake-collector <TICKER> [--interval-sec 60] [--seed 42] [--once]|' +
         'dashboard [--port 3210] | watch [--verbose] | leadlag [--max-lag 6] [--since ISO] |\n' +
         ' opportunity [TICKER|ALL] [--since ISO] [--floor-bps 216] [--windows 1800,7200,86400]>',
+        ' lp <TICKER> [--since ISO] [--pool ID]  — LP value by entry tick, vs holding the token>',
       );
       process.exitCode = 2;
   }
