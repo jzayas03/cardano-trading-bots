@@ -1,8 +1,8 @@
 import type { Pair } from '@ctb/universe';
 import type { PoolCacheRepo, RunError, RunSummary, SnapshotRepo } from './repo.js';
 import { bucketTick, poolIdOf, poolToSnapshot, reconcileTickTs } from './snapshot.js';
-import type { DiscoveryCallsSource, HydratableSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
-import type { Logger, SnapshotRow } from './types.js';
+import type { DiscoveryCallsSource, HydratableSource, MultiVenueSource, PoolSource, RediscoverySource, SourceResult } from './source.js';
+import type { Logger, PoolLike, SnapshotRow } from './types.js';
 
 export interface CollectorState {
   lastDiscoveryAt: Date | null;
@@ -49,6 +49,12 @@ function hasDiscoveryCalls(source: PoolSource): source is PoolSource & Discovery
   // `unknown` is the standard way to structurally probe for an optional capability like this one.
   const maybe = source as unknown as Partial<DiscoveryCallsSource>;
   return typeof maybe.lastDiscoveryCalls === 'function';
+}
+
+/** Same structural probe for the optional multi-venue capability (only `DexterPoolSource` today). */
+function hasMultiVenue(source: PoolSource): source is PoolSource & MultiVenueSource {
+  const maybe = source as unknown as Partial<MultiVenueSource>;
+  return typeof maybe.refreshSecondary === 'function' && typeof maybe.secondaryPoolCount === 'function';
 }
 
 /** Same structural probe for the optional hydration capability (only `DexterPoolSource` today). */
@@ -98,6 +104,15 @@ export interface TickDeps {
   /** Persists the pool set after a discovery. Omit and the cache is simply not written -- the
    *  collector still works, it just pays for a sweep on the next restart. */
   poolCache?: PoolCacheRepo;
+  /**
+   * Also price the venues `'deepest'` pruning set aside, this tick, for pools at or above this ADA
+   * depth. Omit to skip them entirely.
+   *
+   * Their snapshots are written with `isPrimary: false` and therefore never reach a candle
+   * (migration 0009) -- which is what makes this safe to enable while a paper run is reading the
+   * primary series.
+   */
+  multiVenueMinAdaLovelace?: bigint;
   /**
    * The tick bucket to write, pinned by the caller. The `collect` loop computes the boundary it is
    * about to sleep toward BEFORE sleeping and passes it back in here; if the tick were instead
@@ -219,6 +234,21 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
     }
   }
 
+  // The other venues for tokens we already track, priced at the same instant as the primary so a
+  // cross-DEX spread is a comparison rather than an artefact of two different moments. Isolated in
+  // its own try: a failure here must not cost the tick its primary snapshots.
+  const secondaryPools: PoolLike[] = [];
+  if (d.multiVenueMinAdaLovelace !== undefined && hasMultiVenue(d.source)) {
+    try {
+      const extra = await d.source.refreshSecondary(d.multiVenueMinAdaLovelace);
+      secondaryPools.push(...extra.pools);
+      errors.push(...extra.failures);
+      d.log.info({ runId, pools: extra.pools.length }, 'multi-venue tick');
+    } catch (err) {
+      errors.push({ scope: 'multiVenue', message: (err as Error).message ?? String(err) });
+    }
+  }
+
   const rows: SnapshotRow[] = [];
   summary.poolsAttempted = result.pools.length + result.failures.filter(isPoolFailure).length;
   for (const pool of result.pools) {
@@ -230,6 +260,26 @@ export async function runTick(d: TickDeps): Promise<RunSummary> {
   }
   summary.poolsFailed = summary.poolsAttempted - rows.length;
   summary.poolsWritten = await d.repo.insertSnapshots(runId, rows);
+
+  // Secondary rows are inserted SEPARATELY and are deliberately absent from poolsAttempted,
+  // poolsFailed and poolsWritten. Folding them in would break the `attempted = written + failed`
+  // invariant the check below exists to enforce, and would make the primary series' health
+  // unreadable from the run row -- a tick that lost half its real pools would look fine because
+  // some secondary ones landed.
+  if (secondaryPools.length > 0) {
+    const extraRows: SnapshotRow[] = [];
+    for (const pool of secondaryPools) {
+      try {
+        extraRows.push(poolToSnapshot(pool, { tickTs, blockHeight: tip.height, observedAt: d.now(), isPrimary: false }));
+      } catch (err) {
+        errors.push({ scope: `multiVenueMap:${poolIdOf(pool)}`, message: (err as Error).message ?? String(err) });
+      }
+    }
+    if (extraRows.length > 0) {
+      const written = await d.repo.insertSnapshots(runId, extraRows);
+      d.log.info({ runId, secondaryWritten: written, secondaryMapped: extraRows.length }, 'multi-venue snapshots written');
+    }
+  }
   // attempted = written + failed, or something was dropped between mapping and the database and
   // NOTHING else would say so. `insertSnapshots` is ON CONFLICT DO NOTHING on (pool_id, tick_ts),
   // so a row silently disappears whenever this tick's bucket already holds that pool — which is

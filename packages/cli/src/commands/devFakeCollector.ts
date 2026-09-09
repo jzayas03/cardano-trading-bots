@@ -124,7 +124,7 @@ export async function devFakeCollectorCommand(log: Logger, args: string[]): Prom
         poolType: 'cpmm',
         tvlLovelace: 2n * current.reserveQuote,
         blockHeight: 0,
-        observedAt: startedAt,
+        observedAt: startedAt, isPrimary: true,
       };
       const written = await repo.insertSnapshots(runId, [row]);
       await repo.finishRun(runId, new Date(), {

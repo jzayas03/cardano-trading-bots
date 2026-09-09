@@ -10,7 +10,9 @@ describe('loadConfig', () => {
     const c = loadConfig(base, { blockfrost: false });
     expect(c).toEqual({
       databaseUrl: base.DATABASE_URL, dashboardDatabaseUrl, blockfrostProjectId: null, intervalSec: 600,
-      dailyCallCeiling: 45_000, logLevel: 'info',
+      dailyCallCeiling: 45_000,
+      multiVenueEveryNTicks: 0,
+      multiVenueMinDepthLovelace: 50_000_000_000n, logLevel: 'info',
       venues: DEFAULT_VENUES, refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
     });
   });
@@ -39,6 +41,8 @@ describe('loadConfig', () => {
       blockfrostProjectId: null,
       intervalSec: 600,
       dailyCallCeiling: 45_000,
+      multiVenueEveryNTicks: 0,
+      multiVenueMinDepthLovelace: 50_000_000_000n,
       logLevel: 'info',
       venues: DEFAULT_VENUES,
       refreshPolicy: 'deepest', minDepthLovelace: 0n, focusTicker: null, focusIntervalSec: 0,
@@ -203,5 +207,21 @@ describe('tiered sampling config', () => {
     expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: 'abc' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
     expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '-1' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
     expect(() => loadConfig({ ...base, COLLECT_DAILY_CALL_CEILING: '1.5' }, { blockfrost: false })).toThrow(/COLLECT_DAILY_CALL_CEILING/);
+  });
+
+  it('COLLECT_MULTI_VENUE_EVERY_N_TICKS is off by default and refuses nonsense', () => {
+    // Off by default: multi-venue pricing costs quota and answers a research question, so it is
+    // opted into deliberately rather than inherited.
+    expect(loadConfig(base, { blockfrost: false }).multiVenueEveryNTicks).toBe(0);
+    expect(loadConfig({ ...base, COLLECT_MULTI_VENUE_EVERY_N_TICKS: '4' }, { blockfrost: false }).multiVenueEveryNTicks).toBe(4);
+    expect(() => loadConfig({ ...base, COLLECT_MULTI_VENUE_EVERY_N_TICKS: '-1' }, { blockfrost: false })).toThrow(/COLLECT_MULTI_VENUE_EVERY_N_TICKS/);
+    expect(() => loadConfig({ ...base, COLLECT_MULTI_VENUE_EVERY_N_TICKS: 'x' }, { blockfrost: false })).toThrow(/COLLECT_MULTI_VENUE_EVERY_N_TICKS/);
+  });
+
+  it('the depth floor converts ADA to lovelace and defaults to 50,000 ADA', () => {
+    // A spread against a pool nobody can trade is not an opportunity — NIGHT's 404 bps gap was to a
+    // pool holding a tenth of the depth.
+    expect(loadConfig(base, { blockfrost: false }).multiVenueMinDepthLovelace).toBe(50_000_000_000n);
+    expect(loadConfig({ ...base, COLLECT_MULTI_VENUE_MIN_DEPTH_ADA: '250000' }, { blockfrost: false }).multiVenueMinDepthLovelace).toBe(250_000_000_000n);
   });
 });

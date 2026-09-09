@@ -40,7 +40,7 @@ describe.skipIf(!PG_ENABLED)('PgExternalRepo', () => {
       const run = await snaps.startRun(t(0), t(0));
       const snapshotRow: SnapshotRow = {
         tickTs: t(0), dex: 'MinswapV2', poolId: 'MinswapV2:abc', poolAddress: 'addr', baseUnit: snek.unit, quoteUnit: 'lovelace',
-        reserveBase: 10n, reserveQuote: 20n, feeBps: 30, poolType: 'cpmm', tvlLovelace: 40n, blockHeight: 1, observedAt: t(0),
+        reserveBase: 10n, reserveQuote: 20n, feeBps: 30, poolType: 'cpmm', tvlLovelace: 40n, blockHeight: 1, observedAt: t(0), isPrimary: true,
       };
       await snaps.insertSnapshots(run, [snapshotRow]);
       const identifiers = await repo.knownMinswapV2Identifiers(snek.unit);

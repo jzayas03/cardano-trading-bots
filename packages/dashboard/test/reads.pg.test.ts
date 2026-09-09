@@ -91,7 +91,7 @@ describe.skipIf(!PG_ENABLED)('PgDashboardReads.latestSnapshotsPerToken / snapsho
 
   const snapshot = (tickTs: Date, baseUnit: string, poolId: string, reserveQuote: bigint): SnapshotRow => ({
     tickTs, dex: 'SundaeSwapV3', poolId, poolAddress: 'addr', baseUnit, quoteUnit: 'lovelace',
-    reserveBase: 1_000_000n, reserveQuote, feeBps: 30, poolType: 'cpmm', tvlLovelace: reserveQuote, blockHeight: 1, observedAt: tickTs,
+    reserveBase: 1_000_000n, reserveQuote, feeBps: 30, poolType: 'cpmm', tvlLovelace: reserveQuote, blockHeight: 1, observedAt: tickTs, isPrimary: true,
   });
 
   async function seed(db: Db): Promise<void> {
