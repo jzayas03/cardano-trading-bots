@@ -72,7 +72,9 @@ not a measurement, and it belongs to the founder.
 
 **2. Scheduled accumulation.** The zero-edge baseline: convert ADA to NIGHT on a calendar, pay one
 one-way fee, require no signal. **Every other strategy has to beat this, and none has been shown to.**
-It is the honest benchmark and it is not currently implemented.
+It is the honest benchmark, and as of 2026-09-09 it **is** implemented: `scheduled-accumulation`,
+buying `buyAda` once per `periodHours` and never selling (defaults 100 ADA / 24h). It has not
+yet been RUN — the live paper runs stay as they are until the 7-day window closes.
 
 **3. Directional taking.** What is running. Needs predictive skill AND has to clear 216-371 bps per
 round trip. The 7-day run is the only test of the sufficient condition; everything above is necessary
