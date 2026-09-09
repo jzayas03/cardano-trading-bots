@@ -59,6 +59,25 @@ These are gates, not preferences.
    therefore errs CHEAP on that venue, inverting the conservatism §2.1 claims. Re-measure before
    quoting the floor for any SundaeSwapV3 fill.
 
+## 2.1 M6.1's construction half, met 2026-09-09
+
+The gate above says the mock "proves the QUOTE path and nothing beyond it". Half of that is now
+retired, and the cause was simpler than it looked. `MockWalletProvider` ships
+`_paymentCredential = 'ed56'` and `_stakingCredential = 'bac6'` — **two bytes each** — and
+`buildSwapOrder` hands the staking one to `lucidUtils.credentialToAddress()`, which needs 28. The
+mock was never a wallet; it was a stub with placeholder strings.
+
+Subclassing it with structurally valid 28-byte hashes is the whole fix. A MinswapV2 NIGHT/ADA order
+now constructs against our own collected reserves with **no Blockfrost call, no preprod, no funds and
+no key material**: one payment, to the batcher CONTRACT address, carrying a datum, locking the swap
+amount plus 4 ADA.
+
+**What it does not retire.** That the datum is *correct*. A datum that serialises can still be wrong
+in a way that loses funds rather than erroring, and on Cardano that is the failure mode that matters.
+The preprod half of this gate stands unchanged. The test pins the stock mock's failure to the exact
+`Ed25519KeyHash ... length 28 ... Len(2)` string, so if a future Dexter ships a usable mock, that
+control goes green and tells us the override has become dead weight.
+
 ## 3. Decisions already made
 
 - **The founder holds the keys and arms live mode.** No agent handles a seed phrase, a signing key,
@@ -267,7 +286,7 @@ procedure written down before the first funded trade rather than after.
 
 | | |
 |---|---|
-| M6.1 | Dexter's swap path proven against `MockWalletProvider`; no key, no funds |
+| M6.1 | **Construction half MET 2026-09-09** (`packages/collector/test/swapOrderConstruction.test.ts`): a MinswapV2 order builds with no key, no funds and no network. Correctness half still needs preprod |
 | M6.2 | The order state machine and reconciliation, against preprod |
 | M6.3 | Risk controls, each proven by making it fire |
 | M6.4 | Dry-run mode against mainnet prices: real orders built and logged, never submitted |
