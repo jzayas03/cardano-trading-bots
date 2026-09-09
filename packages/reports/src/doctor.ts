@@ -113,3 +113,103 @@ export function verdict(checks: Check[]): { exitCode: number; line: string } {
   if (fails.length) return { exitCode: 1, line: `doctor: ${fails.length} FAIL (${fails.map((c) => c.name).join(', ')})${warns.length ? `, ${warns.length} warn` : ''}` };
   return { exitCode: 0, line: warns.length ? `doctor: OK with ${warns.length} warning${warns.length === 1 ? '' : 's'} (${warns.map((c) => c.name).join(', ')})` : 'doctor: OK' };
 }
+
+/**
+ * Consecutive finished ticks that wrote nothing before this is a failure rather than a warning.
+ * Three: enough that a single transient venue outage does not alarm, few enough that a real stall is
+ * caught within minutes rather than hours.
+ */
+export const UNPRODUCTIVE_TICKS_FAIL = 3;
+
+/** Consecutive finished ticks sharing one error scope before that scope is a failure. */
+export const RECURRING_ERROR_TICKS_FAIL = 3;
+
+/** Fraction of the daily call ceiling at which spend becomes a warning. */
+export const QUOTA_SPEND_WARN_AT = 0.8;
+
+/** The fields these checks read from a collector run. A structural subset of `RunRow` so
+ *  `@ctb/reports` does not have to depend on `@ctb/collector` for a type. */
+export interface TickHealthRow {
+  finishedAt: Date | null;
+  poolsWritten: number;
+  errors: ReadonlyArray<{ scope: string; message: string }>;
+}
+
+/**
+ * Is the collector PRODUCING, not merely running?
+ *
+ * On 2026-09-08 this watchdog ran fifteen times and exited 0 every time, while the collector
+ * finished a tick punctually every fifteen minutes writing `pools 0/0, calls 0` — the Blockfrost
+ * quota was exhausted and every tick failed closed at `/blocks/latest` with a 402. Nothing was
+ * stale, so the `collector tick` check was satisfied; the quota PACE projection actually improved,
+ * because a tick that spends nothing lowers the projected rate. Ticking on time while collecting
+ * nothing read as perfect health for four hours, with three paper runs sitting on the dead feed.
+ *
+ * Only finished ticks count: a tick still in flight has written nothing YET, which is not the same
+ * as having written nothing.
+ */
+export function checkTickProductivity(runs: readonly TickHealthRow[], failAfter = UNPRODUCTIVE_TICKS_FAIL): Check {
+  const finished = runs.filter((r) => r.finishedAt !== null);
+  if (finished.length === 0) return { name: 'tick productivity', status: 'warn', detail: 'no finished tick to judge' };
+  let barren = 0;
+  for (const r of finished) {
+    if (r.poolsWritten > 0) break;
+    barren++;
+  }
+  if (barren >= failAfter) {
+    return { name: 'tick productivity', status: 'fail', detail: `${barren} consecutive finished ticks wrote 0 pools — the collector is running but collecting nothing` };
+  }
+  if (barren > 0) {
+    return { name: 'tick productivity', status: 'warn', detail: `${barren} of the last ${finished.length} finished ticks wrote 0 pools` };
+  }
+  return { name: 'tick productivity', status: 'ok', detail: `newest finished tick wrote ${finished[0]!.poolsWritten} pools` };
+}
+
+/**
+ * One error repeating on every recent tick is a condition, not a blip.
+ *
+ * The 402 that stopped collection on 2026-09-08 was recorded on the run row of every single tick for
+ * four hours and nothing ever read it. A recurring scope names the fault precisely — `tip`, `budget`,
+ * `discover:MinswapV2` — which is the difference between "the collector is unhappy" and a fix.
+ */
+export function checkRecurringTickErrors(runs: readonly TickHealthRow[], failAfter = RECURRING_ERROR_TICKS_FAIL): Check {
+  const finished = runs.filter((r) => r.finishedAt !== null).slice(0, failAfter);
+  if (finished.length < failAfter) {
+    return { name: 'tick errors', status: 'ok', detail: `fewer than ${failAfter} finished ticks to compare` };
+  }
+  // A scope must appear in EVERY one of the last `failAfter` ticks. An error on two of three is
+  // intermittent, and alarming on it would train the operator to ignore this check.
+  const scopeSets = finished.map((r) => new Set(r.errors.map((e) => e.scope)));
+  const persistent = [...(scopeSets[0] ?? [])].filter((scope) => scopeSets.every((s) => s.has(scope))).sort();
+  if (persistent.length === 0) {
+    return { name: 'tick errors', status: 'ok', detail: `no error on all ${failAfter} newest finished ticks` };
+  }
+  const example = finished[0]!.errors.find((e) => e.scope === persistent[0])?.message ?? '';
+  return {
+    name: 'tick errors',
+    status: 'fail',
+    detail: `${persistent.join(', ')} on each of the last ${failAfter} ticks — ${example}`,
+  };
+}
+
+/**
+ * How much of the day's call ceiling is actually SPENT, as opposed to projected.
+ *
+ * `checkDigestLines`'s quota check extrapolates a rate, which answers "will today's pace fit" and
+ * cannot answer "is there anything left right now". Those diverge exactly when it matters: once the
+ * quota is gone every tick spends 0, the projected rate falls, and the pace check reports a
+ * healthier number the longer the outage lasts.
+ *
+ * A ceiling of 0 means the operator disabled it (`COLLECT_DAILY_CALL_CEILING=0`); reporting a
+ * percentage of zero would be a division by it.
+ */
+export function checkQuotaSpend(callsToday: number, ceiling: number, warnAt = QUOTA_SPEND_WARN_AT): Check {
+  if (ceiling <= 0) return { name: 'quota spend', status: 'ok', detail: `${callsToday} calls today; no ceiling configured` };
+  const pctOfCeiling = (callsToday / ceiling) * 100;
+  const detail = `${callsToday} of ${ceiling} calls (${pctOfCeiling.toFixed(0)}% of the ceiling)`;
+  if (callsToday >= ceiling) {
+    return { name: 'quota spend', status: 'fail', detail: `${detail} — a discovery sweep will now be refused` };
+  }
+  if (pctOfCeiling >= warnAt * 100) return { name: 'quota spend', status: 'warn', detail };
+  return { name: 'quota spend', status: 'ok', detail };
+}
