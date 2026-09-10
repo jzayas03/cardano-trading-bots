@@ -318,3 +318,33 @@ promotion gate's own sample size, correlated returns are not reliably intervalle
 here. That is now the third independent route to the same conclusion — after the σ-conversion check
 and the BCa coverage table — and all three say the constraint is **the number of round trips**, not
 the statistics applied to them.
+
+## Staking, and why I oversold it
+
+A review pointed out that idle ADA is not idle: delegated ADA keeps earning and stays spendable, so
+every baseline that ignores it **understates the alternative** and makes every strategy look better
+than it is. Conceded, and built — `report <id>` now shows the credit on every run.
+
+It applies to **every run, not only the baselines**. A directional strategy sitting in cash between
+trades earns it too; crediting only the comparator would be a different bias, not a fix. And it is a
+measurement correction applied to equity, never paid into cash — paying it in would change what the
+run could afford and make it a different run.
+
+**I recommended this as "the only item that could change a conclusion." Having built it, the
+measurement says it cannot at this horizon.** At the assumed 3% APR:
+
+| window | fully idle, 1000 ADA | as a fraction |
+|---|---|---|
+| run 137, ~19 hours | 0.064 ADA | **0.64 bps** |
+| one week | ~0.58 ADA | **5.75 bps** |
+| one year | ~30 ADA | **300 bps** |
+
+Against a 216 bps round-trip floor, a week of staking is a rounding error. **Over a year it is not:
+300 bps exceeds the entire cost of a round trip.** So the correction is invisible in the seven-day
+run and decision-relevant for anything held over months — which is precisely the horizon a
+scheduled-accumulation or LP sleeve would be judged on.
+
+The rate is **assumed, never measured**, in the sense the cost table uses the word: real yield
+depends on protocol parameters and pool performance. Every report states which rate produced its
+numbers, and it is shown beside the headline rather than folded into it — a headline that silently
+depends on an assumption is how a number stops being questioned.
