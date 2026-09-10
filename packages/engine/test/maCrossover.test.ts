@@ -10,8 +10,8 @@ const ctxFor = (closes: number[], cash: bigint, pos: bigint): StrategyContext =>
 describe('maCrossover', () => {
   it('buys half the cash on an up-cross', () => {
     // fast(2)/slow(3): prev closes [3,2,1,2] -> fast 1.5 slow 1.67 (below); now [3,2,1,2,4] -> fast 3 slow 2.33 (above)
-    const out = maCrossover.onCandle(ctxFor([3, 2, 1, 2, 4], 100_000_000n, 0n));
-    expect(out).toEqual([{ side: 'buy', amountIn: 50_000_000n, reason: 'ma up-cross fast=2 slow=3' }]);
+    const out = maCrossover.onCandle(ctxFor([3, 2, 1, 2, 4], 1_000_000_000n, 0n));
+    expect(out).toEqual([{ side: 'buy', amountIn: 500_000_000n, reason: 'ma up-cross fast=2 slow=3' }]);
   });
   it('sells the whole position on a down-cross', () => {
     const out = maCrossover.onCandle(ctxFor([1, 2, 3, 2, 0.5], 0n, 777n));

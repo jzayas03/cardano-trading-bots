@@ -48,7 +48,15 @@ export interface DaySummary {
    * has no round trips by design and is a baseline, not a candidate (see `promotion.ts`). */
   filledBuys: number; filledSells: number;
   rejected: number; rejectReasons: Record<string, number>; staleRejects: number;
-  feesLovelace: bigint; poolFeesIn: bigint;
+  feesLovelace: bigint;
+  /**
+   * The pool's own cut, kept in NATIVE UNITS and never summed. `poolFeeIn` is charged on the order's
+   * INPUT — lovelace on a buy, token subunits on a sell — so one total was two different assets
+   * added together, and it was printed on every report all day. There is no exchange rate that makes
+   * that sum meaningful; converting would need a rate at each fill's own timestamp, which is a
+   * different report.
+   */
+  poolFeesInLovelace: bigint; poolFeesInBase: bigint;
 }
 
 /**
@@ -87,7 +95,8 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
   let rejected = 0;
   let staleRejects = 0;
   let feesLovelace = 0n;
-  let poolFeesIn = 0n;
+  let poolFeesInLovelace = 0n;
+  let poolFeesInBase = 0n;
   const rejectReasons: Record<string, number> = {};
   for (const o of orders) {
     if (o.result.status === 'filled') {
@@ -95,7 +104,8 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
       if (o.intent.side === 'sell') filledSells++;
       else filledBuys++;
       feesLovelace += o.result.batcherFeeLovelace + o.result.networkFeeLovelace;
-      poolFeesIn += o.result.poolFeeIn;
+      if (o.intent.side === 'buy') poolFeesInLovelace += o.result.poolFeeIn;
+      else poolFeesInBase += o.result.poolFeeIn;
     } else {
       rejected++;
       rejectReasons[o.result.reason] = (rejectReasons[o.result.reason] ?? 0) + 1;
@@ -108,7 +118,7 @@ export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DayS
     startExecutable: first ? first.equityExecutableLovelace : null,
     endExecutable: last ? last.equityExecutableLovelace : null,
     returnPct, startBaseTokens, endBaseTokens, returnBasePct,
-    filled, filledBuys, filledSells, rejected, rejectReasons, staleRejects, feesLovelace, poolFeesIn,
+    filled, filledBuys, filledSells, rejected, rejectReasons, staleRejects, feesLovelace, poolFeesInLovelace, poolFeesInBase,
   };
 }
 

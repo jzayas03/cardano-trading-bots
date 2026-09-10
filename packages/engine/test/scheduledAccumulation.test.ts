@@ -25,14 +25,14 @@ const buys = (r: ReturnType<typeof scheduledAccumulation.onCandle>) => r.filter(
 
 describe('scheduledAccumulation', () => {
   it('has the documented defaults and needs one candle of warmup', () => {
-    expect(scheduledAccumulation.defaultParams).toEqual({ periodHours: 24, buyAda: 100 });
+    expect(scheduledAccumulation.defaultParams).toEqual({ periodHours: 24, buyAda: 500 });
     expect(scheduledAccumulation.warmup).toBe(1);
     expect(scheduledAccumulation.warmupFor(scheduledAccumulation.defaultParams)).toBe(1);
   });
 
   it('starts the schedule on the very first candle it sees', () => {
     const r = scheduledAccumulation.onCandle(ctx([at('2026-09-09T13:20:00Z')], CASH));
-    expect(r).toEqual([{ side: 'buy', amountIn: 100_000_000n, reason: 'scheduled accumulation: period 2026-09-09T00:00:00.000Z (24h)' }]);
+    expect(r).toEqual([{ side: 'buy', amountIn: 500_000_000n, reason: 'scheduled accumulation: period 2026-09-09T00:00:00.000Z (24h)' }]);
   });
 
   it('buys once per period, not once per candle', () => {
@@ -47,7 +47,7 @@ describe('scheduledAccumulation', () => {
   it('buys again when the calendar period rolls over', () => {
     const h = [at('2026-09-09T23:55:00Z'), at('2026-09-10T00:05:00Z')];
     expect(scheduledAccumulation.onCandle(ctx(h, CASH))).toEqual([
-      { side: 'buy', amountIn: 100_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
+      { side: 'buy', amountIn: 500_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
     ]);
   });
 
@@ -68,12 +68,12 @@ describe('scheduledAccumulation', () => {
   });
 
   it('honours a non-default period', () => {
-    const p = { periodHours: 6, buyAda: 50 };
+    const p = { periodHours: 6, buyAda: 150 };
     const same = [at('2026-09-09T00:05:00Z'), at('2026-09-09T05:55:00Z')];
     expect(scheduledAccumulation.onCandle(ctx(same, CASH, 0n, p))).toEqual([]);
     const rolled = [at('2026-09-09T05:55:00Z'), at('2026-09-09T06:05:00Z')];
     expect(scheduledAccumulation.onCandle(ctx(rolled, CASH, 0n, p))).toEqual([
-      { side: 'buy', amountIn: 50_000_000n, reason: 'scheduled accumulation: period 2026-09-09T06:00:00.000Z (6h)' },
+      { side: 'buy', amountIn: 150_000_000n, reason: 'scheduled accumulation: period 2026-09-09T06:00:00.000Z (6h)' },
     ]);
   });
 
@@ -85,19 +85,23 @@ describe('scheduledAccumulation', () => {
 
   it('spends what is left when the cash runs short, holding back a flat fee reserve', () => {
     const h = [at('2026-09-10T00:05:00Z')];
-    // 60 ADA left against a 100 ADA installment: spend all but the 5 ADA fee reserve. A PERCENTAGE
-    // headroom would leave 0.60 ADA here against a 2.2 ADA fee — rejected, and rejected again every
+    // 200 ADA left against a 500 ADA installment: spend all but the 5 ADA fee reserve. A PERCENTAGE
+    // headroom would leave 2 ADA here against a 2.2 ADA fee — rejected, and rejected again every
     // period after, because a schedule always ends up in this regime.
-    expect(scheduledAccumulation.onCandle(ctx(h, 60_000_000n))).toEqual([
-      { side: 'buy', amountIn: 55_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
+    expect(scheduledAccumulation.onCandle(ctx(h, 200_000_000n))).toEqual([
+      { side: 'buy', amountIn: 195_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
     ]);
   });
 
   it('ends the schedule rather than emit an order the fixed costs would eat', () => {
     const h = [at('2026-09-10T00:05:00Z')];
-    expect(scheduledAccumulation.onCandle(ctx(h, 9_999_999n))).toEqual([]); // under reserve + 5 ADA floor
+    // The floor is 100 ADA, derived: below it one leg's fixed cost exceeds the whole round-trip
+    // floor. 104.999999 ADA leaves 99.999999 after the reserve — one lovelace short.
+    expect(scheduledAccumulation.onCandle(ctx(h, 104_999_999n))).toEqual([]);
     expect(scheduledAccumulation.onCandle(ctx(h, 5_000_000n))).toEqual([]);
     expect(scheduledAccumulation.onCandle(ctx(h, 0n))).toEqual([]);
+    // And one lovelace over it clears.
+    expect(scheduledAccumulation.onCandle(ctx(h, 105_000_000n))).toHaveLength(1);
   });
 
   it('throws on an unparseable candle timestamp instead of buying on every candle', () => {

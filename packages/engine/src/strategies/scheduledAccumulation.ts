@@ -68,11 +68,24 @@ function previousTickMs(history: readonly Candle[], nowMs: number): number | nul
  * signal-driven strategy has to beat before its signal has been shown to be worth anything.
  *
  * **It is handicapped on fees by construction, and that is the point.** `buy-and-hold` pays the
- * ~2.20 ADA batcher + network cost ONCE; a daily schedule over a week pays it seven times. At the
- * default 100 ADA installment that fixed cost alone is 22 bps of every buy. So this strategy can
- * only beat holding on average ENTRY PRICE, spotting it that handicap — which is the comparison
- * worth having. Raising `buyAda` dilutes the fixed cost and raises price impact; lowering it does
- * the reverse.
+ * ~2.20 ADA batcher + network cost ONCE; a daily schedule over a week pays it seven times. So this
+ * strategy can only beat holding on average ENTRY PRICE, spotting it that handicap — which is the
+ * comparison worth having.
+ *
+ * **Installment size is therefore the parameter that matters most, and the original default was
+ * wrong by 10x in the comment that justified it.** The fixed cost as a fraction of the order is
+ * `2.20 / buyAda`:
+ *
+ *     buyAda    fixed cost, one way
+ *      25 ADA           880 bps
+ *     100 ADA           220 bps   <- the old default; MORE than the whole 216 bps round-trip floor
+ *     500 ADA            44 bps   <- the default now
+ *    1000 ADA            22 bps
+ *
+ * The old comment claimed 22 bps at 100 ADA. That figure was correct for run 139's 990 ADA fill and
+ * was carried across without redividing. At 100 ADA a single installment's fixed cost exceeds the
+ * entire measured round-trip floor, which makes the schedule a donation rather than a benchmark.
+ * Raising `buyAda` dilutes the fixed cost and raises price impact; lowering it does the reverse.
  *
  * **The schedule is a wall clock, not a candle count.** Periods are `floor(tickTs / periodHours)`
  * since the epoch, which for any divisor of 24h lands on UTC boundaries. Deriving the period from
@@ -99,7 +112,7 @@ function previousTickMs(history: readonly Candle[], nowMs: number): number | nul
  */
 export const scheduledAccumulation: Strategy = {
   id: ID,
-  defaultParams: { periodHours: 24, buyAda: 100 },
+  defaultParams: { periodHours: 24, buyAda: 500 },
   warmup: 1,
   warmupFor(params: Record<string, number>): number {
     // Validated here as well as in `onCandle` so a misconfigured run dies at startup rather than on

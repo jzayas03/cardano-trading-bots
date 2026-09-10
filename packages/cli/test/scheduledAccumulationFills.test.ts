@@ -22,14 +22,14 @@ describe('scheduled-accumulation fills at its default params against the real ex
     // 74 hourly candles = periods starting at hours 0, 24, 48 and 72, and one spare candle so the
     // last decision has a t+1 to settle against.
     const r = await runEngine({ feed: feed(74), strategy: scheduledAccumulation, executor: executor(),
-      initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+      initial: { cashLovelace: 5_000_000_000n, positionBase: 0n }, decimals: 0, log });
     expect(r.summary.intents).toBe(4);
     expect(r.summary.filled).toBe(4);
     expect(r.summary.rejected).toBe(0);
     expect(r.summary.warnings).toEqual([]);
-    // 1000 ADA - 4 installments of 100 - 4 x 2.2 ADA of fees. The fee multiplication is the point.
+    // 5000 ADA - 4 installments of 500 - 4 x 2.2 ADA of fees. The fee multiplication is the point.
     expect(r.summary.feesLovelace).toBe('8800000');
-    expect(r.final.cashLovelace).toBe(1_000_000_000n - 400_000_000n - 8_800_000n);
+    expect(r.final.cashLovelace).toBe(5_000_000_000n - 2_000_000_000n - 8_800_000n);
     expect(r.final.positionBase).toBeGreaterThan(0n);
   });
 
@@ -37,9 +37,9 @@ describe('scheduled-accumulation fills at its default params against the real ex
     // The handicap, measured rather than asserted in prose: at a FLAT price the two differ by
     // nothing except how many times they paid the batcher. Four installments, four times the fee.
     const sched = await runEngine({ feed: feed(74), strategy: scheduledAccumulation, executor: executor(),
-      initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+      initial: { cashLovelace: 5_000_000_000n, positionBase: 0n }, decimals: 0, log });
     const hold = await runEngine({ feed: feed(74), strategy: buyAndHold, executor: executor(),
-      initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+      initial: { cashLovelace: 5_000_000_000n, positionBase: 0n }, decimals: 0, log });
     expect(hold.summary.filled).toBe(1);
     expect(BigInt(sched.summary.feesLovelace)).toBe(4n * BigInt(hold.summary.feesLovelace));
   });
@@ -50,8 +50,8 @@ describe('scheduled-accumulation fills at its default params against the real ex
     // order is rejected — which leaves the balance unchanged, so the next period sizes exactly the
     // same too-large order, and every period after that. `rejected: 0` is what pins the fix.
     const r = await runEngine({ feed: feed(121), strategy: scheduledAccumulation, executor: executor(),
-      initial: { cashLovelace: 250_000_000n, positionBase: 0n }, decimals: 0, log });
-    expect(r.summary.filled).toBe(3); // 100, 100, then the 40.6 remainder
+      initial: { cashLovelace: 1_200_000_000n, positionBase: 0n }, decimals: 0, log });
+    expect(r.summary.filled).toBe(3); // 500, 500, then the 190.6 remainder
     expect(r.summary.rejected).toBe(0);
     expect(r.summary.intents).toBe(3); // and NOT one per period for the rest of the feed
     expect(r.summary.warnings).toEqual([]);
@@ -59,8 +59,8 @@ describe('scheduled-accumulation fills at its default params against the real ex
   });
 
   it('a shorter period buys more often on the same feed', async () => {
-    const r = await runEngine({ feed: feed(74), strategy: scheduledAccumulation, params: { periodHours: 6, buyAda: 20 }, executor: executor(),
-      initial: { cashLovelace: 1_000_000_000n, positionBase: 0n }, decimals: 0, log });
+    const r = await runEngine({ feed: feed(74), strategy: scheduledAccumulation, params: { periodHours: 6, buyAda: 150 }, executor: executor(),
+      initial: { cashLovelace: 5_000_000_000n, positionBase: 0n }, decimals: 0, log });
     expect(r.summary.filled).toBe(13); // hours 0,6,12,...,72
     expect(r.summary.rejected).toBe(0);
   });

@@ -1,20 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import type { RunCoverage } from '@ctb/engine';
 import {
-  BASELINE_STRATEGIES, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT, MIN_ROUND_TRIPS,
-  promotionVerdict, type PromotionInput,
+  BASELINE_STRATEGIES, MAX_CAPITAL_DRIFT, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT,
+  MIN_ROUND_TRIPS, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionInput, type RunContext,
 } from '../src/index.js';
 
 const coverage = (over: Partial<RunCoverage> = {}): RunCoverage => ({
   candles: 100, first: null, last: null, expectedBuckets: 100, maxGapMs: 0, gapsOverBound: 0, ...over,
 });
+const WINDOW_FROM = Date.UTC(2026, 8, 9);
+const WINDOW_TO = Date.UTC(2026, 8, 16);
+const ctx = (over: Partial<RunContext> = {}): RunContext => ({
+  baseUnit: 'NIGHTunit', windowFromMs: WINDOW_FROM, windowToMs: WINDOW_TO,
+  startEquityLovelace: 1_000_000_000n, ...over,
+});
 const input = (over: Partial<PromotionInput> = {}): PromotionInput => ({
   strategyId: 'ma-crossover',
+  context: ctx(),
   filledSells: 30, returnBasePct: 5,
   coverage: coverage(),
   baselines: [
-    { strategyId: 'scheduled-accumulation', returnBasePct: 1 },
-    { strategyId: 'buy-and-hold', returnBasePct: 2 },
+    { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: ctx() },
+    { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
   ],
   ...over,
 });
@@ -26,7 +33,7 @@ describe('promotion gate', () => {
     expect(v.blockers).toEqual([]);
     // Every check is reported even when it passes: a gate that only speaks when it fails cannot be
     // audited, and the founder signed off on thresholds they should be able to see applied.
-    expect(v.checks.map((c) => c.id)).toEqual(['round-trips', 'coverage', 'measurable', 'beats-baselines']);
+    expect(v.checks.map((c) => c.id)).toEqual(['round-trips', 'coverage', 'comparable', 'measurable', 'beats-baselines']);
     expect(v.checks.every((c) => c.passed)).toBe(true);
   });
 
@@ -63,6 +70,63 @@ describe('promotion gate', () => {
     // A run predating coverage stats is not a passing run — absence is not evidence of a full window.
     const none = promotionVerdict(input({ coverage: undefined }));
     expect(none.blockers.some((b) => /coverage was not recorded/i.test(b))).toBe(true);
+  });
+
+  it('bars a baseline that traded a DIFFERENT TOKEN, however good the number looks', () => {
+    // The hole this closes: the gate took "the other runs in this comparison" on trust, so a
+    // strategy could clear it against a comparator that never traded the same asset.
+    const v = promotionVerdict(input({
+      baselines: [
+        { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: ctx({ baseUnit: 'SNEKunit' }) },
+        { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
+      ],
+    }));
+    expect(v.status).toBe('experimental');
+    expect(v.blockers.some((b) => /scheduled-accumulation traded a different token/.test(b))).toBe(true);
+  });
+
+  it('bars a baseline measured over a different window', () => {
+    expect(MIN_WINDOW_OVERLAP).toBe(0.95);
+    const shifted = ctx({ windowFromMs: WINDOW_FROM + 86_400_000 * 3, windowToMs: WINDOW_TO + 86_400_000 * 3 });
+    const v = promotionVerdict(input({
+      baselines: [
+        { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: shifted },
+        { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
+      ],
+    }));
+    expect(v.blockers.some((b) => /overlaps only/.test(b))).toBe(true);
+    // A few minutes' difference in start time is normal and must NOT bar.
+    const nudged = ctx({ windowFromMs: WINDOW_FROM + 600_000 });
+    expect(promotionVerdict(input({
+      baselines: [
+        { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: nudged },
+        { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
+      ],
+    })).status).toBe('candidate');
+  });
+
+  it('bars a baseline that started with materially different capital', () => {
+    // Costs are largely FIXED per order, so more capital is a lower cost floor on the same trade.
+    expect(MAX_CAPITAL_DRIFT).toBe(0.01);
+    const rich = ctx({ startEquityLovelace: 2_000_000_000n });
+    const v = promotionVerdict(input({
+      baselines: [
+        { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: rich },
+        { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
+      ],
+    }));
+    expect(v.blockers.some((b) => /different capital/.test(b))).toBe(true);
+  });
+
+  it('bars when conditions were not recorded at all, on either side', () => {
+    expect(promotionVerdict(input({ context: undefined })).blockers.some((b) => /own run conditions were not recorded/.test(b))).toBe(true);
+    const v = promotionVerdict(input({
+      baselines: [
+        { strategyId: 'scheduled-accumulation', returnBasePct: 1 },
+        { strategyId: 'buy-and-hold', returnBasePct: 2, context: ctx() },
+      ],
+    }));
+    expect(v.blockers.some((b) => /scheduled-accumulation's run conditions were not recorded/.test(b))).toBe(true);
   });
 
   it('bars when a required baseline is missing, naming which', () => {

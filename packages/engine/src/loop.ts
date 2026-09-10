@@ -94,6 +94,8 @@ export class Summarizer {
   private maxDd = 0;
   private fees = 0n;
   private poolFees = 0n;
+  private poolFeesLovelace = 0n;
+  private poolFeesBase = 0n;
   private filled = 0;
   private intents = 0;
   private readonly rejectReasons: Record<string, number> = {};
@@ -104,6 +106,9 @@ export class Summarizer {
       this.filled++;
       this.fees += o.result.batcherFeeLovelace + o.result.networkFeeLovelace;
       this.poolFees += o.result.poolFeeIn;
+      // Split by side: the fee is charged on the INPUT, which is lovelace buying and base selling.
+      if (o.intent.side === 'buy') this.poolFeesLovelace += o.result.poolFeeIn;
+      else this.poolFeesBase += o.result.poolFeeIn;
     } else {
       this.rejectReasons[o.result.reason] = (this.rejectReasons[o.result.reason] ?? 0) + 1;
     }
@@ -139,6 +144,7 @@ export class Summarizer {
       startEquityLovelace: start.toString(), endEquityLovelace: end.toString(),
       returnPct: start > 0n ? Number((end - start) * 10_000n / start) / 100 : 0,
       maxDrawdownPct: this.maxDd, feesLovelace: this.fees.toString(), poolFeesIn: this.poolFees.toString(),
+      poolFeesInLovelace: this.poolFeesLovelace.toString(), poolFeesInBase: this.poolFeesBase.toString(),
       rejectReasons: this.rejectReasons, coverage, warnings,
     };
   }

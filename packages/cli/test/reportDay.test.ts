@@ -82,7 +82,10 @@ describe('summarizeDay', () => {
     expect(s.rejectReasons).toEqual({ dust: 1, 'stale t+1 (gap 20m)': 1 });
     expect(s.staleRejects).toBe(1);
     expect(s.feesLovelace).toBe(2_200_000n); // batcher 2_000_000 + network 200_000
-    expect(s.poolFeesIn).toBe(1_500_000n);
+    // Split by side and never summed: the pool's cut is charged on the order's INPUT, so a buy's is
+    // lovelace and a sell's is token subunits. Only the buy filled here.
+    expect(s.poolFeesInLovelace).toBe(1_500_000n);
+    expect(s.poolFeesInBase).toBe(0n);
   });
 
   it('returns null returnPct with fewer than two equity points', () => {
@@ -110,7 +113,8 @@ describe('summarizeDay', () => {
     expect(s.rejectReasons).toEqual({});
     expect(s.staleRejects).toBe(0);
     expect(s.feesLovelace).toBe(0n);
-    expect(s.poolFeesIn).toBe(0n);
+    expect(s.poolFeesInLovelace).toBe(0n);
+    expect(s.poolFeesInBase).toBe(0n);
   });
 });
 

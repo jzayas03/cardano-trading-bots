@@ -58,7 +58,9 @@ export function printReport(
   console.log(coverageLine(s.coverage));
   for (const w of s.warnings ?? []) console.log(`warning: ${w}`);
   console.table([{ candles: s.candles, intents: s.intents, filled: s.filled, rejected: s.rejected, startAda: adaStr(s.startEquityLovelace), endAda: adaStr(s.endEquityLovelace),
-    returnPct: s.returnPct, maxDrawdownPct: s.maxDrawdownPct, lovelaceFeesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn }]);
+    returnPct: s.returnPct, maxDrawdownPct: s.maxDrawdownPct, lovelaceFeesAda: adaStr(s.feesLovelace),
+    poolFeeAda: s.poolFeesInLovelace !== undefined ? adaStr(s.poolFeesInLovelace) : 'not recorded',
+    poolFeeBase: s.poolFeesInBase ?? 'not recorded' }]);
   const assumed = assumedVenuesTouched(orders);
   if (assumed.length) console.log(`warning: fills touched venues with ASSUMED costs: ${assumed.join(', ')} (see runs.params.costs.venues)`);
   if (Object.keys(s.rejectReasons).length) console.table(Object.entries(s.rejectReasons).map(([reason, count]) => ({ reason, count })));
@@ -123,7 +125,7 @@ function printPersistedHeadline(run: RunRow, equity: EquityPoint[], orders: Arra
     returnPct: s.returnPct ?? '-',
     startTokens: s.startBaseTokens ?? '-', endTokens: s.endBaseTokens ?? '-', returnTokenPct: s.returnBasePct ?? '-',
     filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
-    feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
+    feesAda: adaStr(s.feesLovelace), poolFeeAda: adaStr(s.poolFeesInLovelace), poolFeeBase: s.poolFeesInBase.toString(),
   }]);
   const resumes = resumesOf(run);
   console.log(
@@ -173,7 +175,7 @@ export function printDayReport(
     returnPct: s.returnPct ?? '-',
     startTokens: s.startBaseTokens ?? '-', endTokens: s.endBaseTokens ?? '-', returnTokenPct: s.returnBasePct ?? '-',
     filled: s.filled, rejected: s.rejected, staleRejects: s.staleRejects,
-    feesAda: adaStr(s.feesLovelace), poolFeesIn: s.poolFeesIn.toString(),
+    feesAda: adaStr(s.feesLovelace), poolFeeAda: adaStr(s.poolFeesInLovelace), poolFeeBase: s.poolFeesInBase.toString(),
   }]);
   const assumed = assumedVenuesTouched(orders);
   if (assumed.length) console.log(`warning: fills touched venues with ASSUMED costs: ${assumed.join(', ')} (see runs.params.costs.venues)`);
