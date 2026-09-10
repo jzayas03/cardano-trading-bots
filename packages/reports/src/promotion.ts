@@ -26,6 +26,22 @@ export type PromotionStatus = 'experimental' | 'candidate';
  * Consequence, and it is the point: at the current fill rate a seven-day run yields roughly seven
  * round trips, so a week promotes nothing. The lever for a promotable answer is more instruments in
  * parallel, not a longer wait on one.
+ *
+ * **2026-09-09, measured: the conversion above is unsound, and NOT in a way a constant fixes.**
+ * `roundTrips.ts` was built to check it against real fills. Across three distinct corpora (83, 162
+ * and 148 completed round trips) excess kurtosis came out at 8.38, 13.06 and 2.54 — every one
+ * strongly positive, so the returns are decisively not normal, and kurtosis is dimensionless so that
+ * conclusion survives those corpora being priced in USD.
+ *
+ * But the ratio of measured σ to normal-implied σ was 1.02, 1.29 and 0.63: it runs in BOTH
+ * directions and varies by more than 2x. So there is no multiplier to apply — choosing one would be
+ * fitting to whichever corpus was looked at. The parametric route to a sample size is the wrong
+ * tool here, not a mis-tuned one, and the fix is a bootstrap over actual round-trip returns rather
+ * than a new constant.
+ *
+ * 30 therefore STANDS unchanged, on the same pre-registration logic that set it: it was fixed before
+ * the data, and nothing measured since gives a principled reason to move it. Revisit when there are
+ * ADA-denominated round trips to bootstrap against.
  */
 export const MIN_ROUND_TRIPS = 30;
 
