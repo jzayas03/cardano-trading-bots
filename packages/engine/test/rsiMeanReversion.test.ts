@@ -18,8 +18,8 @@ describe('rsiMeanReversion', () => {
     expect(rsi([1, 2, 3, 4, 3], 2)).toBe(50);
   });
   it('buys half the cash when RSI crosses back up through buyBelow while flat', () => {
-    expect(rsiMeanReversion.onCandle(ctxFor([10, 9, 8, 7, 8], 100_000_000n, 0n))).toEqual([
-      { side: 'buy', amountIn: 50_000_000n, reason: 'rsi back above 30 (0.0 -> 50.0) period=2' },
+    expect(rsiMeanReversion.onCandle(ctxFor([10, 9, 8, 7, 8], 1_000_000_000n, 0n))).toEqual([
+      { side: 'buy', amountIn: 500_000_000n, reason: 'rsi back above 30 (0.0 -> 50.0) period=2' },
     ]);
   });
   it('does not buy while still below buyBelow, nor while holding, nor under the 5 ADA floor', () => {

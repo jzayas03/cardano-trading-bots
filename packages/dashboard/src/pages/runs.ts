@@ -158,8 +158,8 @@ ${renderPagerLinks(filter, tickerOf, page, pageSize, runs.length)}
   return layout('Runs', body, { rehearsal });
 }
 
-const PERSISTED_HEADLINE_COLUMNS = ['points', 'startAda', 'endAda', 'startExecAda', 'endExecAda', 'returnPct', 'startTokens', 'endTokens', 'returnTokenPct', 'filled', 'rejected', 'staleRejects', 'feesAda', 'poolFeesIn'];
-const BACKTEST_HEADLINE_COLUMNS = ['candles', 'intents', 'filled', 'rejected', 'startAda', 'endAda', 'returnPct', 'maxDrawdownPct', 'lovelaceFeesAda', 'poolFeesIn'];
+const PERSISTED_HEADLINE_COLUMNS = ['points', 'startAda', 'endAda', 'startExecAda', 'endExecAda', 'returnPct', 'startTokens', 'endTokens', 'returnTokenPct', 'filled', 'rejected', 'staleRejects', 'feesAda', 'poolFeeAda', 'poolFeeBase'];
+const BACKTEST_HEADLINE_COLUMNS = ['candles', 'intents', 'filled', 'rejected', 'startAda', 'endAda', 'returnPct', 'maxDrawdownPct', 'lovelaceFeesAda', 'poolFeeAda', 'poolFeeBase'];
 const ORDERS_COLUMNS = ['seq', 'intent', 'side', 'amountIn', 'status', 'fill', 'amountOut', 'slippageBps', 'priceImpactBps', 'reason'];
 const ORDERS_MAX_ROWS = 200;
 
@@ -240,7 +240,7 @@ function renderPersistedHeadline(equity: EquityPoint[], orders: Array<OrderRecor
     s.returnPct ?? '-',
     s.startBaseTokens ?? '-', s.endBaseTokens ?? '-', s.returnBasePct ?? '-',
     s.filled, s.rejected, s.staleRejects,
-    adaStr(s.feesLovelace), s.poolFeesIn.toString(),
+    adaStr(s.feesLovelace), adaStr(s.poolFeesInLovelace), s.poolFeesInBase.toString(),
   ];
   return {
     html: `<section><h2>summary (from persisted rows) &mdash; run_equity + paper_orders, every segment</h2>${table(PERSISTED_HEADLINE_COLUMNS, [row])}</section>`,
@@ -253,7 +253,9 @@ function renderPersistedHeadline(equity: EquityPoint[], orders: Array<OrderRecor
  * heading depending on which page/section is asking. */
 function summaryStatsRow(s: RunSummaryStats): Array<string | number> {
   return [s.candles, s.intents, s.filled, s.rejected, adaStr(s.startEquityLovelace), adaStr(s.endEquityLovelace),
-    s.returnPct, s.maxDrawdownPct, adaStr(s.feesLovelace), s.poolFeesIn];
+    s.returnPct, s.maxDrawdownPct, adaStr(s.feesLovelace),
+    s.poolFeesInLovelace !== undefined ? adaStr(s.poolFeesInLovelace) : 'not recorded',
+    s.poolFeesInBase ?? 'not recorded'];
 }
 
 /** The backtest headline: `runs.summary`, columns matching `printReport`'s `console.table`. */

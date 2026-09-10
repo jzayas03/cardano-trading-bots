@@ -10,8 +10,19 @@ export function requireParam(strategyId: string, params: Record<string, number>,
   return v;
 }
 
-/** Smallest buy any strategy emits: below this, batcher + network fees eat the order. */
-export const MIN_BUY_LOVELACE = 5_000_000n;
+/**
+ * Smallest buy any strategy emits.
+ *
+ * **Was 5 ADA, which was indefensible and nobody had done the division.** The fixed cost of an order
+ * is ~2.20 ADA (batcher + network), so on a 5 ADA buy the fixed cost alone is **44% of the order** —
+ * the fees do not "eat" it, they take nearly half.
+ *
+ * 100 ADA is derived, not chosen: `2.20 / 0.0216 ~= 102 ADA` is the size at which the fixed cost
+ * equals the entire measured 216 bps ROUND-TRIP floor. Below roughly this, one leg's fixed cost
+ * exceeds what a full round trip is supposed to cost, and the order cannot be justified at any
+ * signal quality. Raise the measured floor or the fee and this number moves with them.
+ */
+export const MIN_BUY_LOVELACE = 100_000_000n;
 
 /** `fraction` of the cash balance, in lovelace, with the fraction carried to four places. */
 export function cashFraction(cashLovelace: bigint, fraction: number): bigint {

@@ -58,15 +58,38 @@ export const MAX_GAPS_OVER_BOUND_PCT = 5;
  */
 export const BASELINE_STRATEGIES = ['scheduled-accumulation', 'buy-and-hold'] as const;
 
+/**
+ * What makes two runs COMPARABLE. Without these the gate was taking "the other runs in this
+ * comparison" as baselines on trust — so a strategy could clear it against a comparator that traded
+ * a different token, over a different window, with different capital. A gate whose entire job is to
+ * refuse must not accept a comparison it cannot justify.
+ */
+export interface RunContext {
+  baseUnit: string;
+  windowFromMs: number;
+  windowToMs: number;
+  startEquityLovelace: bigint;
+}
+
+/** Windows must overlap by at least this fraction of their union. Runs start minutes apart in
+ * practice; they must not be measuring different weeks. */
+export const MIN_WINDOW_OVERLAP = 0.95;
+
+/** Starting capital may differ by at most this fraction. Costs are largely FIXED per order, so a
+ * comparator with materially more capital faces a materially lower cost floor on the same trade. */
+export const MAX_CAPITAL_DRIFT = 0.01;
+
 export interface PromotionInput {
   strategyId: string;
+  /** Undefined bars: a comparison whose conditions cannot be read is not a comparison. */
+  context?: RunContext;
   /** Completed round trips: a round trip closes when the position is sold. */
   filledSells: number;
   /** Token-denominated return — the mandate's denominator, not ADA. Null when unmeasurable. */
   returnBasePct: number | null;
   coverage: RunCoverage | undefined;
   /** The other runs over the same window, whatever they are; the required ones are selected here. */
-  baselines: ReadonlyArray<{ strategyId: string; returnBasePct: number | null }>;
+  baselines: ReadonlyArray<{ strategyId: string; returnBasePct: number | null; context?: RunContext }>;
   /**
    * Which baselines this strategy must beat. Defaults to `BASELINE_STRATEGIES`, the taking sleeve's
    * pair, and is a PARAMETER rather than a global because sleeves do not share a reference: an LP
@@ -77,7 +100,7 @@ export interface PromotionInput {
 }
 
 export interface PromotionCheck {
-  id: 'round-trips' | 'coverage' | 'measurable' | 'beats-baselines';
+  id: 'round-trips' | 'coverage' | 'comparable' | 'measurable' | 'beats-baselines';
   passed: boolean;
   detail: string;
 }
@@ -127,6 +150,32 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
     });
   }
 
+  // --- comparable --------------------------------------------------------
+  // Runs before returns: a return that beats an incomparable baseline is not evidence of anything,
+  // and reporting it as a pass is worse than reporting nothing.
+  const incomparable: string[] = [];
+  if (input.context === undefined) {
+    incomparable.push(`${input.strategyId}'s own run conditions were not recorded`);
+  } else {
+    for (const id of required) {
+      const b = input.baselines.find((x) => x.strategyId === id);
+      if (b === undefined) continue; // absence is the `measurable` check's business, not this one
+      if (b.context === undefined) { incomparable.push(`${id}'s run conditions were not recorded`); continue; }
+      if (b.context.baseUnit !== input.context.baseUnit) { incomparable.push(`${id} traded a different token`); continue; }
+      const overlap = windowOverlap(input.context, b.context);
+      if (overlap < MIN_WINDOW_OVERLAP) { incomparable.push(`${id}'s window overlaps only ${(overlap * 100).toFixed(0)}%`); continue; }
+      const drift = capitalDrift(input.context, b.context);
+      if (drift > MAX_CAPITAL_DRIFT) incomparable.push(`${id} started with ${(drift * 100).toFixed(1)}% different capital`);
+    }
+  }
+  checks.push({
+    id: 'comparable',
+    passed: incomparable.length === 0,
+    detail: incomparable.length === 0
+      ? 'baselines match on token, window and starting capital'
+      : `not comparable: ${incomparable.join('; ')}`,
+  });
+
   // --- measurable --------------------------------------------------------
   const missing: string[] = [];
   if (input.returnBasePct === null) missing.push(`${input.strategyId}'s own token return`);
@@ -152,12 +201,12 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
       }
     }
   }
-  const canCompare = missing.length === 0;
+  const canCompare = missing.length === 0 && incomparable.length === 0;
   checks.push({
     id: 'beats-baselines',
     passed: canCompare && lost.length === 0,
     detail: !canCompare
-      ? 'not compared: a baseline is missing or unmeasurable'
+      ? 'not compared: a baseline is missing, unmeasurable, or not comparable'
       : lost.length === 0
         ? `beats both baselines in tokens (${input.returnBasePct!.toFixed(2)}%)`
         : `does not beat ${lost.join(' or ')} in tokens (${input.returnBasePct!.toFixed(2)}%)`,
@@ -165,4 +214,23 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
 
   const blockers = checks.filter((c) => !c.passed).map((c) => c.detail);
   return { status: blockers.length === 0 ? 'candidate' : 'experimental', checks, blockers };
+}
+
+/** Intersection over union of two windows, 0 when they do not overlap at all. */
+function windowOverlap(a: RunContext, b: RunContext): number {
+  const start = Math.max(a.windowFromMs, b.windowFromMs);
+  const end = Math.min(a.windowToMs, b.windowToMs);
+  const union = Math.max(a.windowToMs, b.windowToMs) - Math.min(a.windowFromMs, b.windowFromMs);
+  if (union <= 0) return 0;
+  return Math.max(0, end - start) / union;
+}
+
+/** |a - b| / max(a, b), so it is symmetric and cannot divide by a zero balance. */
+function capitalDrift(a: RunContext, b: RunContext): number {
+  const x = a.startEquityLovelace;
+  const y = b.startEquityLovelace;
+  const bigger = x > y ? x : y;
+  if (bigger <= 0n) return 0;
+  const diff = x > y ? x - y : y - x;
+  return Number((diff * 1_000_000n) / bigger) / 1e6;
 }

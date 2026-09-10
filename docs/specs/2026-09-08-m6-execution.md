@@ -31,6 +31,20 @@ These are gates, not preferences.
    | **one way** | **108 bps** |
    | **round trip** | **216 bps = 2.16%** |
 
+   **Read that table carefully; a later summary of it did not.** The 86 bps is `slippageBps`, fill
+   against the decision-time mid, and it ALREADY CONTAINS the pool fee. The 34 bps is
+   `priceImpactBps`, fill against the t+1 pool's own mid — which also contains the pool fee, so "of
+   which" is loose and the two lines must never be ADDED. A 2026-09-09 summary decomposed the 86 as
+   "pool fee 30 + impact 34 + spread 22" and so charged the pool fee twice while inventing a spread
+   term. What the 86 actually is: the pool fee, plus our own curve impact, plus whatever the price
+   did between the decision and the simulated execution — **on one observation**.
+
+   That last part is the more important caution. **This is one fill's adverse move, not a permanent
+   floor.** Run 139 was a paper fill against observed reserves, so it establishes neither real
+   batching latency nor realised execution cost. The floor should become a measured DISTRIBUTION per
+   route and order size, taken from contemporaneous quotes, before any figure here is treated as
+   fixed.
+
    Every buy/sell cycle must beat 2.16% before a cent is kept — and that is the OPTIMISTIC figure.
 2. **The 7-day run is from the VPS**, not the laptop, whose 16-of-64 boundaries make it a soak test
    rather than evidence.

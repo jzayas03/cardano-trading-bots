@@ -10,15 +10,15 @@ const ctxFor = (cash: bigint, pos: bigint, params: Record<string, number> = buyA
 describe('buyAndHold', () => {
   it('buys 99% of the cash balance on the first candle it sees while flat, leaving room for the lovelace fees it cannot see', () => {
     expect(buyAndHold.defaultParams).toEqual({ fraction: 0.99 });
-    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n))).toEqual([{ side: 'buy', amountIn: 99_000_000n, reason: 'buy-and-hold entry' }]);
-    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n, { fraction: 0.25 }))).toEqual([{ side: 'buy', amountIn: 25_000_000n, reason: 'buy-and-hold entry' }]);
+    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n))).toEqual([{ side: 'buy', amountIn: 990_000_000n, reason: 'buy-and-hold entry' }]);
+    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n, { fraction: 0.25 }))).toEqual([{ side: 'buy', amountIn: 250_000_000n, reason: 'buy-and-hold entry' }]);
   });
   it('never sells and never re-buys while holding', () => {
-    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 1n))).toEqual([]);
+    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 1n))).toEqual([]);
   });
   it('tries again while still flat (a rejected first buy is retried next candle) and respects the 5 ADA floor', () => {
-    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n))).toHaveLength(1);
-    expect(buyAndHold.onCandle(ctxFor(5_000_000n, 0n))).toEqual([]); // 99% of 5 ADA < 5 ADA
+    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n))).toHaveLength(1);
+    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n))).toEqual([]); // 99% of 100 ADA < the 100 ADA floor
   });
   it('needs one candle of warmup and fails closed on a missing fraction', () => {
     expect(buyAndHold.warmup).toBe(1);

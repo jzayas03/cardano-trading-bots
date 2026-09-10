@@ -75,7 +75,18 @@ export interface RunCoverage {
 export interface RunSummaryStats {
   candles: number; intents: number; filled: number; rejected: number;
   startEquityLovelace: string; endEquityLovelace: string; returnPct: number; maxDrawdownPct: number;
-  feesLovelace: string; poolFeesIn: string; rejectReasons: Record<string, number>;
+  feesLovelace: string;
+  /**
+   * DEPRECATED and mixed-unit: `poolFeeIn` is taken from the order's INPUT, which is lovelace on a
+   * buy and token subunits on a sell, so this summed two different assets into one number that was
+   * printed on every report. Retained only because runs persisted before 2026-09-09 carry it.
+   * Read `poolFeesInLovelace` / `poolFeesInBase` instead; they are absent on those older runs, and
+   * absent must read as "not recorded", never as zero.
+   */
+  poolFeesIn: string;
+  poolFeesInLovelace?: string;
+  poolFeesInBase?: string;
+  rejectReasons: Record<string, number>;
   coverage: RunCoverage;
   /** Non-fatal things the operator must see before reading the numbers, e.g. a run that never traded. */
   warnings: string[];

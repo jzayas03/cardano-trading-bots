@@ -79,3 +79,25 @@ describe('base-token-denominated return', () => {
     expect(zeroStart.returnBasePct).toBeNull();
   });
 });
+
+describe('pool fees are kept in native units', () => {
+  const order = (side: 'buy' | 'sell', poolFeeIn: bigint) => ({
+    seq: 1, tsIntent: new Date(0), intent: { side, amountIn: 1n, reason: 'x' },
+    result: {
+      status: 'filled' as const, poolId: 'p', unitIn: side === 'buy' ? 'lovelace' : 'tok', amountIn: 1n,
+      unitOut: side === 'buy' ? 'tok' : 'lovelace', amountOut: 1n, midPrice: '1', fillPrice: '1',
+      poolFeeIn, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0,
+      poolAfter: null, tsFill: new Date(0),
+    },
+  });
+
+  it('never adds a buy\'s lovelace fee to a sell\'s token fee', () => {
+    // The defect: `poolFeeIn` is charged on the order INPUT, so one running total summed lovelace
+    // and token subunits into a number printed on every report. There is no rate that makes that
+    // sum mean anything, and the two are now reported separately and never combined.
+    const s = summarizeRun([], [order('buy', 1_500_000n), { ...order('sell', 42n), seq: 2 }]);
+    expect(s.poolFeesInLovelace).toBe(1_500_000n);
+    expect(s.poolFeesInBase).toBe(42n);
+    expect(s).not.toHaveProperty('poolFeesIn');
+  });
+});

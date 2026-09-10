@@ -1,6 +1,6 @@
 import type { EquityPoint, OrderRecord, RunRow, RunSummaryStats } from '@ctb/engine';
 import { adaStr } from './format.js';
-import { promotionVerdict, type PromotionStatus } from './promotion.js';
+import { promotionVerdict, type PromotionStatus, type RunContext } from './promotion.js';
 import { summarizeRun } from './summary.js';
 import { heartbeatAgeCell } from './heartbeat.js';
 
@@ -75,17 +75,28 @@ export function compareRunRows(inputs: CompareRunInput[], now: Date): CompareRun
   // baselines, and recomputing them per row would be both quadratic and a chance for two rows to
   // disagree about the same run's number.
   const summaries = new Map<number, ReturnType<typeof summarizeRun>>();
-  for (const { run, equity, orders } of inputs) summaries.set(run.id, summarizeRun(equity, orders));
+  const contexts = new Map<number, RunContext | undefined>();
+  for (const { run, equity, orders } of inputs) {
+    summaries.set(run.id, summarizeRun(equity, orders));
+    const first = equity[0];
+    const last = equity.length > 0 ? equity[equity.length - 1] : undefined;
+    // Undefined when a run has no equity points (a backtest): the gate then bars it as not
+    // comparable, which is correct — there is nothing to compare its conditions against.
+    contexts.set(run.id, first && last
+      ? { baseUnit: run.baseUnit, windowFromMs: first.tickTs.getTime(), windowToMs: last.tickTs.getTime(), startEquityLovelace: first.equityLovelace }
+      : undefined);
+  }
 
   return inputs.map(({ run, ticker, equity, orders }) => {
     const verdict = promotionVerdict({
       strategyId: run.strategyId,
+      context: contexts.get(run.id),
       filledSells: summaries.get(run.id)!.filledSells,
       returnBasePct: summaries.get(run.id)!.returnBasePct,
       coverage: run.summary?.coverage,
       baselines: inputs
         .filter((o) => o.run.id !== run.id)
-        .map((o) => ({ strategyId: o.run.strategyId, returnBasePct: summaries.get(o.run.id)!.returnBasePct })),
+        .map((o) => ({ strategyId: o.run.strategyId, returnBasePct: summaries.get(o.run.id)!.returnBasePct, context: contexts.get(o.run.id) })),
     });
     const resumes = Array.isArray(run.params.resumes) ? run.params.resumes.length : 0;
     const common = {
