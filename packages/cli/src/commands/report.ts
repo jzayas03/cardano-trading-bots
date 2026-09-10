@@ -1,6 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
-import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
+import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, roundTrips, roundTripStats, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -50,6 +50,9 @@ export function printReport(
     printPaperStatusLines(run);
     printPersistedHeadline(run, persistedEquity, orders);
   }
+  // Outside the paper branch on purpose: a backtest persists orders but no equity, and its fills are
+  // the only corpus with enough completed round trips to say anything about their DISTRIBUTION.
+  for (const line of renderRoundTrips(orders)) console.log(line);
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
   console.log(coverageLine(s.coverage));
@@ -78,6 +81,36 @@ export function printReport(
  * summary is kept below it, explicitly labelled as the last segment only, next to the resume count
  * that says how many segments it is missing.
  */
+/**
+ * The run as a DISTRIBUTION of completed trades rather than one aggregate. Six small losses and one
+ * lucky win produce the same run-level return as seven mediocre trades, and only one of those is a
+ * strategy. It also checks the promotion gate's own arithmetic: n = 30 came from converting a median
+ * move into a σ under an assumption of normality, and both halves of that are printed here.
+ */
+export function renderRoundTrips(orders: readonly OrderRecord[]): string[] {
+  const trips = roundTrips(orders);
+  const s = roundTripStats(orders, trips);
+  const n = (v: number | null, d = 1): string => (v === null ? '--' : v.toFixed(d));
+  if (s.trips === 0) {
+    return ['', `round trips   NONE — ${s.openLots} open lot(s), ${s.unmatchedSells} unmatched sell(s); nothing completed a buy-to-sell cycle`];
+  }
+  const out = ['', 'round trips (FIFO pairing of filled orders)'];
+  out.push(`  ${s.trips} trips | ${s.unmatchedSells} unmatched sells | ${s.openLots} lot(s) still open`);
+  out.push(`  return   median ${n(s.medianReturnBps)} bps, mean ${n(s.meanReturnBps)} bps, stdev ${n(s.stdevBps)} bps`);
+  out.push(`  shape    median|return| ${n(s.medianAbsReturnBps)} bps -> implies sigma ${n(s.normalImpliedStdevBps)} bps IF normal`);
+  out.push(`           excess kurtosis ${n(s.excessKurtosis, 2)}   (0 = normal, positive = fat tails)`);
+  if (s.stdevBps !== null && s.normalImpliedStdevBps !== null) {
+    const ratio = s.stdevBps / s.normalImpliedStdevBps;
+    out.push(`           measured stdev is ${ratio.toFixed(2)}x the normal-implied one` +
+      (ratio > 1.25 || ratio < 0.8 ? '  — THE NORMAL CONVERSION DOES NOT HOLD HERE' : ''));
+  }
+  // The scale carries the run's own price denomination; the shape does not. Said every time, because
+  // the corpora with enough trips today are external-candle backtests priced in USD.
+  out.push('  NOTE     bps figures inherit this run\'s price denomination (external-source runs are USD).');
+  out.push('           Excess kurtosis is dimensionless and survives that; sigma does not.');
+  return out;
+}
+
 function printPersistedHeadline(run: RunRow, equity: EquityPoint[], orders: Array<OrderRecord & { baseUnit: string }>): void {
   const s = summarizeRun(equity, orders);
   console.log('summary (from persisted rows) — run_equity + paper_orders, every segment:');

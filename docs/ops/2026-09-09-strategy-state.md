@@ -220,3 +220,35 @@ run 137 ma-crossover:       0 of 30 round trips
 run 138 rsi-mean-reversion: 0 of 30 round trips
 run 139 buy-and-hold:       buy-and-hold is a baseline, not a promotion candidate
 ```
+
+## The n=30 threshold, checked against real fills
+
+`npm run report -- <id>` now pairs filled buys to the sells that close them (FIFO) and reports the
+run as a **distribution** of completed trades. Six small losses and one lucky win produce the same
+run-level return as seven mediocre trades, and only one of those is a strategy.
+
+It was built to check the promotion gate's own arithmetic. n=30 came from converting a median price
+move into a σ via `median|X| ≈ 0.6745σ` — a conversion that holds **only** for a normal distribution,
+which a reviewer flagged as unlikely for illiquid DEX pairs. Measured across three distinct corpora:
+
+| corpus | round trips | excess kurtosis | measured σ ÷ normal-implied σ |
+|---|---|---|---|
+| run 3 | 83 | 8.38 | 1.02 |
+| run 18 / 75 (NIGHT) | 162 | **13.06** | 1.29 |
+| run 51 / 105 (USDA) | 148 | 2.54 | **0.63** |
+
+**Fat tails are confirmed.** Every excess kurtosis is strongly positive against 0 for a normal, and
+kurtosis is dimensionless — so that conclusion survives these corpora being external-candle
+backtests priced in USD, where no σ figure could be quoted.
+
+**But there is no correction factor.** The σ ratio runs 0.63 → 1.29: both directions, more than 2×
+apart. Applying any single multiplier would be fitting to whichever corpus was looked at. The
+parametric route to a sample size is the wrong tool, not a mis-tuned one.
+
+**So 30 stands, unchanged**, on the same logic that set it: fixed before the data, and nothing
+measured since gives a principled reason to move it. What replaces the conversion is a bootstrap
+over actual round-trip returns — now buildable, and blocked only on having ADA-denominated round
+trips to run it against, which is what the seven-day run will produce.
+
+Incidental, and consistent with everything else here: median per-round-trip return was **−260 to
+−342 bps** across all three corpora. These strategies did not lose narrowly.
