@@ -1,6 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
-import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, roundTrips, roundTripStats, summarizeDay, summarizeRun, type DaySummary } from '@ctb/reports';
+import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, roundTrips, roundTripStats, stakingCredit, summarizeDay, summarizeRun, withStakingCredit, ASSUMED_STAKING_APR_PCT, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -53,6 +53,7 @@ export function printReport(
   // Outside the paper branch on purpose: a backtest persists orders but no equity, and its fills are
   // the only corpus with enough completed round trips to say anything about their DISTRIBUTION.
   for (const line of renderRoundTrips(orders)) console.log(line);
+  for (const line of renderStaking(persistedEquity)) console.log(line);
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
   console.log(coverageLine(s.coverage));
@@ -89,6 +90,27 @@ export function printReport(
  * strategy. It also checks the promotion gate's own arithmetic: n = 30 came from converting a median
  * move into a σ under an assumption of normality, and both halves of that are printed here.
  */
+/**
+ * What the run's idle ADA would have earned delegated. Always SHOWN and never folded into the
+ * headline: the rate is assumed, and a headline that silently depends on an assumption is how a
+ * number stops being questioned. It is printed because the opportunity cost of holding ADA is not
+ * zero, and every baseline that ignores it understates the alternative.
+ */
+export function renderStaking(equity: readonly EquityPoint[], aprPct = ASSUMED_STAKING_APR_PCT): string[] {
+  if (equity.length < 2) return [];
+  const credit = stakingCredit(equity, aprPct);
+  const before = summarizeRun(equity, []);
+  const after = summarizeRun(withStakingCredit(equity, aprPct), []);
+  if (before.returnPct === null || after.returnPct === null) return [];
+  return [
+    '',
+    `idle ADA at ${aprPct}% APR (ASSUMED, not measured — replace with a real figure)`,
+    `  credit ${adaStr(credit)} ADA over this window`,
+    `  return ${before.returnPct.toFixed(2)}% -> ${after.returnPct.toFixed(2)}% once idle cash is credited`,
+    '  Every baseline that ignores this understates the alternative: holding ADA is not a zero yield.',
+  ];
+}
+
 export function renderRoundTrips(orders: readonly OrderRecord[]): string[] {
   const trips = roundTrips(orders);
   const s = roundTripStats(orders, trips);

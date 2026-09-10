@@ -66,7 +66,7 @@ export interface DaySummary {
  * there is no return to report over zero or one point. `staleRejects` is the `stale t+1` sub-count
  * called out separately in the reject-reasons table (spec: a stale pair does not trade).
  */
-export function summarizeDay(equity: EquityPoint[], orders: OrderRecord[]): DaySummary {
+export function summarizeDay(equity: readonly EquityPoint[], orders: readonly OrderRecord[]): DaySummary {
   const first = equity[0] ?? null;
   const last = equity.length > 0 ? equity[equity.length - 1]! : null;
   const startEquity = first ? first.equityLovelace : null;
