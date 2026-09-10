@@ -134,6 +134,51 @@ the laptop, which is the M5 candidate in `docs/specs/2026-09-07-m4-dashboard.md`
 
 ## At the end
 
+### The cutover, in order
+
+Every step is gated by `npm run cutover`, which performs nothing and refuses when the state is not
+what the next step needs. **Any FAIL stops the sequence.** Every fact it cannot read comes back as a
+FAIL, not a pass — a check that could not run is not a verdict, and here the cost of stopping to look
+is minutes while the cost of proceeding on an unknown is the week's data.
+
+`SHA` below is the commit being deployed. Pass it explicitly: without `--expect-sha` the check
+refuses, because comparing the checkout with itself would read OK while proving nothing.
+
+```bash
+npm run cutover -- --phase before-stop --expect-sha SHA --runs 146,147,148
+```
+
+Then, and only if that is all OK:
+
+1. **Stop the paper runs and the collector.**
+   `systemctl stop ctb-paper@ma-crossover ctb-paper@rsi-mean-reversion ctb-paper@buy-and-hold ctb-collector`
+
+2. **Prove the stop was clean.**
+   `npm run cutover -- --phase after-stop --runs 146,147,148`
+   The load-bearing check is **no running rows**. `paper-start.sh` RESUMES a row marked `running`, so
+   one row left in that state turns the next start into a silent continuation of the old run — and
+   the ids look right either way, which is what makes it dangerous rather than merely wrong.
+
+3. **Rotate the Postgres password** — `infra/vps/rotate-postgres-password.sh`. Here, and not earlier:
+   nothing is connected, so a half-applied rotation cannot break a live writer.
+
+4. **Deploy.** Fetch, check out `SHA`, `npm ci`, `npm run migrate`.
+
+5. **Turn multi-venue sampling on** (#98) in `~ctb/cardano-trading-bots/.env`:
+   `COLLECT_MULTI_VENUE_EVERY_N_TICKS=4` and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA=50000`.
+
+6. **Start the collector**, wait one tick interval, then:
+   `npm run cutover -- --phase after-deploy --expect-sha SHA`
+   This checks the collector has **ticked**, not merely that the unit is `active` — this project has
+   a documented history of green deploy jobs that deployed nothing.
+
+7. **Start `scheduled-accumulation` first.** It is a prerequisite, not a nicety: the promotion gate
+   requires both baselines over an identical window, so with no baseline run nothing can clear the
+   gate at all. Then the other strategies.
+
+Only then, the report below.
+
+
 Write `docs/ops/<date>-m3-report.md` containing:
 
 - each precondition with the output that proved it;

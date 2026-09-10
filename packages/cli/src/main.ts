@@ -8,6 +8,7 @@ import { collectCommand } from './commands/collect.js';
 import { dashboardCommand } from './commands/dashboard.js';
 import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { leadlagCommand } from './commands/leadlag.js';
+import { cutoverCommand } from './commands/cutover.js';
 import { lpCommand } from './commands/lp.js';
 import { opportunityCommand } from './commands/opportunity.js';
 import { migrateCommand } from './commands/migrate.js';
@@ -54,6 +55,8 @@ async function main(): Promise<void> {
       return opportunityCommand(log, rest);
     case 'lp':
       return lpCommand(log, rest);
+    case 'cutover':
+      return cutoverCommand(log, rest);
     case 'watch':
       return watchCommand(log, rest);
     case 'backup':
@@ -70,6 +73,7 @@ async function main(): Promise<void> {
         'dashboard [--port 3210] | watch [--verbose] | leadlag [--max-lag 6] [--since ISO] |\n' +
         ' opportunity [TICKER|ALL] [--since ISO] [--floor-bps 216] [--windows 1800,7200,86400]>',
         ' lp <TICKER> [--since ISO] [--pool ID]  — LP value by entry tick, vs holding the token>',
+        ' cutover --phase before-stop|after-stop|after-deploy [--runs 146,147,148] [--expect-sha X]>',
       );
       process.exitCode = 2;
   }
