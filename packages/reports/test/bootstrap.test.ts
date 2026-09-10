@@ -104,3 +104,63 @@ describe('BCa bootstrap', () => {
     expect(r.upper).toBeGreaterThanOrEqual(r.estimate);
   });
 });
+
+/** Long runs of one value then another: strong positive serial correlation, deterministically. */
+const correlated = Array.from({ length: 60 }, (_, i) => (Math.floor(i / 10) % 2 === 0 ? 40 : -40) + (i % 3));
+/**
+ * The same VALUES in a deterministically shuffled order: identical marginal distribution, dependence
+ * removed. Any difference between these two series is the ORDERING and nothing else, which is what
+ * makes it a clean control. (A fixed-stride permutation was tried first and left r1 at 0.42 — a
+ * stride does not break periodic structure, it re-phases it.)
+ */
+const shuffled = ((): number[] => {
+  const xs = [...correlated];
+  let seed = 20260909;
+  for (let i = xs.length - 1; i > 0; i--) {
+    seed = (seed * 1103515245 + 12345) % 2147483648;
+    const j = seed % (i + 1);
+    [xs[i], xs[j]] = [xs[j]!, xs[i]!];
+  }
+  return xs;
+})();
+
+describe('block bootstrap', () => {
+  it('reports the lag-1 autocorrelation, so the reader can see whether blocking mattered', () => {
+    expect(bcaInterval(correlated, mean, { seed: 1 })!.lag1Autocorrelation).toBeGreaterThan(0.5);
+    expect(Math.abs(bcaInterval(shuffled, mean, { seed: 1 })!.lag1Autocorrelation)).toBeLessThan(0.35);
+  });
+
+  it('defaults the block length to the n^(1/3) rule and reports what it used', () => {
+    expect(bcaInterval(correlated, mean, { seed: 1 })!.blockLength).toBe(Math.ceil(60 ** (1 / 3)));
+    expect(bcaInterval(correlated, mean, { seed: 1, blockLength: 7 })!.blockLength).toBe(7);
+  });
+
+  it('WIDENS the interval on serially correlated returns — the whole reason it exists', () => {
+    // Resampling one observation at a time destroys the ordering, so runs of correlated trades look
+    // like many independent ones and the interval comes out too narrow. Blocks preserve the runs.
+    const iid = bcaInterval(correlated, mean, { seed: 4, blockLength: 1 })!;
+    const blocked = bcaInterval(correlated, mean, { seed: 4 })!;
+    expect(blocked.upper - blocked.lower).toBeGreaterThan(iid.upper - iid.lower);
+  });
+
+  it('is a NEAR NO-OP when the same values carry no ordering — which is what says it is not broken', () => {
+    // Identical marginal distribution, dependence removed. If blocking changed the answer here it
+    // would be inventing width rather than preserving structure.
+    const iid = bcaInterval(shuffled, mean, { seed: 4, blockLength: 1 })!;
+    const blocked = bcaInterval(shuffled, mean, { seed: 4 })!;
+    const ratio = (blocked.upper - blocked.lower) / (iid.upper - iid.lower);
+    expect(ratio).toBeGreaterThan(0.8);
+    expect(ratio).toBeLessThan(1.25);
+  });
+
+  it('clamps a block longer than the sample, and treats 1 as plain iid resampling', () => {
+    expect(bcaInterval(shuffled, mean, { seed: 1, blockLength: 999 })!.blockLength).toBe(shuffled.length);
+    expect(bcaInterval(shuffled, mean, { seed: 1, blockLength: 0 })!.blockLength).toBe(1);
+  });
+
+  it('stays deterministic per seed with blocks in play', () => {
+    const a = bcaInterval(correlated, mean, { seed: 9 })!;
+    const b = bcaInterval(correlated, mean, { seed: 9 })!;
+    expect([a.lower, a.upper]).toEqual([b.lower, b.upper]);
+  });
+});
