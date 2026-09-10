@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { BLOCKFROST_FREE_DAILY_QUOTA } from '../src/digest.js';
 import {
   checkDigestLines,
   checkQuotaSpend, checkRecurringTickErrors, checkTickProductivity, verdict,
@@ -142,10 +143,17 @@ describe('checkQuotaSpend', () => {
   it('measures what is SPENT, which is what a rate projection cannot answer', () => {
     // The precise divergence: once the quota is gone every tick spends 0 and the PACE projection
     // improves. Actual spend only ever rises.
+    // FAIL is still the CEILING: at or over our own brake, the next discovery sweep is refused.
     expect(checkQuotaSpend(45_000, 45_000).status).toBe('fail');
     expect(checkQuotaSpend(44_999, 45_000).status).toBe('warn');
-    expect(checkQuotaSpend(Math.ceil(45_000 * QUOTA_SPEND_WARN_AT), 45_000).status).toBe('warn');
-    expect(checkQuotaSpend(Math.floor(45_000 * QUOTA_SPEND_WARN_AT) - 1, 45_000).status).toBe('ok');
+    // WARN is now the vendor's TIER, not the ceiling. 2026-09-09: warning at 80% of a self-imposed
+    // 45,000 brake fired on a NORMAL ~39,240-call day (87% of the ceiling, but only 78% of the
+    // 50,000 tier), so it warned daily — and a check that fires every day is one nobody reads.
+    expect(checkQuotaSpend(39_240, 45_000).status).toBe('ok');
+    expect(checkQuotaSpend(Math.ceil(BLOCKFROST_FREE_DAILY_QUOTA * QUOTA_SPEND_WARN_AT), 45_000).status).toBe('warn');
+    expect(checkQuotaSpend(Math.floor(BLOCKFROST_FREE_DAILY_QUOTA * QUOTA_SPEND_WARN_AT) - 1, 45_000).status).toBe('ok');
+    // Both denominators are always printed, because they answer different questions.
+    expect(checkQuotaSpend(39_240, 45_000).detail).toMatch(/87% of the 45000 ceiling, 78% of the 50000 tier/);
   });
 
   it('says a sweep will be refused, because that is the consequence the operator acts on', () => {

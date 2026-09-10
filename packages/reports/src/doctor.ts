@@ -5,6 +5,8 @@
  */
 import { DEFAULT_COLLECT_INTERVAL_SEC } from './heartbeat.js';
 
+import { BLOCKFROST_FREE_DAILY_QUOTA } from './digest.js';
+
 export type Status = 'ok' | 'warn' | 'fail';
 export interface Check { name: string; status: Status; detail: string }
 
@@ -124,7 +126,7 @@ export const UNPRODUCTIVE_TICKS_FAIL = 3;
 /** Consecutive finished ticks sharing one error scope before that scope is a failure. */
 export const RECURRING_ERROR_TICKS_FAIL = 3;
 
-/** Fraction of the daily call ceiling at which spend becomes a warning. */
+/** Fraction of the vendor's daily TIER at which spend becomes a warning — not of our own ceiling. */
 export const QUOTA_SPEND_WARN_AT = 0.8;
 
 /** The fields these checks read from a collector run. A structural subset of `RunRow` so
@@ -203,13 +205,20 @@ export function checkRecurringTickErrors(runs: readonly TickHealthRow[], failAft
  * A ceiling of 0 means the operator disabled it (`COLLECT_DAILY_CALL_CEILING=0`); reporting a
  * percentage of zero would be a division by it.
  */
-export function checkQuotaSpend(callsToday: number, ceiling: number, warnAt = QUOTA_SPEND_WARN_AT): Check {
+export function checkQuotaSpend(callsToday: number, ceiling: number, warnAt = QUOTA_SPEND_WARN_AT, tier = BLOCKFROST_FREE_DAILY_QUOTA): Check {
   if (ceiling <= 0) return { name: 'quota spend', status: 'ok', detail: `${callsToday} calls today; no ceiling configured` };
   const pctOfCeiling = (callsToday / ceiling) * 100;
-  const detail = `${callsToday} of ${ceiling} calls (${pctOfCeiling.toFixed(0)}% of the ceiling)`;
+  const pctOfTier = (callsToday / tier) * 100;
+  // Both numbers, always: the ceiling is a brake WE set below the vendor's wall, and the two answer
+  // different questions. Reaching our own brake means the next sweep is refused; approaching the
+  // vendor's wall means the day is genuinely at risk.
+  const detail = `${callsToday} calls: ${pctOfCeiling.toFixed(0)}% of the ${ceiling} ceiling, ${pctOfTier.toFixed(0)}% of the ${tier} tier`;
   if (callsToday >= ceiling) {
     return { name: 'quota spend', status: 'fail', detail: `${detail} — a discovery sweep will now be refused` };
   }
-  if (pctOfCeiling >= warnAt * 100) return { name: 'quota spend', status: 'warn', detail };
+  // Warn on the TIER, not the ceiling. Warning at 80% of a self-imposed brake made a normal day
+  // (~39,240 calls = 87% of a 45,000 ceiling, but only 78% of the 50,000 tier) warn EVERY DAY, and a
+  // check that fires daily is one nobody reads.
+  if (pctOfTier >= warnAt * 100) return { name: 'quota spend', status: 'warn', detail };
   return { name: 'quota spend', status: 'ok', detail };
 }

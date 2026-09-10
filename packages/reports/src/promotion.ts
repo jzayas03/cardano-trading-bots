@@ -67,6 +67,13 @@ export interface PromotionInput {
   coverage: RunCoverage | undefined;
   /** The other runs over the same window, whatever they are; the required ones are selected here. */
   baselines: ReadonlyArray<{ strategyId: string; returnBasePct: number | null }>;
+  /**
+   * Which baselines this strategy must beat. Defaults to `BASELINE_STRATEGIES`, the taking sleeve's
+   * pair, and is a PARAMETER rather than a global because sleeves do not share a reference: an LP
+   * position's benchmark is holding the 50/50 basket or holding the token, not a DCA it has nothing
+   * in common with. Better made a parameter before an LP run exists than after one is misjudged.
+   */
+  requiredBaselines?: readonly string[];
 }
 
 export interface PromotionCheck {
@@ -92,7 +99,8 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
   // A baseline is identified by WHICH STRATEGY it is, never by whether this particular run happened
   // to sell. Keying on behaviour described a `ma-crossover` run that simply had not sold yet as one
   // that "never sells" — a claim about the strategy drawn from one run's luck.
-  const isBaseline = (BASELINE_STRATEGIES as readonly string[]).includes(input.strategyId);
+  const required = input.requiredBaselines ?? BASELINE_STRATEGIES;
+  const isBaseline = (required as readonly string[]).includes(input.strategyId);
   checks.push(
     isBaseline
       ? { id: 'round-trips', passed: false, detail: `${input.strategyId} is a baseline, not a promotion candidate` }
@@ -122,7 +130,7 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
   // --- measurable --------------------------------------------------------
   const missing: string[] = [];
   if (input.returnBasePct === null) missing.push(`${input.strategyId}'s own token return`);
-  for (const id of BASELINE_STRATEGIES) {
+  for (const id of required) {
     const b = input.baselines.find((x) => x.strategyId === id);
     if (b === undefined) missing.push(`no ${id} run over this window`);
     else if (b.returnBasePct === null) missing.push(`${id}'s token return`);
@@ -137,7 +145,7 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
   // Strictly. A tie is not an edge, and it is certainly not one worth the risk of trading.
   const lost: string[] = [];
   if (input.returnBasePct !== null) {
-    for (const id of BASELINE_STRATEGIES) {
+    for (const id of required) {
       const b = input.baselines.find((x) => x.strategyId === id);
       if (b?.returnBasePct !== null && b !== undefined && !(input.returnBasePct > b.returnBasePct)) {
         lost.push(`${id} (${b.returnBasePct.toFixed(2)}%)`);

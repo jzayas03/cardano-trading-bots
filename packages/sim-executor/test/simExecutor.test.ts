@@ -37,7 +37,7 @@ describe('SimExecutor cpmm_observed', () => {
   it('fills the hand-computed buy at 292 bps slippage against the t mid (spec §4.5)', () => {
     const r = ex.fill({ side: 'buy', amountIn: 1_000_000_000n, reason: 't' }, at, nextSameReserves, rich);
     expect(r).toMatchObject({ status: 'filled', poolId: 'SundaeSwapV3:x', unitIn: 'lovelace', amountIn: 1_000_000_000n, amountOut: 441_500n,
-      unitOut: SNEK, poolFeeIn: 10_000_000n, batcherFeeLovelace: 1_000_000n, networkFeeLovelace: 200_000n, midPrice: MID,
+      unitOut: SNEK, poolFeeIn: 10_000_000n, batcherFeeLovelace: 1_280_000n, networkFeeLovelace: 200_000n, midPrice: MID,
       slippageBps: 292, priceImpactBps: 292, tsFill: nextSameReserves.tickTs });
     expect((r as { fillPrice: string }).fillPrice).toBe('0.002265005662514156');
   });
@@ -100,14 +100,17 @@ describe('SimExecutor cpmm_observed', () => {
   // not cover the batcher + network fees. That branch had no test at all.
   it('rejects a sell whose proceeds still do not cover the lovelace fees', () => {
     // 500 SNEK out of this pool returns 1 089 333 lovelace (cpmmAmountOut(500n, RB, RQ, 100));
-    // fees are now 1 000 000 (SundaeSwapV3 batcher, re-derived from the venue docs) + 200 000
-    // network = 1 200 000, and there is no cash.
+    // fees are 1 280 000 (SundaeSwapV3, what Dexter writes into the order) + 200 000 network
+    // = 1 480 000, and there is no cash.
     const r = ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 0n, positionBase: 500n });
     expect(r).toEqual({ status: 'rejected', reason: 'insufficient cash' });
-    // With enough cash on hand to top the fees up (200 000 + 1 089 333 = 1 289 333 >= 1 200 000),
-    // the very same sell clears.
-    const ok = ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 200_000n, positionBase: 500n });
+    // With enough cash on hand to top the fees up (400 000 + 1 089 333 = 1 489 333 >= 1 480 000),
+    // the very same sell clears. The 200 000 that used to be enough no longer is: raising the venue
+    // fee moved this boundary, which is the boundary the test exists to pin.
+    const ok = ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 400_000n, positionBase: 500n });
     expect(ok.status).toBe('filled');
+    // And one lovelace short of it still fails, so the boundary is pinned from both sides.
+    expect(ex.fill({ side: 'sell', amountIn: 500n, reason: 't' }, at, nextSameReserves, { cashLovelace: 390_666n, positionBase: 500n }).status).toBe('rejected');
   });
 
   // Finding M1: an unrecognised venue prefix used to throw out of fill(), killing the whole run.
@@ -210,8 +213,8 @@ describe('costsForPoolId', () => {
 describe('markToMarket', () => {
   const ex = new SimExecutor({ decimals: 0, baseUnit: SNEK, fillModel: { kind: 'cpmm_observed' }, maxGapMs: 900_000 });
   const atEq: Candle = { ...at, closeReserveQuote: RQ }; // equal-reserves fixture
-  it('values the position as a full sell net of fees on observed reserves (SundaeSwapV3: 1.0 ADA batcher + 0.2 ADA network)', () => {
-    expect(ex.markToMarket({ cashLovelace: 0n, positionBase: 1_000_000n }, atEq)).toBe(2_091_631_632n - 1_000_000n - 200_000n);
+  it('values the position as a full sell net of fees on observed reserves (SundaeSwapV3: 1.28 ADA batcher + 0.2 ADA network)', () => {
+    expect(ex.markToMarket({ cashLovelace: 0n, positionBase: 1_000_000n }, atEq)).toBe(2_091_631_632n - 1_280_000n - 200_000n);
   });
   it('is cash when flat and null without reserves', () => {
     expect(ex.markToMarket({ cashLovelace: 5n, positionBase: 0n }, atEq)).toBe(5n);
