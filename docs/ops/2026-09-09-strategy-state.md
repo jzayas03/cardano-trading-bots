@@ -285,3 +285,36 @@ matters and the sample is probably too small to settle it.
 reaches 95% — they deliver 83–93%. That is a stronger statement about the promotion gate's sample
 size than the σ-multiplier argument ever was, and it is the reason the gate's fifth criterion should
 be read as directional until there are far more round trips than a week produces.
+
+## Block resampling, and what it does not fix
+
+A review noted the bootstrap resampled one round trip at a time, which assumes trades are
+independent. They are not — they cluster by regime, by inventory, and by whatever the hour was
+doing. Drawn singly, a run of correlated trades looks like many independent ones and the interval
+comes out **too narrow**, which near a promotion boundary is the failure that admits a losing
+strategy.
+
+Unlike the BCa recommendation, this one survived its coverage simulation decisively. AR(1) returns,
+true mean zero, 500 trials, nominal 95%:
+
+| φ | n | iid | block | conservative + block |
+|---|---|---|---|---|
+| 0.0 | 30 | 92.2% | 88.4% | 91.4% |
+| 0.3 | 30 | **81.2%** | 87.0% | 90.0% |
+| 0.6 | 30 | **61.0%** | 75.6% | 79.4% |
+| 0.6 | 90 | **68.0%** | **89.6%** | 90.4% |
+
+**At moderate correlation the iid interval collapses to 61% coverage.** Blocking recovers 6 to 22
+points and nearly reaches nominal once n is 90. Moving-block resampling with the `n^(1/3)` rule is
+now the default, paired with a delete-one-**block** jackknife — an iid jackknife would estimate the
+acceleration under exactly the assumption the sampler exists to abandon.
+
+**It is not free.** At φ = 0 blocking costs about four points, because it discards independence that
+was really there. It is still the default on the asymmetry: φ = 0 is the unlikely case for trade
+returns, and a too-wide interval refuses a good strategy while a too-narrow one admits a bad one.
+
+**And the row that matters most is φ = 0.6 at n = 30: 79.4%, even blocked and conservative.** At the
+promotion gate's own sample size, correlated returns are not reliably intervalled by any estimator
+here. That is now the third independent route to the same conclusion — after the σ-conversion check
+and the BCa coverage table — and all three say the constraint is **the number of round trips**, not
+the statistics applied to them.

@@ -30,6 +30,29 @@
  * Hence `conservativeBounds`, which the gate should use: the WIDEST of the two intervals, fail-closed,
  * so nothing rests on picking a winner the evidence does not support.
  *
+ * **Blocks, on the other hand, earned their default.** A second review said resampling one
+ * observation at a time assumes independence that trades do not have. Simulated on AR(1) returns
+ * with a true mean of zero — 500 trials, 600 resamples, nominal 95%:
+ *
+ *     phi   n     iid    block   conservative+block
+ *     0.0  30   92.2%    88.4%          91.4%
+ *     0.3  30   81.2%    87.0%          90.0%
+ *     0.6  30   61.0%    75.6%          79.4%
+ *     0.6  90   68.0%    89.6%          90.4%
+ *
+ * At moderate correlation the iid interval collapses to 61% coverage — precisely the "misleadingly
+ * narrow" failure, and near a promotion boundary that is what lets a losing strategy through.
+ * Blocking recovers 6 to 22 points and nearly reaches nominal once n is 90.
+ *
+ * It is not free: at phi = 0 blocking COSTS about four points, because it throws away independence
+ * that was really there. Blocks are still the default, on the asymmetry — trades cluster by regime,
+ * inventory and hour, so phi = 0 is the unlikely case, and a too-wide interval near a gate refuses a
+ * good strategy while a too-narrow one admits a bad one.
+ *
+ * **The row to read last is phi = 0.6, n = 30: 79.4% even blocked and conservative.** At the gate's
+ * own sample size, correlated returns are not reliably intervalled by ANY of this. The constraint is
+ * the trade count, not the estimator.
+ *
  * No dependency: `@ctb/reports` imports nothing at runtime (`purity.guard.test.ts`), so the normal
  * CDF, its inverse and the RNG are all local and all deterministic.
  */
@@ -92,6 +115,40 @@ function rng(seed: number): () => number {
   };
 }
 
+/** `n^(1/3)`, the standard rule of thumb, clamped into [1, n]. */
+function autoBlockLength(n: number): number {
+  return Math.min(n, Math.max(1, Math.ceil(Math.cbrt(n))));
+}
+
+function lag1Autocorrelation(xs: readonly number[]): number {
+  const n = xs.length;
+  if (n < 2) return 0;
+  const m = mean(xs);
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const d = xs[i]! - m;
+    den += d * d;
+    if (i < n - 1) num += d * (xs[i + 1]! - m);
+  }
+  return den === 0 ? 0 : num / den;
+}
+
+/**
+ * One moving-block resample: contiguous stretches of length `L` drawn with replacement from the
+ * `n - L + 1` overlapping blocks, concatenated and truncated back to `n`. At `L = 1` this is exactly
+ * iid resampling, which is why that case can be used as the control.
+ */
+function blockResample(sample: readonly number[], L: number, next: () => number, out: number[]): void {
+  const n = sample.length;
+  const starts = n - L + 1;
+  let k = 0;
+  while (k < n) {
+    const start = Math.floor(next() * starts);
+    for (let i = 0; i < L && k < n; i++, k++) out[k] = sample[start + i]!;
+  }
+}
+
 const percentile = (sorted: readonly number[], p: number): number => {
   const i = (sorted.length - 1) * Math.min(1, Math.max(0, p));
   const lo = Math.floor(i);
@@ -108,6 +165,14 @@ export interface BcaInterval {
   percentileUpper: number;
   level: number;
   resamples: number;
+  /** Observations per resampled block; 1 means plain iid resampling. */
+  blockLength: number;
+  /**
+   * Lag-1 autocorrelation of the sample, reported so a reader can see whether blocking mattered at
+   * all. Near zero and the block and iid intervals should agree — and their agreeing is what says
+   * the block sampler preserves structure rather than inventing width.
+   */
+  lag1Autocorrelation: number;
   /** Bias correction. 0 when exactly half the resamples fall below the estimate. */
   z0: number;
   /** Jackknife acceleration. 0 for a symmetric statistic; away from 0 is skew being corrected. */
@@ -120,7 +185,23 @@ export interface BcaInterval {
 
 export type Statistic = (xs: readonly number[]) => number;
 
-export interface BcaOptions { resamples?: number; level?: number; seed?: number }
+export interface BcaOptions {
+  resamples?: number;
+  level?: number;
+  seed?: number;
+  /**
+   * Observations per resampled block. `'auto'` (the default) uses the `n^(1/3)` rule of thumb; `1`
+   * is plain iid resampling, which is what this was before 2026-09-09.
+   *
+   * **Why blocks.** Resampling one observation at a time assumes they are independent. Trades are
+   * not: they cluster in regime, in inventory, and in whatever the market was doing that hour. Drawn
+   * singly, a run of correlated trades looks like many independent ones, and the interval comes out
+   * TOO NARROW — which near a promotion boundary is the failure that lets a losing strategy through.
+   * A moving block bootstrap resamples contiguous stretches instead, so the dependence inside a
+   * block survives resampling.
+   */
+  blockLength?: number | 'auto';
+}
 
 /** Null below two observations: a jackknife needs at least two leave-one-out samples, and a "point
  * interval" from one observation would read as a measurement. */
@@ -130,12 +211,14 @@ export function bcaInterval(sample: readonly number[], stat: Statistic, opts: Bc
   const B = opts.resamples ?? BOOTSTRAP_RESAMPLES;
   const level = opts.level ?? 0.95;
   const next = rng(opts.seed ?? 1);
+  const requested = opts.blockLength ?? 'auto';
+  const L = requested === 'auto' ? autoBlockLength(n) : Math.min(n, Math.max(1, Math.floor(requested)));
 
   const estimate = stat(sample);
   const boots: number[] = [];
   const draw = new Array<number>(n);
   for (let b = 0; b < B; b++) {
-    for (let i = 0; i < n; i++) draw[i] = sample[Math.floor(next() * n)]!;
+    blockResample(sample, L, next, draw);
     boots.push(stat(draw));
   }
   boots.sort((x, y) => x - y);
@@ -150,9 +233,21 @@ export function bcaInterval(sample: readonly number[], stat: Statistic, opts: Bc
   // rather than an extreme correction.
   const z0 = proportion <= 0 || proportion >= 1 ? NaN : normalQuantile(proportion);
 
-  // Jackknife acceleration from leave-one-out estimates.
+  // Jackknife acceleration. Delete-one-BLOCK when blocks are in use: a leave-one-out jackknife
+  // assumes independence exactly where the block sampler is saying there is none, and pairing an
+  // iid jackknife with a block resampler would estimate the correction under the assumption the
+  // rest of the method exists to abandon.
   const jack: number[] = [];
-  for (let i = 0; i < n; i++) jack.push(stat(sample.filter((_, j) => j !== i)));
+  if (L === 1) {
+    for (let i = 0; i < n; i++) jack.push(stat(sample.filter((_, j) => j !== i)));
+  } else {
+    const blocks = Math.floor(n / L);
+    for (let b = 0; b < blocks; b++) {
+      const from = b * L;
+      const to = from + L;
+      jack.push(stat(sample.filter((_, j) => j < from || j >= to)));
+    }
+  }
   const jackMean = mean(jack);
   let s2 = 0;
   let s3 = 0;
@@ -167,7 +262,8 @@ export function bcaInterval(sample: readonly number[], stat: Statistic, opts: Bc
   if (degenerate) {
     return {
       estimate, lower: percentileLower, upper: percentileUpper, percentileLower, percentileUpper,
-      level, resamples: B, z0: Number.isFinite(z0) ? z0 : 0, acceleration: Number.isFinite(acceleration) ? acceleration : 0,
+      level, resamples: B, blockLength: L, lag1Autocorrelation: lag1Autocorrelation(sample),
+      z0: Number.isFinite(z0) ? z0 : 0, acceleration: Number.isFinite(acceleration) ? acceleration : 0,
       degenerate: true,
     };
   }
@@ -180,7 +276,8 @@ export function bcaInterval(sample: readonly number[], stat: Statistic, opts: Bc
     estimate,
     lower: percentile(boots, adjust(alpha)),
     upper: percentile(boots, adjust(1 - alpha)),
-    percentileLower, percentileUpper, level, resamples: B, z0, acceleration, degenerate: false,
+    percentileLower, percentileUpper, level, resamples: B, blockLength: L,
+    lag1Autocorrelation: lag1Autocorrelation(sample), z0, acceleration, degenerate: false,
   };
 }
 
