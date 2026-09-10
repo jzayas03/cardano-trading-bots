@@ -36,7 +36,13 @@ export const VENUE_COSTS: Record<DexName, VenueCosts> = {
   // overstates every strategy's edge by 40 bps, in the direction that pushes losers through the gate.
   MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'Dexter 5.4.10 minswap-v2.js swapOrderFees() writes batcherFee 2000000n into the datum (read 2026-09-09), so this is what WE would pay regardless of Minswap policy; docs.minswap.org batcher page says only "previously around 2 ADA per order" (read 2026-09-07) and does not distinguish V1/V2. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: READ_AT },
   SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
-  SundaeSwapV3: { batcherFeeLovelace: 1_000_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §4.4.3 (documented range 0.5-1.0 ADA per order; the upper bound is charged here, so reported results err on the expensive side)', readAt: READ_AT },
+  // 2026-09-09: raised 1.00 -> 1.28 on the same rule as MinswapV2 — the model follows the SUBMISSION
+  // path. Dexter 5.4.10's sundaeswap-v3 adapter writes `protocolFeeDefault = 1280000n` into the
+  // order, which is exactly what the M6.1 spike measured on a live quote. The old 1.00 came from the
+  // documented 0.5-1.0 range and was described as an upper bound charged so results "err on the
+  // expensive side" — it was neither: it sat BELOW what we would actually pay, inverting the
+  // conservatism it claimed. That discrepancy is now explained rather than merely flagged.
+  SundaeSwapV3: { batcherFeeLovelace: 1_280_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'Dexter 5.4.10 sundaeswap-v3.js protocolFeeDefault = 1280000n written into the order (read 2026-09-09), matching the 1.28 ADA measured on a live quote in the M6.1 spike; SundaeV3.pdf §4.4.3 documents a 0.5-1.0 range that the library does not follow. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: READ_AT },
   MuesliSwap: { batcherFeeLovelace: 950_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'https://docs.muesliswap.com', readAt: READ_AT },
   WingRiders: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },
   WingRidersV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'https://docs.wingriders.com (amount not stated)', readAt: READ_AT },

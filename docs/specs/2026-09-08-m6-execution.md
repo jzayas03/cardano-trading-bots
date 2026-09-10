@@ -258,6 +258,21 @@ number with `basis: 'documented'`, which cannot express that — the M6.1 spike'
 
 ### 7.3 Our orders are public before they execute
 
+**Reviewed 2026-09-09: this section asserts a mechanism, and by this project's own standard that is
+not the same as a measured rate.** Order visibility is a structural fact — the datum sits in a
+public queue before a batcher executes it. What follows from it is not: how often visibility is
+actually *exploited* on the pools we would trade is an empirical question, and **we have no number
+for it and cannot get one yet.** The collector samples pool reserves at tick boundaries, not the
+order queue, and nothing this project has built has ever placed an order on chain, so there is no
+history of adverse selection to measure.
+
+Read this section as **"size on the assumption that it is read"**, which is a defensible default
+under uncertainty — not as "this rate is known and it is high". The rate becomes measurable at
+**M6.5**, the first funded trade, by comparing the price at submission against the price at
+execution across enough orders to have a distribution. Until then, no figure here should be quoted
+as though it were measured.
+
+
 A Cardano DEX order is a UTxO whose datum encodes size, direction and minimum-receive. It sits in an
 observable queue until a batcher scoops it. **Size and slippage tolerance are therefore public
 information before the trade happens.**

@@ -6,7 +6,8 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
   it('carries the documented values', () => {
     expect(costsForPoolId('Minswap:x').batcherFeeLovelace).toBe(0n);
     expect(costsForPoolId('SundaeSwapV1:x').batcherFeeLovelace).toBe(2_500_000n);
-    expect(costsForPoolId('SundaeSwapV3:x').batcherFeeLovelace).toBe(1_000_000n);
+    // 1.28, not the documented 1.0: the model follows what Dexter writes into the order (#104's rule).
+    expect(costsForPoolId('SundaeSwapV3:x').batcherFeeLovelace).toBe(1_280_000n);
     expect(costsForPoolId('MuesliSwap:x').batcherFeeLovelace).toBe(950_000n);
     expect(costsForPoolId('Minswap:x').basis).toBe('documented');
   });

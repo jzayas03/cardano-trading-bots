@@ -66,6 +66,19 @@ describe('the batcher fee we would actually pay is the one Dexter writes', () =>
     expect(VENUE_COSTS.Minswap.batcherFeeLovelace).not.toBe(batcher.value);
   });
 
+  it('SundaeSwapV3: the model follows Dexter here too, and the docs do not', () => {
+    // The adapter reads `protocolFeeDefault` rather than a literal, so this reads the assignment.
+    const src = readFileSync(resolve(DEX_DIR, 'sundaeswap-v3.js'), 'utf8');
+    const m = /protocolFeeDefault\s*=\s*(\d+)n/.exec(src);
+    expect(m, 'protocolFeeDefault assignment not found — Dexter changed shape; re-read it').not.toBeNull();
+    const written = BigInt(m![1]!);
+    expect(written).toBe(1_280_000n);
+    expect(VENUE_COSTS.SundaeSwapV3.batcherFeeLovelace).toBe(written);
+    // SundaeV3.pdf documents 0.5-1.0 ADA. The library writes 1.28, and the M6.1 spike measured 1.28
+    // on a live quote. Documentation is not the submission path.
+    expect(written).toBeGreaterThan(1_000_000n);
+  });
+
   it('a deposit leaves the wallet with every order and comes back, so it is capital and not cost', () => {
     // No cost table shows this, and the floor is right not to: it returns. But 4 ADA leaves per
     // order against 2 ADA of cost, which sets the real minimum order size and feeds the open
