@@ -252,3 +252,36 @@ trips to run it against, which is what the seven-day run will produce.
 
 Incidental, and consistent with everything else here: median per-round-trip return was **−260 to
 −342 bps** across all three corpora. These strategies did not lose narrowly.
+
+## The bootstrap, and why BCa is not the default
+
+A reviewer recommended replacing the plain percentile bootstrap with **BCa**, on the grounds that
+percentile intervals under-cover in small, fat-tailed samples. That is the standard advice. **A
+coverage simulation says it is not true in our regime.** 600 trials per row, 600 resamples, nominal
+95%:
+
+| distribution (n=30) | BCa | percentile |
+|---|---|---|
+| normal | 93.7% | 93.5% |
+| exponential | 90.8% | 91.3% |
+| lognormal (skewed) | **89.2%** | 88.2% |
+| fat-tailed (symmetric) | **83.0%** | **90.2%** |
+| fat-tailed, n=90 | 88.0% | 91.5% |
+
+BCa is a near no-op on normal data and a genuine improvement on lognormal — which is what says the
+implementation is correct rather than broken. But on **symmetric heavy tails it loses badly**, and
+that is the shape our round-trip returns most resemble. The mechanism: the jackknife acceleration is
+a third-moment estimate, and on a symmetric heavy-tailed sample the true correction is ~0 while any
+particular sample's realised skew is large and driven by whichever outliers were drawn. BCa then
+applies a noisy correction where none is wanted, shifting the interval randomly and costing coverage.
+
+**So both intervals are computed and neither is the default.** `conservativeBounds` takes the union —
+the widest bound — because a gate whose job is to refuse should take the reading that makes promotion
+harder, and nothing should rest on picking a winner the evidence does not support. Where the two
+disagree widely, that is itself information: the estimated skew is doing real work, so the shape
+matters and the sample is probably too small to settle it.
+
+**The row that matters most is the last column.** At n=30 on heavy tails, *no* bootstrap flavour
+reaches 95% — they deliver 83–93%. That is a stronger statement about the promotion gate's sample
+size than the σ-multiplier argument ever was, and it is the reason the gate's fifth criterion should
+be read as directional until there are far more round trips than a week produces.
