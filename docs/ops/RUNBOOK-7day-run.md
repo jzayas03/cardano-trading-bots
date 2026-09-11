@@ -176,6 +176,13 @@ Then, and only if that is all OK:
    requires both baselines over an identical window, so with no baseline run nothing can clear the
    gate at all. Then the other strategies.
 
+   Start them with **`CTB_PAPER_FORCE_NEW=1`**. These are new experiments, not continuations, and
+   being explicit beats relying on the restart window having elapsed. `paper-start.sh` now takes
+   over a run that was SIGNALLED within 120 seconds as well as one still marked `running` — see
+   `infra/vps/resume-target.sql` for the race that made that necessary. A cutover spans a password
+   rotation and a deploy, so it is far outside that window, but the flag says so rather than
+   depending on it.
+
 Only then, the report below.
 
 

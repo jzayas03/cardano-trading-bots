@@ -348,3 +348,33 @@ The rate is **assumed, never measured**, in the sense the cost table uses the wo
 depends on protocol parameters and pool performance. Every report states which rate produced its
 numbers, and it is shown beside the headline rather than folded into it — a headline that silently
 depends on an assumption is how a number stops being questioned.
+
+## The week is not one run per strategy
+
+**2026-09-11 06:16:42**: all four systemd units restarted together — deliberate, not a crash
+(`NRestarts=0` on all four), not a deploy (the VPS is still at `0d42901`), no memory pressure. Two
+runs resumed. One forked.
+
+| run | strategy | outcome | equity points | fills |
+|---|---|---|---|---|
+| 147 | ma-crossover | resumed | 237 | 6 |
+| 148 | buy-and-hold | resumed | 237 | 1 |
+| **146** | rsi-mean-reversion | **finished** 06:16:42 | 217 | 5 |
+| **149** | rsi-mean-reversion | **new** 06:16:47 | 21 | 0 |
+
+**No data was lost** — 217 + 21 = 238 against the 237 of the continuous runs. What forked is the
+identity, not the history.
+
+The cause was a five-second race, now closed (`infra/vps/resume-target.sql`): the old start script
+looked only for a row still marked `running`, so whether a restart resumed or forked depended on
+which won — the outgoing process writing `finished`, or the incoming one reading. **The cleaner the
+shutdown, the likelier the fork**, which is backwards.
+
+**What it means for the report.** rsi-mean-reversion's window must be read as **two runs**, 146 then
+149; `report <id>` will not stitch them. The promotion gate's `comparable` check correctly bars
+comparing 149 against 147/148 on window overlap — the check doing its job on a real event rather
+than a fixture.
+
+**And the fill counts confirm the prediction.** 6 / 1 / 0 fills in 2.5 days puts ma-crossover on
+course for roughly **8 round trips** across the week, against a bar of 30. The gate will bar
+everything, now measured rather than estimated.
