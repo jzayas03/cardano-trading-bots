@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { PgSnapshotRepo } from '@ctb/collector/pure';
 import { createPool, listMigrations } from '@ctb/db';
 import type { Logger } from 'pino';
-import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';
+import { DEFAULT_COLLECT_INTERVAL_SEC, effectiveTickIntervalSec, loadConfig } from '../config.js';
 import { digestLines } from '../digest.js';
 import { checkDigestLines, checkDisk, checkEnv, checkFakeRows, checkMigrations, checkNode, checkProcesses, verdict, type Check, type ProcessLine } from '../doctor.js';
 
@@ -95,7 +95,7 @@ export async function doctorCommand(log: Logger): Promise<void> {
       ).catch(() => ({ rows: [{ s: '0', c: '0' }] }));
       checks.push(checkFakeRows(Number(fake.rows[0]?.s ?? 0), Number(fake.rows[0]?.c ?? 0)));
       const now = new Date();
-      checks.push(...checkDigestLines(digestLines(await new PgSnapshotRepo(db).digestInput(cfg.intervalSec, [...cfg.venues], now), now)));
+      checks.push(...checkDigestLines(digestLines(await new PgSnapshotRepo(db).digestInput(effectiveTickIntervalSec(cfg), [...cfg.venues], now), now)));
       if (cfg.intervalSec !== DEFAULT_COLLECT_INTERVAL_SEC) log.info({ intervalSec: cfg.intervalSec }, 'non-default collector interval in force');
     } catch (err) {
       checks.push({ name: 'database', status: 'fail', detail: `unreachable: ${(err as Error).message}` });

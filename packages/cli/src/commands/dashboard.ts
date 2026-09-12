@@ -5,7 +5,7 @@ import { PgRunRepo } from '@ctb/engine';
 import { checkEnv } from '@ctb/reports';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
-import { loadConfig } from '../config.js';
+import { effectiveTickIntervalSec, loadConfig } from '../config.js';
 import { listProcesses } from './doctor.js';
 import { fakeRowsTotal } from './paper.js';
 
@@ -57,9 +57,9 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
     reads: new PgDashboardReads(db),
     runs: runRepo,
     collector: {
-      digestInput: (intervalSec, venues, now) => snapshotRepo.digestInput(intervalSec, venues, now),
+      digestInput: (tickIntervalSec, venues, now) => snapshotRepo.digestInput(tickIntervalSec, venues, now),
       perVenuePoolCounts: () => snapshotRepo.perVenuePoolCounts(),
-      missingTicksApprox: (intervalSec) => snapshotRepo.missingTicksApprox(intervalSec),
+      missingTicksApprox: (tickIntervalSec) => snapshotRepo.missingTicksApprox(tickIntervalSec),
     },
     processes: listProcesses,
     migrations: async () => {
@@ -76,7 +76,8 @@ export async function dashboardCommand(log: Logger, args: string[]): Promise<voi
     unitOf,
     tickers,
     universeTokens,
-    intervalSec: cfg.intervalSec,
+    // The row-writing cadence, not the candle interval — see effectiveTickIntervalSec.
+    tickIntervalSec: effectiveTickIntervalSec(cfg),
     venues: cfg.venues,
     now: () => new Date(),
     log: { info: (o, m) => log.info(o, m), error: (o, m) => log.error(o, m) },

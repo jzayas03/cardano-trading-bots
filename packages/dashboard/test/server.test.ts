@@ -38,7 +38,7 @@ function rawRequest(port: number, rawTarget: string, method = 'GET'): Promise<{ 
 }
 
 const digestFixture: DigestInput = {
-  intervalSec: 600,
+  tickIntervalSec: 600,
   lastFinished: { tickTs: new Date('2026-09-07T12:00:00Z'), finishedAt: new Date('2026-09-07T12:01:30Z'), poolsWritten: 20, poolsFailed: 0, providerCalls: 210, discovered: false },
   ticksLast24h: 70, discoveryCallsToday: 5_691, refreshCallsToday: 9_309, lastDiscoveryAt: new Date('2026-09-07T00:10:00Z'), poolFailures24h: 0, venueErrors24h: 0, unfinishedRuns: 0,
   venuesConfigured: ['MinswapV2', 'SundaeSwapV3'], venuesSinceLastDiscovery: ['MinswapV2', 'SundaeSwapV3'], venuesInLastTick: ['MinswapV2', 'SundaeSwapV3'], tokensTotal: 20, tokensCoveredInLastTick: 20,
@@ -108,7 +108,7 @@ function makeDeps(): DashboardDeps {
     collector: {
       digestInput: async () => digestFixture,
       perVenuePoolCounts: async () => [],
-      missingTicksApprox: async () => '0',
+      missingTicksApprox: async () => ({ ticks: 288, expected: 288, configuredIntervalSec: 300, observedIntervalSec: 300 }),
     },
     processes: () => [{ pid: 111, command: '/usr/local/bin/node /repo/packages/cli/src/main.ts collect' }],
     migrations: async () => ({ onDisk: ['0001_init.sql'], applied: ['0001_init.sql'] }),
@@ -121,7 +121,7 @@ function makeDeps(): DashboardDeps {
     unitOf: (ticker: string) => (ticker === 'TEST' ? 'testtoken.abcd' : undefined),
     tickers: () => ['TEST'],
     universeTokens: () => [universeToken],
-    intervalSec: 600,
+    tickIntervalSec: 300,
     venues: ['MinswapV2', 'SundaeSwapV3'],
     now: () => new Date('2026-09-07T12:05:00Z'),
     log: { info: () => {}, error: () => {} },

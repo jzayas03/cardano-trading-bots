@@ -12,7 +12,7 @@
  * `status`'s own former inline queries) and `heartbeatAgeCell` (`@ctb/reports`, the same function
  * `status` calls) — so this file, as before, does no arithmetic of its own; it only lays rows out.
  */
-import { checkDigestLines, type Check, type Status } from '@ctb/reports';
+import { checkDigestLines, missingTicksCell, type Check, type Status, type TickCadence } from '@ctb/reports';
 import { escape, layout, statusWord, table, type RenderedCell } from '../html.js';
 
 /** One row of the "paper runs" table, already fully computed by `server.ts`'s `paperRunRows` (id,
@@ -56,7 +56,7 @@ export function renderHealth(input: {
   checks: Check[];
   now: Date;
   perVenue: Array<{ dex: string; pools: number; tickTs: Date }>;
-  missingTicks: string | null;
+  cadence: TickCadence | null;
   paperRuns: PaperRunRow[];
 }): string {
   const digestChecks = checkDigestLines(input.digest);
@@ -100,7 +100,7 @@ ${table(['dex', 'pools', 'tick'], perVenueRows)}
 </section>
 <section>
 <h2>Collector coverage</h2>
-<p>ticks missing in last 24h (approx): ${escape(input.missingTicks ?? 'n/a')}</p>
+<p>ticks missing in last 24h (approx): ${escape(missingTicksCell(input.cadence))}</p>
 </section>
 <section>
 <h2>Paper runs</h2>

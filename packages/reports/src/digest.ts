@@ -12,7 +12,11 @@ export const QUOTA_OK_BELOW = 40_000;
 export const MIN_PROJECTION_ELAPSED_SEC = 30 * 60;
 
 export interface DigestInput {
-  intervalSec: number;
+  /** The interval at which the collector writes a ROW — the focus interval when tiered sampling is on
+   *  (`COLLECT_FOCUS_INTERVAL_SECONDS`), otherwise the candle interval. Named for what it measures:
+   *  handing the candle interval to a row count is what made this very line print a clamped, false
+   *  `(0 missing)` on 2026-09-12 while one tick genuinely was missed. See `cadence.ts`. */
+  tickIntervalSec: number;
   lastFinished: { tickTs: Date; finishedAt: Date; poolsWritten: number; poolsFailed: number; providerCalls: number; discovered: boolean } | null;
   /** Distinct finished ticks in the trailing 24 h. */
   ticksLast24h: number;
@@ -45,15 +49,20 @@ const hours = (ms: number): string => `${(ms / 3_600_000).toFixed(1)}h`;
 
 export function digestLines(d: DigestInput, now: Date): string[] {
   const out: string[] = [];
-  const expected24h = Math.floor(86_400 / d.intervalSec);
+  const expected24h = Math.floor(86_400 / d.tickIntervalSec);
   if (d.lastFinished) {
     const age = now.getTime() - d.lastFinished.finishedAt.getTime();
-    const stale = age > 2 * d.intervalSec * 1000;
+    const stale = age > 2 * d.tickIntervalSec * 1000;
     out.push(`collector: ${stale ? 'STALE — ' : ''}last tick ${d.lastFinished.tickTs.toISOString()} finished ${minutes(age)} ago | ${d.lastFinished.poolsWritten} pools written, ${d.lastFinished.poolsFailed} failed, ${d.lastFinished.providerCalls} calls${d.lastFinished.discovered ? ' (discovery)' : ''}`);
   } else {
     out.push('collector: no finished tick on record');
   }
-  out.push(`ticks last 24h: ${d.ticksLast24h} of ${expected24h} expected at ${d.intervalSec}s (${Math.max(expected24h - d.ticksLast24h, 0)} missing)`);
+  // Not clamped. `Math.max(…, 0)` used to turn a wrong interval into a confident `(0 missing)`, which
+  // on an operator screen reads as "nothing missing" — strictly worse than an obviously broken
+  // number, because nobody re-checks a zero. More ticks than slots means the interval is wrong, and
+  // that is what the line should say.
+  const missing = expected24h - d.ticksLast24h;
+  out.push(`ticks last 24h: ${d.ticksLast24h} of ${expected24h} expected at ${d.tickIntervalSec}s (${missing >= 0 ? `${missing} missing` : `more ticks than slots — ${d.tickIntervalSec}s is not the cadence this collector runs at`})`);
   const elapsedMs = now.getTime() - utcMidnight(now).getTime();
   const elapsedSec = elapsedMs / 1000;
   const callsToday = d.discoveryCallsToday + d.refreshCallsToday;

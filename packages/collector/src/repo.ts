@@ -1,5 +1,5 @@
 import { withTransaction, type Db } from '@ctb/db';
-import { utcMidnight, type DigestInput } from '@ctb/reports';
+import { utcMidnight, type DigestInput, type TickCadence } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';
 import type { SnapshotRow } from './types.js';
 
@@ -224,7 +224,7 @@ export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
   }
 
   /** The digest's inputs, from `collector_runs` only. Pure aggregation, no writes. */
-  async digestInput(intervalSec: number, venuesConfigured: string[], now: Date): Promise<DigestInput> {
+  async digestInput(tickIntervalSec: number, venuesConfigured: string[], now: Date): Promise<DigestInput> {
     const last = await this.db.query<{ tick_ts: Date; finished_at: Date; pools_written: number; pools_failed: number; provider_calls: number; discovered: boolean }>(
       'SELECT tick_ts, finished_at, pools_written, pools_failed, provider_calls, discovered FROM collector_runs WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1',
     );
@@ -257,7 +257,7 @@ export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
     const a = agg.rows[0]!;
     const l = last.rows[0];
     return {
-      intervalSec,
+      tickIntervalSec,
       lastFinished: l ? { tickTs: l.tick_ts, finishedAt: l.finished_at, poolsWritten: l.pools_written, poolsFailed: l.pools_failed, providerCalls: l.provider_calls, discovered: l.discovered } : null,
       ticksLast24h: Number(a.ticks_24h), discoveryCallsToday: Number(a.discovery_calls_today), refreshCallsToday: Number(a.refresh_calls_today), lastDiscoveryAt: a.last_discovery,
       venuesConfigured, venuesSinceLastDiscovery: discoveryVenues.rows.map((r) => r.dex), venuesInLastTick: venues.rows.map((r) => r.dex), tokensTotal: Number(a.tokens_total), tokensCoveredInLastTick: Number(a.tokens_covered),
@@ -276,16 +276,35 @@ export class PgSnapshotRepo implements SnapshotRepo, PoolCacheRepo {
     return res.rows.map((r) => ({ dex: r.dex, pools: Number(r.pools), tickTs: r.tick_ts }));
   }
 
-  /** Approximate count of ticks missed in the last 24h, moved verbatim from `status`'s own inline
-   *  query (same reasoning as `perVenuePoolCounts` above). `null` when the aggregate query returns no
-   *  row at all (should not happen in practice — `t` always produces one aggregate row — but mirrors
-   *  `status`'s own `?? 'n/a'` fallback rather than assuming a row is always present). */
-  async missingTicksApprox(intervalSec: number): Promise<string | null> {
-    const res = await this.db.query<{ missing_ticks: string }>(
-      `WITH t AS (SELECT DISTINCT tick_ts FROM collector_runs WHERE tick_ts > now() - interval '24 hours')
-       SELECT (extract(epoch FROM (now() - (now() - interval '24 hours'))) / $1::int)::int - count(*) AS missing_ticks FROM t`,
-      [intervalSec],
+  /** Ticks recorded in the last 24 h against the ticks expected at `intervalSec`, plus the cadence the
+   *  collector is OBSERVED to run at — the modal gap between consecutive distinct ticks.
+   *
+   *  The observed figure is not decoration. `intervalSec` reaches here from whatever `.env` the
+   *  CALLING process loaded, which is not necessarily the one the collector service runs with, and a
+   *  count computed against the wrong interval is wrong in a way no amount of arithmetic reveals.
+   *  Measuring the cadence from the rows themselves is the cross-check; `missingTicksCell` refuses to
+   *  print a count when the two disagree. See `@ctb/reports`' cadence.ts for what produced -191.
+   *
+   *  `null` only when the aggregate query returns no row at all (it always produces one, but the
+   *  caller's `n/a` fallback predates this method and is kept). */
+  async missingTicksApprox(intervalSec: number): Promise<TickCadence | null> {
+    const res = await this.db.query<{ ticks: string; observed_interval_sec: string | null }>(
+      `WITH t AS (SELECT DISTINCT tick_ts FROM collector_runs WHERE tick_ts > now() - interval '24 hours'),
+            g AS (SELECT extract(epoch FROM (tick_ts - lag(tick_ts) OVER (ORDER BY tick_ts)))::int AS gap FROM t)
+       SELECT (SELECT count(*) FROM t) AS ticks,
+              -- Modal gap: ties broken toward the SHORTER interval, so a collector that is missing
+              -- half its ticks still reports the cadence it was trying to keep rather than the gap
+              -- its failures produced.
+              (SELECT gap FROM g WHERE gap IS NOT NULL GROUP BY gap ORDER BY count(*) DESC, gap ASC LIMIT 1)
+                AS observed_interval_sec`,
     );
-    return res.rows[0]?.missing_ticks ?? null;
+    const row = res.rows[0];
+    if (!row) return null;
+    return {
+      ticks: Number(row.ticks),
+      expected: Math.floor(86_400 / intervalSec),
+      configuredIntervalSec: intervalSec,
+      observedIntervalSec: row.observed_interval_sec === null ? null : Number(row.observed_interval_sec),
+    };
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { migrate } from '@ctb/db';
+import { missingTicksCell } from '@ctb/reports';
 import { PG_ENABLED, withTestSchema } from '../../db/test/helpers.js';
 import { PgSnapshotRepo, type SnapshotRow } from '../src/pure.js';
 
@@ -115,30 +116,75 @@ describe.skipIf(!PG_ENABLED)('PgSnapshotRepo', () => {
   });
 
   /**
-   * `missingTicksApprox` moved verbatim off `status`'s own former inline query. Offsets are relative
-   * to the ACTUAL test-execution instant (`Date.now()`), not a fixed calendar date, because the query
-   * itself compares against Postgres's own `now()` — there is no `now` parameter to fix (unlike
-   * `digestInput`, which takes one). Three ticks sit hours inside the 24h window and one sits an hour
-   * past it, deliberately far from the boundary so test execution latency can never flip a row across
-   * it. `intervalSec=3600` makes the expected-tick count exactly `86400 / 3600 = 24`, deterministically
-   * — `now() - (now() - interval '24 hours')` is exactly `interval '24 hours'` within one statement
-   * (Postgres evaluates `now()` once per transaction), so this numerator never depends on wall-clock
-   * timing either.
+   * Offsets are relative to the ACTUAL test-execution instant (`Date.now()`), not a fixed calendar
+   * date, because the query compares against Postgres's own `now()` — there is no `now` parameter to
+   * fix (unlike `digestInput`, which takes one). Every tick sits on a half-hour offset so no row can
+   * ever land within seconds of the 24h boundary and flip across it under test-execution latency.
+   *
+   * What these three cases pin is not arithmetic, it is a refusal. `missingTicksApprox` is told an
+   * interval by whatever `.env` the CALLING process loaded, which need not be the one the collector
+   * service runs with; on 2026-09-12 it was not, and `status` printed `-191` while the digest printed
+   * a clamped, reassuring `(0 missing)`. So the query now also measures the cadence from the rows
+   * themselves, and `missingTicksCell` prints a count only when the two agree.
    */
-  it('missingTicksApprox counts distinct ticks missing from the last 24h', async () => {
-    await withTestSchema(async (db) => {
-      await migrate(db);
-      const repo = new PgSnapshotRepo(db);
-      const now = Date.now();
-      for (const hoursAgo of [1, 5, 10]) {
-        const tick = new Date(now - hoursAgo * 3_600_000);
-        await repo.startRun(tick, tick);
-      }
-      const outsideWindow = new Date(now - 25 * 3_600_000);
-      await repo.startRun(outsideWindow, outsideWindow);
+  describe('missingTicksApprox', () => {
+    it('counts the hole when the observed cadence agrees with the configured one', async () => {
+      await withTestSchema(async (db) => {
+        await migrate(db);
+        const repo = new PgSnapshotRepo(db);
+        const now = Date.now();
+        // 24 hourly slots inside the window (0.5h .. 23.5h ago), with the 12.5h one left out: exactly
+        // one genuine hole, and a 7200s gap where a 3600s one belongs.
+        for (const hoursAgo of [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 8.5, 9.5, 10.5, 11.5,
+          13.5, 14.5, 15.5, 16.5, 17.5, 18.5, 19.5, 20.5, 21.5, 22.5, 23.5]) {
+          const tick = new Date(now - hoursAgo * 3_600_000);
+          await repo.startRun(tick, tick);
+        }
+        const outsideWindow = new Date(now - 25 * 3_600_000);
+        await repo.startRun(outsideWindow, outsideWindow);
 
-      const missing = await repo.missingTicksApprox(3600);
-      expect(missing).toBe('21'); // 24 expected ticks - 3 actual distinct ticks inside the 24h window
+        const cadence = await repo.missingTicksApprox(3600);
+        expect(cadence).toEqual({ ticks: 23, expected: 24, configuredIntervalSec: 3600, observedIntervalSec: 3600 });
+        expect(missingTicksCell(cadence)).toBe('1');
+      });
+    });
+
+    it('refuses a count when the observed cadence disagrees with the configured interval', async () => {
+      await withTestSchema(async (db) => {
+        await migrate(db);
+        const repo = new PgSnapshotRepo(db);
+        const now = Date.now();
+        // The live 2026-09-12 shape in miniature: rows written every 300 s (the focus interval) while
+        // the caller passes 900 (the candle interval). 120 five-minute ticks over the most recent 10 h
+        // already outnumber the 96 slots a 900 s interval predicts for a whole DAY, which is precisely
+        // how the old expected-minus-count arithmetic went negative.
+        for (let i = 1; i <= 120; i += 1) {
+          const tick = new Date(now - i * 300_000);
+          await repo.startRun(tick, tick);
+        }
+
+        const cadence = await repo.missingTicksApprox(900);
+        expect(cadence?.observedIntervalSec).toBe(300);
+        expect(cadence?.configuredIntervalSec).toBe(900);
+        // The number the old code would have printed. Pinned so the regression is named, not implied.
+        expect(cadence!.expected - cadence!.ticks).toBeLessThan(0);
+        expect(missingTicksCell(cadence)).toBe('n/a (observed 300s cadence, configured 900s — one of them is wrong)');
+      });
+    });
+
+    it('refuses a count when there are too few ticks to measure a cadence', async () => {
+      await withTestSchema(async (db) => {
+        await migrate(db);
+        const repo = new PgSnapshotRepo(db);
+        const tick = new Date(Date.now() - 3_600_000);
+        await repo.startRun(tick, tick);
+
+        const cadence = await repo.missingTicksApprox(3600);
+        expect(cadence).toEqual({ ticks: 1, expected: 24, configuredIntervalSec: 3600, observedIntervalSec: null });
+        // A collector dead for 23 of the last 24 hours must not be summarised as a tidy "23 missing"
+        // derived from an interval nothing in the data corroborates.
+        expect(missingTicksCell(cadence)).toBe('n/a (1 tick in 24h — too few to measure a cadence)');
+      });
     });
   });
 });

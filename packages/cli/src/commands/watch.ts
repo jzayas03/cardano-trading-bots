@@ -4,7 +4,7 @@ import { createPool } from '@ctb/db';
 import { checkBackupFreshness, checkDigestLines, checkDisk, checkPaperRuns, checkProcesses, checkQuotaSpend, checkRecurringTickErrors, checkTickProductivity, verdict, type Check, type PaperRunState } from '@ctb/reports';
 import type { Logger } from 'pino';
 import { UNPRODUCTIVE_TICKS_FAIL } from '@ctb/reports';
-import { DEFAULT_COLLECT_INTERVAL_SEC, loadConfig } from '../config.js';
+import { DEFAULT_COLLECT_INTERVAL_SEC, effectiveTickIntervalSec, loadConfig } from '../config.js';
 import { digestLines } from '../digest.js';
 import { listProcessesWithAge } from '../ps.js';
 import { newestBackupAgeHours } from '../backupAge.js';
@@ -40,7 +40,7 @@ export async function watchCommand(log: Logger, args: readonly string[]): Promis
 
     const now = new Date();
     const repo = new PgSnapshotRepo(pool);
-    const digest = await repo.digestInput(intervalSec, [...cfg.venues], now);
+    const digest = await repo.digestInput(effectiveTickIntervalSec(cfg), [...cfg.venues], now);
     checks.push(...checkDigestLines(digestLines(digest, now)));
 
     // The three checks that would have alarmed on 2026-09-08, when this watchdog ran fifteen times
