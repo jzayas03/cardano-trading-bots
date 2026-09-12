@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import type { Logger } from 'pino';
+import { describe, expect, it, vi, type Mock } from 'vitest';
 import type { CandleRepo } from '@ctb/candles';
 import type { CandleRow, SnapshotForCandle } from '@ctb/candles';
 import type { Candle } from '@ctb/engine';
@@ -67,8 +68,21 @@ function mkCandleRow(tickTs: Date, overrides: Partial<CandleRow> = {}): CandleRo
   };
 }
 
-function makeLog(): { info: ReturnType<typeof vi.fn>; warn: ReturnType<typeof vi.fn>; error: ReturnType<typeof vi.fn> } {
-  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+/**
+ * The three methods `liveCandleFeed` actually calls, with the signature it calls them with, so the
+ * assertions below can read `.mock.calls[n][1]` as the message string.
+ *
+ * The cast is deliberate and is the whole point of a fake: pino's `Logger` is a large surface
+ * (`fatal`, `trace`, `child`, `level`, `customLevels`, …) and this implements none of it. vitest 3's
+ * `ReturnType<typeof vi.fn>` was loose enough that the gap never surfaced; vitest 4 types `vi.fn()`
+ * as `Mock<Procedure | Constructable>` and the structural mismatch became twelve type errors at the
+ * call sites. Nothing about the test's behaviour changed — only what the compiler can see.
+ */
+type LogMock = Mock<(obj: object, msg: string) => void>;
+type FakeLogger = Logger & { info: LogMock; warn: LogMock; error: LogMock };
+
+function makeLog(): FakeLogger {
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as FakeLogger;
 }
 
 /** Records every `ms` argument, advances the fake clock, and aborts `ac` on the Nth call (1-indexed) if given. */
