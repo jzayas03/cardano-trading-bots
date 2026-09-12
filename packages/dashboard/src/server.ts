@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { VenuePoolCount } from '@ctb/collector/pure';
 import type { RunRepo, RunningRun } from '@ctb/engine';
-import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, heartbeatAgeCell, type Check, type CompareRunInput, type DigestInput, type ProcessLine } from '@ctb/reports';
+import { checkFakeRows, checkMigrations, checkProcesses, dayAgo, digestLines, heartbeatAgeCell, type Check, type CompareRunInput, type DigestInput, type ProcessLine, type TickCadence } from '@ctb/reports';
 import type { TokenSpec } from '@ctb/universe';
 import { escape, layout } from './html.js';
 import { renderCompare } from './pages/compare.js';
@@ -28,9 +28,9 @@ export interface DashboardDeps {
    *  previously-missing sections (spec: per-venue pool table, missing-ticks line, paper runs) render
    *  the exact numbers `status --digest` prints, from the exact same calls. */
   collector: {
-    digestInput(intervalSec: number, venues: string[], now: Date): Promise<DigestInput>;
+    digestInput(tickIntervalSec: number, venues: string[], now: Date): Promise<DigestInput>;
     perVenuePoolCounts(): Promise<VenuePoolCount[]>;
-    missingTicksApprox(intervalSec: number): Promise<string | null>;
+    missingTicksApprox(tickIntervalSec: number): Promise<TickCadence | null>;
   };
   /** Injected so the trap cases (two collectors, a stopped fake collector) are unit-testable without a machine. */
   processes: () => ProcessLine[];
@@ -52,7 +52,10 @@ export interface DashboardDeps {
   /** `/universe`'s row order and rank column: `loadUniverse().tokens`, a pure in-memory list (array
    *  position IS market-cap rank — spec's own verified fact), the same shape as `tickers`/`tickerOf`. */
   universeTokens: () => TokenSpec[];
-  intervalSec: number;
+  /** The interval at which the collector writes a ROW — the focus interval when tiered sampling is
+   *  on, not the candle interval. Named for what it measures because handing the candle interval to
+   *  a row count is precisely the bug this replaced (`status` printed -191 missing ticks). */
+  tickIntervalSec: number;
   venues: string[];
   now: () => Date;
   log: { info(o: object, m: string): void; error(o: object, m: string): void };
@@ -135,7 +138,7 @@ async function paperRunRows(deps: DashboardDeps, running: RunningRun[], now: Dat
  *  itself makes, so the two surfaces can never legitimately disagree. */
 async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
   const now = deps.now();
-  const digestInput = await deps.collector.digestInput(deps.intervalSec, deps.venues, now);
+  const digestInput = await deps.collector.digestInput(deps.tickIntervalSec, deps.venues, now);
   const digest = digestLines(digestInput, now);
   const migrations = await deps.migrations();
   const fake = await deps.fakeRows();
@@ -146,10 +149,10 @@ async function healthHandler(deps: DashboardDeps): Promise<HandlerResult> {
     ...deps.envChecks(),
   ];
   const perVenue = await deps.collector.perVenuePoolCounts();
-  const missingTicks = await deps.collector.missingTicksApprox(deps.intervalSec);
+  const cadence = await deps.collector.missingTicksApprox(deps.tickIntervalSec);
   const running = await deps.runs.listRunning();
   const paperRuns = await paperRunRows(deps, running, now);
-  return htmlPage(200, renderHealth({ digest, checks, now, perVenue, missingTicks, paperRuns }));
+  return htmlPage(200, renderHealth({ digest, checks, now, perVenue, cadence, paperRuns }));
 }
 
 const PAGE_SIZE = 50;

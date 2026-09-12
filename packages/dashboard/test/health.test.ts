@@ -1,4 +1,4 @@
-import { digestLines, type Check, type DigestInput } from '@ctb/reports';
+import { digestLines, type Check, type DigestInput, type TickCadence } from '@ctb/reports';
 import { describe, expect, it } from 'vitest';
 import { renderHealth, type PaperRunRow } from '../src/pages/health.js';
 
@@ -6,12 +6,12 @@ import { renderHealth, type PaperRunRow } from '../src/pages/health.js';
  *  keep asserting only what they always asserted (the digest/checks tables), while satisfying
  *  `renderHealth`'s widened input type. The sections' own content is pinned by the dedicated
  *  `describe` blocks further down. */
-const noNewSections = { perVenue: [], missingTicks: null, paperRuns: [] as PaperRunRow[] };
+const noNewSections = { perVenue: [], cadence: null, paperRuns: [] as PaperRunRow[] };
 
 // Copied from packages/cli/test/digest.test.ts's `base` fixture (do not re-derive: same DigestInput,
 // same expected line count/order as that already-verified test).
 const base: DigestInput = {
-  intervalSec: 600,
+  tickIntervalSec: 600,
   lastFinished: { tickTs: new Date('2026-09-07T12:00:00Z'), finishedAt: new Date('2026-09-07T12:01:30Z'), poolsWritten: 20, poolsFailed: 0, providerCalls: 210, discovered: false },
   ticksLast24h: 70, discoveryCallsToday: 5_691, refreshCallsToday: 9_309, lastDiscoveryAt: new Date('2026-09-07T00:10:00Z'), poolFailures24h: 0, venueErrors24h: 0, unfinishedRuns: 0,
   venuesConfigured: ['MinswapV2', 'SundaeSwapV3'], venuesSinceLastDiscovery: ['MinswapV2', 'SundaeSwapV3'], venuesInLastTick: ['MinswapV2', 'SundaeSwapV3'], tokensTotal: 20, tokensCoveredInLastTick: 20,
@@ -153,7 +153,7 @@ describe('renderHealth: per-venue pools, missing ticks, and paper runs', () => {
       { dex: 'MinswapV2', pools: 37, tickTs: new Date('2026-09-07T12:00:00Z') },
       { dex: 'SundaeSwapV3', pools: 12, tickTs: new Date('2026-09-07T12:00:00Z') },
     ];
-    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue, missingTicks: null, paperRuns: [] });
+    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue, cadence: null, paperRuns: [] });
     const section = html.slice(html.indexOf('<h2>Per-venue pools'), html.indexOf('<h2>Collector coverage'));
     expect(section).toContain('<td>MinswapV2</td>');
     expect(section).toContain('<td>37</td>');
@@ -162,16 +162,27 @@ describe('renderHealth: per-venue pools, missing ticks, and paper runs', () => {
     expect(section).toContain('<td>2026-09-07T12:00:00.000Z</td>');
   });
 
-  it('renders the missing-ticks line with the exact source value, "n/a" when null', () => {
-    const withValue = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], missingTicks: '3', paperRuns: [] });
-    expect(withValue).toContain('ticks missing in last 24h (approx): 3');
+  it('renders the missing-ticks line through missingTicksCell, so the page and `status` cannot diverge', () => {
+    // 288 slots a day at 300s; 285 recorded and the observed cadence agreeing with the configured one
+    // is the only shape that may print a bare count.
+    const agreeing: TickCadence = { ticks: 285, expected: 288, configuredIntervalSec: 300, observedIntervalSec: 300 };
+    expect(renderHealth({ digest, checks: checksAllOk, now, perVenue: [], cadence: agreeing, paperRuns: [] }))
+      .toContain('ticks missing in last 24h (approx): 3');
 
-    const withNull = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], missingTicks: null, paperRuns: [] });
+    const withNull = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], cadence: null, paperRuns: [] });
     expect(withNull).toContain('ticks missing in last 24h (approx): n/a');
+
+    // The live 2026-09-12 shape: the page must refuse a count here rather than repeat `status`'s -191
+    // or the digest's clamped, reassuring 0.
+    const mismatched: TickCadence = { ticks: 287, expected: 96, configuredIntervalSec: 900, observedIntervalSec: 300 };
+    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], cadence: mismatched, paperRuns: [] });
+    expect(html).toContain('observed 300s cadence, configured 900s');
+    expect(html).not.toContain('(approx): -191');
+    expect(html).not.toContain('(approx): 0<');
   });
 
   it('renders "(none running)" for the paper runs section when nothing is running, not an empty table', () => {
-    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], missingTicks: '0', paperRuns: [] });
+    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], cadence: null, paperRuns: [] });
     const section = html.slice(html.indexOf('<h2>Paper runs'));
     expect(section).toContain('(none running)');
     expect(section).not.toContain('<table>');
@@ -182,7 +193,7 @@ describe('renderHealth: per-venue pools, missing ticks, and paper runs', () => {
       { id: 42, strategy: 'buyAndHold', ticker: 'HOSKY', rehearsal: false, heartbeatAge: '17', lastTick: '2026-09-07T12:00:00.000Z', created: '2026-09-01T00:00:00.000Z' },
       { id: 43, strategy: 'rsi-mean-reversion', ticker: 'SNEK', rehearsal: true, heartbeatAge: 'STALE (9001s)', lastTick: '-', created: '2026-09-06T00:00:00.000Z' },
     ];
-    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], missingTicks: '0', paperRuns });
+    const html = renderHealth({ digest, checks: checksAllOk, now, perVenue: [], cadence: null, paperRuns });
     const section = html.slice(html.indexOf('<h2>Paper runs'));
     expect(section).toContain('<td>42</td>');
     expect(section).toContain('<td>buyAndHold</td>');

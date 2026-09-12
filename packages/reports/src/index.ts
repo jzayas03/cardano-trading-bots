@@ -1,6 +1,7 @@
 export { PRICE_SCALE, PRICE_UNIT, priceScaled, ratioOf } from './decimal.js';
 export { adaStr, coverageLine, dayAgo, feedCountersLine, priceChangePct, resumesOf, tokenStr } from './format.js';
 export { summarizeDay, summarizeRun, type DaySummary } from './summary.js';
+export { effectiveTickIntervalSec, missingTicksCell, type TickCadence } from './cadence.js';
 export { BLOCKFROST_FREE_DAILY_QUOTA, MIN_PROJECTION_ELAPSED_SEC, QUOTA_OK_BELOW, digestLines, utcMidnight, type DigestInput } from './digest.js';
 export {
   checkDigestLines, checkDisk, checkEnv, checkFakeRows, checkMigrations, checkNode, checkProcesses,
