@@ -31,6 +31,12 @@ drift:
 
 Until that is decided, the table above is the rule.
 
+Both old trees carry a `README.md` signpost pointing here, so the warning is read at the
+moment someone is about to add a file to the wrong one: [`docs/specs/README.md`](specs/README.md)
+and [`docs/plans/README.md`](plans/README.md). **The risk being prevented is split-brain** —
+half the future specs in one tree, half in the other, so neither is complete. That is worse
+than either location alone.
+
 ## What Spec Kit actually adds here
 
 The honest accounting, because this repo already had specs and plans:
