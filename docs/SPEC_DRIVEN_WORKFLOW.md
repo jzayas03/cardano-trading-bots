@@ -19,17 +19,22 @@ locations whose names differ by one path segment:
 
 **This is a real wart, stated rather than hidden.** Consolidate-forward was chosen for the
 same reason as in the sibling repos: moving history does not make new work consistent, and
-the old paths are cited from merged PRs and from the README. But `specs/` next to
-`docs/specs/` is genuinely confusable, and it is worth a deliberate decision rather than
-drift:
+the old paths are cited from merged PRs and from the README.
 
-- **Keep both as described** (current state) — zero churn, one confusing pair of names.
-- **Or retire Spec Kit's `specs/`** and keep writing `docs/specs/` + `docs/plans/`, using Spec
-  Kit only for its constitution, `tasks.md` and `speckit-analyze`. That needs the scripts'
-  `SPECS_DIR` pointed at `docs/specs`, which diverges from upstream and will be overwritten by
-  the next `specify init`.
+**Decided 2026-09-13 by the founder: keep both, and signpost.** The table above is the rule.
+The three options and why the other two lost:
 
-Until that is decided, the table above is the rule.
+| Option | Verdict |
+|---|---|
+| **Keep both, signpost the old trees** | **Chosen.** Zero churn, fully reversible, and the confusion is addressed where it happens. |
+| Point Spec Kit at `docs/specs/` | **Rejected.** `SPECS_DIR="$REPO_ROOT/specs"` is hardcoded in `.specify/scripts/bash/create-new-feature.sh` — no env var, no config (`SPECIFY_INIT_DIR` overrides the project root, not this). It means editing a vendored script that `specify init --force` silently overwrites on the next upgrade, after which features quietly start landing in `/specs` again with nothing failing. A confusing pair of names beats a fuse. |
+| Use Spec Kit for its constitution only, keep writing `docs/` | **Not chosen, but kept as the retreat.** It cleanly avoids the collision, but `speckit-analyze` and `tasks.md` both require the `spec.md`/`plan.md`/`tasks.md` layout, so it keeps the biggest win and loses the only two new capabilities. |
+
+**The retreat is cheap, and that is deliberate.** If choosing a directory keeps causing
+hesitation two or three features from now, take the third option: stop invoking
+`speckit-specify` and remove an empty `/specs`. That is a reversal, not a migration — which
+is the other reason the vendored edit was rejected, since it would accumulate a diff someone
+has to remember to re-apply.
 
 Both old trees carry a `README.md` signpost pointing here, so the warning is read at the
 moment someone is about to add a file to the wrong one: [`docs/specs/README.md`](specs/README.md)
