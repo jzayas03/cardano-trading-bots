@@ -63,9 +63,21 @@ npm run test:pg     # RUN_PG_TESTS=1 — THE gate
 npm run lint        # eslint + typecheck
 ```
 
-**`npm test` runs `vitest run` and SKIPS every Postgres test.** It is green on a persistence
-layer that is entirely broken. Only `test:pg` sets `RUN_PG_TESTS=1`. `test:live`
-(`RUN_LIVE_TESTS=1`) is a third suite that hits a real source and is opt-in by design.
+**`RUN_PG_TESTS=1` is the gate, and no invocation without it is evidence about the persistence
+layer.** `npm test` runs `vitest run` and skips every Postgres test — green on a persistence
+layer that is entirely broken. So does **`npx vitest`**, and so does a single-file run. Only
+`test:pg` sets the variable. `test:live` (`RUN_LIVE_TESTS=1`) is a third suite that hits a real
+source and is opt-in by design.
+
+Naming only `npm test` here would miss the invocation that has actually caused harm. `npx vitest`
+is a legitimate inner loop — `docs/plans/` uses `npx vitest run packages/<pkg>` for targeted TDD
+throughout, and that is correct for iterating on a non-Postgres package. What it is not is proof.
+Twice in one week a reinjection ran under it and reported a number that looked like a result:
+once **all seven tests skipped**, read for a moment as a pass; once **five failures instead of
+seven**, the two Postgres ones silently absent. A suite that cannot run is not a verdict, and a
+partial suite is not the gate.
+
+Iterate with whatever is fastest. Prove with `test:pg`.
 
 Nothing is "implemented" until `test:pg` and `lint` have both been run and repaired until
 green, and failures are reported with their output. Citing `npm test` as evidence is citing
@@ -128,4 +140,4 @@ than working around them. A principle that cannot be satisfied is a reason to st
 not to proceed with an exception. In particular: no skill may lower the cost model, relax the
 promotion gate, or cite `npm test` as the test gate.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-13
+**Version**: 1.1.0 | **Ratified**: 2026-09-13 | **Last Amended**: 2026-09-13

@@ -74,10 +74,11 @@ Skills are invoked by name (the Claude integration uses `-`, so `speckit-specify
 
 ## Two constraints specific to this repo
 
-**The gate is `npm run test:pg`, not `npm test`.** Plain `npm test` runs `vitest run` and
-**skips every Postgres test** — it is green on a persistence layer that is entirely broken.
-A skill that reports "tests pass" after `npm test` has verified the wrong thing. Constitution
-Principle IV governs.
+**The gate is `RUN_PG_TESTS=1`, which only `npm run test:pg` sets.** Plain `npm test` runs
+`vitest run` and **skips every Postgres test** — green on a persistence layer that is entirely
+broken. So does `npx vitest`, and so does a single-file run; targeted runs are a fine inner loop
+and a poor proof. A skill that reports "tests pass" after any of them has verified the wrong
+thing. Constitution Principle IV governs.
 
 **A spec may not quietly change the cost model.** `speckit-specify` will happily write a
 plausible fee or threshold into a requirement. The 216 bps round-trip floor is measured, and
