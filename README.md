@@ -4,6 +4,8 @@ Paper-trading foundation for Cardano DEX bots. No real funds move in this repo.
 Design: `docs/specs/2026-09-05-paper-trading-foundation.md`. Plan: `docs/plans/`.
 Runbooks: `docs/ops/RUNBOOK-collector.md` (the collector), `docs/ops/RUNBOOK-paper.md` (paper mode),
 `docs/ops/RUNBOOK-dashboard.md` (the read-only web dashboard).
+Process: `docs/SPEC_DRIVEN_WORKFLOW.md` — when new work uses `specs/NNN-slug/` instead of `docs/specs/`,
+and `.specify/memory/constitution.md`, the project rules every agent session reads.
 
 ## Quick start
 
