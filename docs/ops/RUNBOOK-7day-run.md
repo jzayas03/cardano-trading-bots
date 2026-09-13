@@ -81,6 +81,17 @@ itself any other way.
 
 Do them on day 2, not day 7, so a failure still leaves time to fix and restart.
 
+> **Before running either drill, check `Restart=` on `ctb-paper@.service`.** It is `Restart=always`,
+> and `ExecStart` is `paper-start.sh` — so systemd relaunches the unit within `RestartSec` of the
+> process exiting, and the manual `--resume` below never gets the chance to run. Whether that
+> relaunch resumes or FORKS depends on the deployed code: before #113, `paper-start.sh` matched only
+> `status='running'`, so a clean SIGINT — which writes `finished`/`stop_reason='signal'` — forked
+> every time. The drill would then be manufacturing the exact defect of 2026-09-11 on a live week.
+>
+> `systemctl stop` the unit first (that suppresses the restart), drill, then bring it back. And on a
+> deployment older than #113, do not run the clean-restart drill on a run you cannot afford to split.
+
+
 - **Clean restart.** Stop one run with `pkill -INT -f 'main.ts paper -- rsi-mean-reversion'`, confirm
   `runs.status = 'finished'` and `stop_reason = 'signal'`, wait one interval, then
   `npm run paper -- rsi-mean-reversion SNEK --resume <id>`. Confirm `paper_orders.seq` continues and
@@ -141,11 +152,18 @@ what the next step needs. **Any FAIL stops the sequence.** Every fact it cannot 
 FAIL, not a pass — a check that could not run is not a verdict, and here the cost of stopping to look
 is minutes while the cost of proceeding on an unknown is the week's data.
 
+**The run ids are 147, 148 and 149, not 146, 147, 148.** Run 146 (rsi-mean-reversion) finished at
+the 2026-09-11 06:16 restart and its successor is 149; the history is intact across the two rows
+(217 + 70 equity points) but the identity is not. `beforeStopChecks` compares the running set for
+EXACT equality, deliberately — so the old list does not warn, it FAILS, and on cutover morning a
+stale doc reads as an alarming unexplained failure. Re-read the ids before the day rather than
+trusting this line: `SELECT id, strategy_id FROM runs WHERE mode='paper' AND status='running';`
+
 `SHA` below is the commit being deployed. Pass it explicitly: without `--expect-sha` the check
 refuses, because comparing the checkout with itself would read OK while proving nothing.
 
 ```bash
-npm run cutover -- --phase before-stop --expect-sha SHA --runs 146,147,148
+npm run cutover -- --phase before-stop --expect-sha SHA --runs 147,148,149
 ```
 
 Then, and only if that is all OK:
@@ -154,7 +172,7 @@ Then, and only if that is all OK:
    `systemctl stop ctb-paper@ma-crossover ctb-paper@rsi-mean-reversion ctb-paper@buy-and-hold ctb-collector`
 
 2. **Prove the stop was clean.**
-   `npm run cutover -- --phase after-stop --runs 146,147,148`
+   `npm run cutover -- --phase after-stop --runs 147,148,149`
    The load-bearing check is **no running rows**. `paper-start.sh` RESUMES a row marked `running`, so
    one row left in that state turns the next start into a silent continuation of the old run — and
    the ids look right either way, which is what makes it dangerous rather than merely wrong.
