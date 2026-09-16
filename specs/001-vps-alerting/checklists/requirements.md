@@ -13,7 +13,7 @@
 
 ## Requirement Completeness
 
-- [ ] No [NEEDS CLARIFICATION] markers remain — one remains: FR-017, provider/channel and escalation policy (founder decision, stated as such in the input)
+- [x] No [NEEDS CLARIFICATION] markers remain — FR-017 resolved by the founder on 2026-09-16 (hosted dead-man's-switch service, free tier, push; default escalation)
 - [x] Requirements are testable and unambiguous
 - [x] Success criteria are measurable
 - [x] Success criteria are technology-agnostic (no implementation details)
@@ -32,7 +32,8 @@
 ## Notes
 
 - Items marked incomplete require spec updates before `/speckit-clarify` or `/speckit-plan`
-- FR-017 is deliberately left for the founder: the input says "the founder decides the provider
-  ... and the escalation policy". Everything else in the spec is provider-independent by design.
+- FR-017 was the founder's call by the input's own words and was made on 2026-09-16: option A of
+  the three presented. Everything else in the spec is provider-independent by design, so the choice
+  can change without touching another requirement.
 - "Service manager", "unit", "watchdog", "environment file" name things that already exist on the
   box and in the runbooks; they are the product's vocabulary, not implementation choices made here.

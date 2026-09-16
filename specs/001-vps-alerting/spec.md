@@ -249,9 +249,12 @@ alert within one minute and the command's output says the service accepted the r
 - **FR-016**: The runbook MUST gain a drill section covering silence, failure, unit failure,
   maintenance and self-test, each with the expected arrival bound, and each drill MUST be executed
   once on the real box with the observed times recorded before the feature is declared done.
-- **FR-017**: The alert channel and escalation policy MUST be [NEEDS CLARIFICATION: provider and
-  channel — a hosted dead-man's-switch service with phone push, a self-hosted push server, or e-mail
-  only; and escalation — push only, or push then repeat, and whether quiet hours apply].
+- **FR-017**: The alert channel MUST be a hosted dead-man's-switch service, on its free tier, that
+  detects silence itself and delivers push notifications to the founder's phone; the service, not
+  the box, decides "silent". Escalation is the default stated in FR-006 and FR-007: one alert on
+  transition to failed, one recovery notice, at most one reminder per hour while open, and no quiet
+  hours. (Founder decision, 2026-09-16: a self-hosted push server would need a second machine that
+  also has to be watched, and e-mail has no silence detection, which is the failure of 2026-09-16.)
 
 ### Key Entities
 
