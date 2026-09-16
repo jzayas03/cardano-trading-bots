@@ -59,9 +59,10 @@ three-fold range of order sizes. That is not a coincidence and it is not slippag
 transactions**, and this note does not pretend to. Candidates: a different pool type, a different
 executor, or a fee taken on the token side rather than in ADA.
 
-The 1% is not the pool's own fee: the same datums carry `LpFeeNumerator/Denominator` of 13/10000,
-which is 0.13%, and the pool's payout already nets that out. The credential collecting the 1%
-contributes no input to the transaction, so it is not a pool.
+~~The 1% is not the pool's own fee: the same datums carry `LpFeeNumerator/Denominator` of 13/10000,
+which is 0.13%...~~ **WITHDRAWN 2026-09-16, see the postscript.** That reading of datum field 7 was
+wrong. What stands: the credential collecting the extra contributes no input to the transaction, so
+it is not a pool.
 
 Two further orders were ADA-to-token and are excluded: there the pool *gains* ADA, so "largest
 positive net" identifies the pool rather than the executor. Measuring those needs the pool
@@ -109,3 +110,69 @@ guess, not that the *shape* of the formula is wrong.
 2. Read the Splash contract or SDK for the executor fee formula, rather than inferring it.
 3. Decide whether `VenueCosts` grows a proportional term, or whether Splash and VyFinance are
    excluded from the tradable venue set until one exists.
+
+
+---
+
+# Postscript: the split is the POOL, and one claim above is withdrawn
+
+The three anomalies were read in full and compared field by field against a control.
+
+## What distinguishes them: nothing in the order
+
+The two order datums are **structurally identical and identical in every fee-bearing field**:
+twelve fields each, `BaseFee` 1 ADA (field 4), `ExecutionFee` 2 ADA (field 8), and the same fee
+collector in field 11. The order does not declare what is actually charged.
+
+## What distinguishes them: the pool
+
+Grouping all ten token-to-ADA fulfilments by the pool credential splits them perfectly:
+
+| pool credential | tx | proceeds (ADA) | Splash took | % of proceeds |
+|---|---|---:|---:|---:|
+| `cb684a69e78907` | `303ad0f40e` | 165.71 | 3.6492 | 2.202% |
+| `cb684a69e78907` | `a1ff5d368c` | 221.94 | 4.2172 | 1.900% |
+| `cb684a69e78907` | `354413c9f1` | 363.48 | 5.6474 | 1.554% |
+| `cb684a69e78907` | `8e6ed6799f` | 412.00 | 6.1370 | 1.490% |
+| `cb684a69e78907` | `3fd131c7a5` | 420.19 | 6.2202 | 1.480% |
+| `cb684a69e78907` | `1d21641e54` | 499.72 | 7.0236 | 1.406% |
+| `cb684a69e78907` | `a2b006a418` | 555.36 | 7.5856 | 1.366% |
+| `f002facfd69d51` | `4de36672b0` | 1,795.58 | 2.0000 | 0.111% |
+| `f002facfd69d51` | `3db1c18f05` | 1,816.10 | 2.0000 | 0.110% |
+| `f002facfd69d51` | `69625b1fc1` | 1,837.14 | 2.0000 | 0.109% |
+
+Seven orders on pool `cb684a69`: **2 ADA plus 1.00% of proceeds**, fitting to within a hundredth of
+a percent. Three orders on pool `f002facf`: **flat 2 ADA**. **The fee collector is the same
+credential in every one of the ten.** So it is not a different executor, not a different order type
+and not discretion — it is a property of the pool.
+
+## Why this is worse than a missing percentage term
+
+`VENUE_COSTS` is keyed by **venue**. This fee varies **within** a venue, by pool. So even adding a
+proportional field would not be enough: two Splash pools charge different formulas, and a
+venue-level entry cannot represent both. The cost model's key is wrong for this venue, not only its
+shape.
+
+The practical consequence for the depth filter: it selects the deepest pool for a token. On this
+evidence the deepest pool is not necessarily the cheapest, and the difference is over a percent of
+notional — far larger than any batcher fee this repo models.
+
+## The withdrawn claim
+
+The note above asserted that the same datums carry an LP fee of 13/10000, so 0.13%, and used that
+to argue the 1% was not a pool fee. **That is withdrawn.** Field 7 is a pair of integers whose
+meaning is not pinned down: in one sampled unspent order it read `(13, 10000)`, while in every
+fulfilled order read here it equals `(minReceive, SwapInAmount)` — a duplicate of fields 5 and 3,
+not a fee. Dexter's definition labels the position `LpFeeNumerator/Denominator`; the chain does not
+agree, at least not uniformly.
+
+The conclusion the claim was supporting does not depend on it. What supports it instead: the
+credential collecting the extra ADA contributes **no input** to the transaction, and a pool always
+does. It is a fee address, not a pool.
+
+## Still open
+
+- The actual formula. Ten orders on two pools show *that* it varies by pool, not *how* it is
+  parameterised. That needs the Splash contract or SDK, not more samples.
+- Whether other venues do this. WingRiders and VyFinance were never checked for per-pool fee
+  variation, and the same question applies to them.
