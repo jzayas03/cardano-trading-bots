@@ -84,7 +84,7 @@ change deployed with a sha.
 | 0b wrong credential † | `env CTB_HEALTHCHECK_URL=https://<same host>/ping/00000000-0000-0000-0000-000000000000 npm run alert -- test` | exit 1 within 1 min; output `rejected (http 200 "OK (not found)") host=<host>` | | `.env` untouched: `grep -c '^CTB_HEALTHCHECK_URL=' .env` still 1, value unchanged |
 | 1 silence | as root: `systemctl stop ctb-watch.timer`; wait; `systemctl start ctb-watch.timer` | "down" push at 35 min ± the service's scheduler tick; "up" within one cycle (15 min) of the start | | stop nothing else |
 | 2 failing check | **only in a stopped window** (see the warning above): `systemctl stop ctb-paper@<strategy>`; wait one cycle; restart | push within 15 min whose text contains `FAIL: paper <strategy> — marked running but no process is running it`; recovery ("up") the next cycle after the restart | | otherwise `npm run alert -- send --kind fail --body 'drill 2 deferred'` and record "deferred to the next stopped window" with the date |
-| 3 unit failure † | as root: `systemctl start ctb-paper@no-such-strategy`; afterwards `systemctl reset-failed ctb-paper@no-such-strategy` | five failures in ≤ 5 min then `start-limit-hit`; a push naming `ctb-paper@no-such-strategy.service` and `start-limit-hit` within 2 min of the fifth failure; `journalctl -u 'ctb-alert@*' --since -10min` shows one handler run; `SELECT count(*) FROM runs WHERE status='running'` unchanged | | a bad strategy never reaches `createRun`, so no run row |
+| 3 unit failure † | as root: `systemctl start ctb-paper@no-such-strategy`; afterwards `systemctl reset-failed ctb-paper@no-such-strategy` | five restarts in ≤ 5 min, then the unit is `failed` (`Result=exit-code`, `NRestarts=5`; systemd does NOT report `start-limit-hit` on the unit itself); the handler runs on EVERY failed attempt, so `journalctl -u 'ctb-alert@*' --since -10min` shows six runs and `alert.log` six lines, each `-> /1: http 200 OK`; the service pages ONCE, on the first, and dedupes the rest; `SELECT count(*) FROM runs WHERE status='running'` unchanged | 2026-09-16: started 16:59:14Z; handler fired 16:59:15Z (first attempt) and at 17:00:17, 17:01:18, 17:02:19, 17:03:20, 17:04:20Z; unit `failed` 17:04:23Z; run rows 4 before and after; push arrival: _founder to record_ | a bad strategy never reaches `createRun` (`paper.ts` throws at line 348, `createRun` is line 490), so no run row. Defect found by this drill: the body read `ctb/paper@no/such/strategy.service` — the handler unescaped `%i`; fixed in #137, handler re-install pending its merge |
 | 3b backup failure † | as root: `systemd-run --unit=ctb-backup-drill -p User=ctb -p WorkingDirectory=/home/ctb/cardano-trading-bots -p OnFailure=ctb-alert@ctb-backup-drill.service env R2_BUCKET=does-not-exist scripts/scheduled-backup.sh` | push naming `ctb-backup-drill.service` within 2 min | | a transient unit with the same hook; the real `.env` is untouched. Record the exact command if the box's systemd wants different property syntax |
 | 4 maintenance † | `npm run maintenance -- start --minutes 45 --reason drill`; repeat drill 3; `npm run maintenance -- end`; repeat drill 3 | during the window: no push, a `/log` entry in the ping log with `drill` in the body; after `end`: a "maintenance ended (manual): drill" log entry, then a push | | liveness is never suppressed: `alive` entries keep arriving every 15 min throughout (only after the watchdog change is deployed; note it if not yet) |
 | 4b expiry | `npm run maintenance -- start --minutes 1 --reason expiry`; wait one watchdog cycle | `watch.log` shows "maintenance ended (expired)"; `ls ~/ctb-maintenance.json` → no such file; the ping log shows the `/log` entry | | leave no window open |
@@ -96,6 +96,9 @@ no `npm ci`, no checkout of the live tree, `daemon-reload` only. That protects t
 within a day and enables the † rows. The watchdog ping (`watch`, `alert`, `maintenance`) lands
 with the next sha, which enables rows 1, 2, 4b and 5. Between the two, the check in the service
 should be paused or given a long grace, or it will page for silence it was never promised.
+Before the watchdog change is deployed there is no `alert test`; prove the URL from the box with the
+service's log endpoint instead (records, never pages), as `ctb`, printing only the response:
+`set +x; U=$(grep '^CTB_HEALTHCHECK_URL=' ~/cardano-trading-bots/.env | cut -d= -f2-); curl -fsS -m 10 -X POST --data-binary "setup test from $(hostname)" "$U/log"; echo` → `OK`.
 
 **SC-009 read-back.** Once rows 1 and 3 have observed times: a stopped paper run now pages within
 one watchdog period, and a unit that dies pages within two minutes; the 2026-09-16 eleven-hour gap
@@ -103,4 +106,23 @@ could not recur unnoticed.
 
 ## Deployment history
 
-_(T035: the founder's decision on timing, recorded here with the time.)_
+- **2026-09-16 ~16:50 UTC, T035 (founder):** option (c) — unit files and handler by hand now, with a
+  `daemon-reload` only, while runs 150-153 finish their measurement week; the watchdog ping ships with
+  the next sha. Handler installed OUTSIDE the live checkout (`/usr/local/lib/ctb/`) so a hand-placed
+  file can never dirty the tree the cutover gate checks.
+- **2026-09-16 ~16:55 UTC, T037 (founder):** check created in the service (period 15 min, grace 20 min,
+  push integration); `CTB_HEALTHCHECK_URL` added to `.env` by hand on the box (56 chars, `hc-ping.com`,
+  UUID path, mode 600); `/log` proof from the box answered `OK`.
+- **2026-09-16 16:58 UTC, T036:** hand-deploy from merged sha `fb02717` (#135 + #136): checksums matched
+  local vs box; four unit files installed to `/etc/systemd/system/`; handler to
+  `/usr/local/lib/ctb/alert-unit-failure.sh` (root:root 755); `daemon-reload`; `systemd-analyze verify`
+  no errors; `systemctl show -p OnFailure` reads `ctb-alert@<unit>.service` on paper, collector, backup;
+  `ActiveEnterTimestamp` identical before/after for the collector and all four paper units; live tree
+  `git status --porcelain` empty at `722391f`.
+- **2026-09-16 16:59 UTC, drill 3:** see the table. Defect: unit name mangled by `systemd-escape
+  --unescape`; fix in #137; the handler on the box is re-installed from #137's merged sha (one
+  `install -D`, no unit change, no reload).
+- **Pending:** the watchdog change (this PR) with the next sha deploy (T038); the check's grace is
+  20 min already, so between T036 and T038 the service will report the box as down for silence —
+  expected, and the founder pauses the check in the service's UI until T038 if that page is unwanted.
+
