@@ -6,6 +6,7 @@ import {
   SIZE_BUCKETS_LOVELACE,
   type CostDistribution,
   type ExclusionRecord,
+  type ThinPoolRecord,
   type ExclusionReason,
   type SnapshotInput,
 } from '@ctb/reports';
@@ -87,6 +88,7 @@ function bps(n: number | null): string {
 export function renderCostFloor(
   distributions: readonly CostDistribution[],
   exclusions: readonly ExclusionRecord[],
+  thinPools: readonly ThinPoolRecord[],
   provenance: {
     since: string;
     minObservations: number;
@@ -94,6 +96,7 @@ export function renderCostFloor(
     firstTs: Date | null;
     lastTs: Date | null;
     venuesUsed: ReadonlyArray<{ venue: string; batcherAda: string; basis: string; readAt: string }>;
+    minDepthAda: number;
   },
 ): string[] {
   const out: string[] = [];
@@ -111,6 +114,7 @@ export function renderCostFloor(
   out.push(`  sufficiency bar      n >= ${provenance.minObservations} per (pool, size)`);
   out.push(`  size buckets (ADA)   ${provenance.sizes.map((s) => ada(s)).join(', ')}`);
   out.push(`  headline floor       p90 (founder decision D2: a floor is a cost you can survive)`);
+  out.push(`  depth floor          ${provenance.minDepthAda} ADA a side, or the pool is not priced`);
   for (const v of provenance.venuesUsed) {
     out.push(`  venue ${v.venue.padEnd(14)} batcher ${v.batcherAda} ADA  basis=${v.basis}  readAt=${v.readAt}`);
   }
@@ -144,6 +148,14 @@ export function renderCostFloor(
   for (const e of exclusions) {
     out.push(`  ${e.venue.padEnd(16)} ${e.reason.padEnd(16)} ${e.snapshotsAvailable} snapshots given up`);
     out.push(`  ${''.padEnd(16)} ${e.detail}`);
+  }
+  out.push('');
+
+  // Also never omitted. A pool dropped for depth has not been judged expensive; it has not been
+  // judged at all, and those are different facts.
+  out.push(`TOO THIN TO PRICE (${thinPools.length} pools, below ${provenance.minDepthAda} ADA a side)`);
+  for (const t of thinPools) {
+    out.push(`  ${t.poolId.slice(0, 40).padEnd(40)} median depth ${ada(t.medianDepthLovelace).padStart(9)} ADA  ${t.snapshotsDropped} snapshots`);
   }
 
   return out;
@@ -181,10 +193,21 @@ export async function costFloorCommand(log: Logger, args: readonly string[]): Pr
       tvlLovelace: BigInt(r.tvl_lovelace ?? '0'),
     }));
 
-    const { observations, exclusions } = costObservations(
+    // Reuses the project's existing depth threshold rather than inventing a second one: its own
+    // justification ("a spread against a pool nobody can trade is not an opportunity") is exactly
+    // the reason a 9-lovelace pool must not quote a 19,982 bps cost.
+    const depthOverride = arg(args, '--min-depth-ada');
+    if (depthOverride !== undefined && !(Number.isFinite(Number(depthOverride)) && Number(depthOverride) >= 0)) {
+      throw new Error('--min-depth-ada must be a non-negative number');
+    }
+    const minDepthLovelace =
+      depthOverride === undefined ? cfg.multiVenueMinDepthLovelace : BigInt(Math.round(Number(depthOverride))) * LOVELACE;
+    const minDepthAda = Number(minDepthLovelace / LOVELACE);
+
+    const { observations, exclusions, thinPools } = costObservations(
       snapshots,
       { cpmm: cpmmAmountOut, costsFor: tryCostsForPoolId, venueOf },
-      { sizes, excludedVenues: new Map(POLICY_EXCLUSIONS) },
+      { sizes, excludedVenues: new Map(POLICY_EXCLUSIONS), minDepthLovelace },
     );
     const distributions = costDistributions(observations, {
       minObservations,
@@ -204,12 +227,13 @@ export async function costFloorCommand(log: Logger, args: readonly string[]): Pr
       firstTs: times.length ? new Date(Math.min(...times)) : null,
       lastTs: times.length ? new Date(Math.max(...times)) : null,
       venuesUsed,
+      minDepthAda,
     };
 
     if (asJson) {
-      console.log(JSON.stringify({ provenance, distributions, exclusions }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2));
+      console.log(JSON.stringify({ provenance, distributions, exclusions, thinPools }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v), 2));
     } else {
-      for (const line of renderCostFloor(distributions, exclusions, provenance)) console.log(line);
+      for (const line of renderCostFloor(distributions, exclusions, thinPools, provenance)) console.log(line);
     }
     // Exit 0 whether or not anything is sufficient: "no route has enough data" is a finding.
   } finally {

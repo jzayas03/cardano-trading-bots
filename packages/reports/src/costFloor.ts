@@ -100,6 +100,20 @@ export interface ExclusionRecord {
   snapshotsAvailable: number;
 }
 
+/**
+ * A pool dropped for being too thin to price, recorded per POOL rather than per venue because
+ * depth is a property of the pool and varies over time. Never silently dropped: the first real run
+ * showed a pool with a median TVL of 9 lovelace quoting 19,982 bps, and a figure like that is an
+ * artefact, not a cost. Constitution Principle III: a quoted price is not a market.
+ */
+export interface ThinPoolRecord {
+  poolId: string;
+  venue: string;
+  snapshotsDropped: number;
+  medianDepthLovelace: bigint;
+  requiredLovelace: bigint;
+}
+
 export interface CostDistribution {
   poolId: string;
   venue: string;
@@ -135,6 +149,13 @@ export interface CostObservationOptions {
   sizes?: readonly bigint[];
   /** Venues excluded by policy before any pricing (D1). */
   excludedVenues?: ReadonlyMap<string, { reason: ExclusionReason; detail: string }>;
+  /**
+   * Minimum ADA-side reserve for a snapshot to be worth pricing. Defaults to 0, meaning no filter;
+   * the CLI supplies the project's existing `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA`, whose own
+   * justification is the same one that applies here -- "a spread against a pool nobody can trade is
+   * not an opportunity". Reusing that threshold beats inventing a second one.
+   */
+  minDepthLovelace?: bigint;
 }
 
 /** bps to three decimals, from exact bigint arithmetic. `Number(x)/1e6` is banned in this package. */
@@ -158,12 +179,14 @@ export function costObservations(
   snapshots: readonly SnapshotInput[],
   deps: CostObservationDeps,
   opts: CostObservationOptions = {},
-): { observations: CostObservation[]; exclusions: ExclusionRecord[] } {
+): { observations: CostObservation[]; exclusions: ExclusionRecord[]; thinPools: ThinPoolRecord[] } {
   const sizes = opts.sizes ?? SIZE_BUCKETS_LOVELACE;
   const excluded = opts.excludedVenues ?? new Map<string, { reason: ExclusionReason; detail: string }>();
+  const minDepth = opts.minDepthLovelace ?? 0n;
   const observations: CostObservation[] = [];
   const excludedCounts = new Map<string, number>();
   const noCostVenues = new Map<string, number>();
+  const thin = new Map<string, { venue: string; depths: bigint[] }>();
 
   for (const s of snapshots) {
     const venue = deps.venueOf(s.poolId);
@@ -183,6 +206,14 @@ export function costObservations(
     // cpmmAmountOut throws on non-positive reserves; refuse before calling rather than catching.
     if (s.reserveBase <= 0n || s.reserveQuote <= 0n) continue;
     if (!Number.isInteger(s.feeBps) || s.feeBps < 0 || s.feeBps >= 10_000) continue;
+
+    // Too thin to price. Recorded, not silently dropped.
+    if (s.reserveQuote < minDepth) {
+      const t = thin.get(s.poolId) ?? { venue, depths: [] };
+      t.depths.push(s.reserveQuote);
+      thin.set(s.poolId, t);
+      continue;
+    }
 
     const fixed = (costs.batcherFeeLovelace + costs.networkFeeLovelace) * 2n;
 
@@ -239,7 +270,18 @@ export function costObservations(
     });
   }
   exclusions.sort((a, b) => a.venue.localeCompare(b.venue));
-  return { observations, exclusions };
+
+  const thinPools: ThinPoolRecord[] = [...thin.entries()]
+    .map(([poolId, t]) => ({
+      poolId,
+      venue: t.venue,
+      snapshotsDropped: t.depths.length,
+      medianDepthLovelace: medianBigint(t.depths),
+      requiredLovelace: minDepth,
+    }))
+    .sort((a, b) => a.venue.localeCompare(b.venue) || a.poolId.localeCompare(b.poolId));
+
+  return { observations, exclusions, thinPools };
 }
 
 export interface CostDistributionOptions {
