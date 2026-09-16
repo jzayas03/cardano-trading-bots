@@ -37,7 +37,7 @@ contain PHI/PII, a secret, a raw payload, or a relative date. Adopted 2026-09-16
    **How to apply**. If it is reusable across tasks, propose a repo skill instead of a memory.
 4. **Pruning (every write-back):**
    - Contradiction → the newer dated fact wins; delete the older one or mark it superseded in one line.
-   - `MEMORY.md`: one line per file, ≤ 25 words per line, ≤ 60 lines total. No content in the index.
+   - `MEMORY.md`: ≤ 25 words per line, ≤ 1,500 words total; a line may bundle up to 5 same-topic files. No content in the index.
    - `episodes.md` ≤ 40 lines. On overflow distill the oldest lines into a semantic or procedural file, or delete them.
    - Delete `.bak` files, archive copies, and any memory the code, `git log`, or CLAUDE.md already records.
    - Unreferenced for 90 days, or low confidence → delete.
@@ -46,6 +46,6 @@ contain PHI/PII, a secret, a raw payload, or a relative date. Adopted 2026-09-16
 
 ## Self-check before ending a session
 
-- Does every new memory file have an index line, and is the index still ≤ 60 lines?
+- Does every new memory file have an index line, and is the index still ≤ 1,500 words?
 - Does any memory line contain PHI, a secret, or a relative date?
 - Would a fresh session reading only the index and `episodes.md` know what happened and what to avoid?
