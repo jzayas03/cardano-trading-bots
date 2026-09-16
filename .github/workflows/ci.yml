@@ -1,6 +1,6 @@
 # CI for cardano-trading-bots.
-# Runs lint, unit tests, and the Postgres-backed tests against a real postgres:16 service,
-# on every pull request to main and every push to main.
+# Runs shellcheck, lint, unit tests, and the Postgres-backed tests against a real postgres:16
+# service, on every pull request to main and every push to main.
 # Note: the pg tests use RUN_PG_TESTS=1 and DATABASE_URL; without them they are skipped, so
 # both steps are needed for the suite to count as run.
 
@@ -46,6 +46,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Shell scripts (shellcheck)
+        # Before `npm ci` on purpose: a broken script then fails in seconds instead of two minutes
+        # in. shellcheck ships on ubuntu-latest, so there is nothing to install.
+        #
+        # Scope is this repo's own shell. infra/vps/*.sh runs as root and rotates the database
+        # password, and until now it was the only code here that nothing checked. `.specify/` is
+        # excluded deliberately: it is vendored GitHub Spec Kit, regenerated upstream, and gating on
+        # findings we do not own buys drift rather than safety.
+        #
+        # An EMPTY match FAILS. Bare `shellcheck` with no arguments reads stdin, so a rename that
+        # moved these scripts out of the glob would otherwise turn this gate green by checking
+        # nothing at all -- the same failure shape as an empty service list reading as healthy.
+        run: |
+          files="$(git ls-files 'infra/**/*.sh' 'scripts/*.sh')"
+          if [ -z "$files" ]; then
+            echo "::error::shellcheck matched no files; the glob in ci.yml is stale"
+            exit 1
+          fi
+          echo "$files"
+          echo "$files" | xargs shellcheck
 
       - uses: actions/setup-node@v4
         with:

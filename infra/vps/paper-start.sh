@@ -26,8 +26,12 @@ shift 2
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 
-# shellcheck disable=SC1091
-set -a; . ./.env; set +a
+# Split off the `.` so the directive actually covers it: a directive binds to the NEXT command, so
+# on `set -a; . ./.env; set +a` it bound to `set -a` and the source was never exempt at all.
+set -a
+# shellcheck source=/dev/null  # .env is gitignored, so it can never be followed from a checkout
+. ./.env
+set +a
 
 if [ "${CTB_PAPER_FORCE_NEW:-0}" = "1" ]; then
   echo "CTB_PAPER_FORCE_NEW=1: starting a new run for $STRATEGY/$TICKER without looking for one to resume"
