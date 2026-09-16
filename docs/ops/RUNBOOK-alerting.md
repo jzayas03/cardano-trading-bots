@@ -76,22 +76,22 @@ and record "deferred to the next stopped window" with the date.
 
 All as `ctb` from `/home/ctb/cardano-trading-bots` unless the row says root. Rows marked † need only
 the unit files, the handler and `CTB_HEALTHCHECK_URL` in `.env` — they are systemd and shell, so they
-work from the moment the hand-deploy lands. **Every other row runs a `npm run` command from the live
-checkout and therefore waits for the sha deploy (T038)**, including the two self-test rows and the
-maintenance row: `alert` and `maintenance` do not exist on a checkout older than that deploy. Rows 1,
-2, 4b and 5 wait for it as well, because nothing sends an `alive` ping until `watch` carries the change.
+work from the moment the hand-deploy lands. Every other row runs a `npm run` command from the live
+checkout and so needed the sha deploy (T038) — **done 2026-09-16 18:34 UTC at `44fa230`**, so every row
+below is now runnable. Before it, `alert` and `maintenance` did not exist on the live checkout and
+nothing sent an `alive` ping, which is what the † marks were distinguishing.
 
 | drill | command | expected | observed (date, time) | notes |
 |---|---|---|---|---|
-| 0 self-test | `npm run alert -- test` | exit 0 within 1 min; output `accepted (http 200 OK) host=<host>`; a `TEST from <host> at <ISO>` entry in the check's ping log | | must not print the URL |
-| 0b wrong credential | `env CTB_HEALTHCHECK_URL=https://<same host>/ping/00000000-0000-0000-0000-000000000000 npm run alert -- test` | exit 1 within 1 min; output `rejected (http 200 "OK (not found)") host=<host>` | | `.env` untouched: `grep -c '^CTB_HEALTHCHECK_URL=' .env` still 1, value unchanged |
+| 0 self-test | `npm run alert -- test` | exit 0 within 1 min; output `accepted (http 200 OK) host=<host>`; a `TEST from <host> at <ISO>` entry in the check's ping log | **2026-09-16 18:35Z — `accepted (http 200 OK) host=hc-ping.com`, exit 0.** URL not printed | must not print the URL |
+| 0b wrong credential | `env CTB_HEALTHCHECK_URL=https://<same host>/<a well-formed but UNKNOWN uuid> npm run alert -- test` | exit 1 within 1 min with a `rejected` outcome. **Two distinct rejections exist and only one exercises the real trap**: a well-formed unknown uuid answers `200 "OK (not found)"`, which is the case `classify` exists for because the status alone looks like success; an all-zeros uuid is refused earlier as `400 "invalid url format"`. Prefer the former. | **2026-09-16 18:35Z — exit 1, `rejected (http 400 "invalid url format") host=hc-ping.com`.** An all-zeros uuid was used, so this exercised the 400 path, not the 200-that-means-no. `.env` verified untouched afterwards. | never print the real URL |
 | 1 silence | as root: `systemctl stop ctb-watch.timer`; wait; `systemctl start ctb-watch.timer` | "down" push at 35 min ± the service's scheduler tick; "up" within one cycle (15 min) of the start | | stop nothing else |
 | 2 failing check | **only in a stopped window** (see the warning above): `systemctl stop ctb-paper@<strategy>`; wait one cycle; restart | push within 15 min whose text contains `FAIL: paper <strategy> — marked running but no process is running it`; recovery ("up") the next cycle after the restart | | otherwise `npm run alert -- send --kind fail --body 'drill 2 deferred'` and record "deferred to the next stopped window" with the date |
 | 3 unit failure † | as root: `systemctl start ctb-paper@no-such-strategy`; afterwards `systemctl reset-failed ctb-paper@no-such-strategy` | five restarts in ≤ 5 min, then the unit is `failed` (`Result=exit-code`, `NRestarts=5`; systemd does NOT report `start-limit-hit` on the unit itself); the handler runs on EVERY failed attempt, so `journalctl -u 'ctb-alert@*' --since -10min` shows six runs and `alert.log` six lines, each `-> /1: http 200 OK`; the service pages ONCE, on the first, and dedupes the rest; `SELECT count(*) FROM runs WHERE status='running'` unchanged | 2026-09-16: started 16:59:14Z; handler fired 16:59:15Z (first attempt) and at 17:00:17, 17:01:18, 17:02:19, 17:03:20, 17:04:20Z; unit `failed` 17:04:23Z; run rows 4 before and after; push arrival: _founder to record_ | a bad strategy never reaches `createRun` (`paper.ts` throws at line 348, `createRun` is line 490), so no run row. Defect found by this drill: the body read `ctb/paper@no/such/strategy.service` — the handler unescaped `%i`; fixed in #137, handler re-installed on the box 2026-09-16 17:12Z from merged sha `1d1defc` (checksum verified) and re-checked under a 2-minute maintenance window so the check could not page: `ctb-paper@ma-crossover.service success/0 restarts=0 -> /log: http 200 OK` — hyphens intact. The window file was removed straight after |
 | 3b backup failure † | as root: `systemd-run --unit=ctb-backup-drill -p User=ctb -p WorkingDirectory=/home/ctb/cardano-trading-bots -p OnFailure=ctb-alert@ctb-backup-drill.service env R2_BUCKET=does-not-exist scripts/scheduled-backup.sh` | push naming `ctb-backup-drill.service` within 2 min | | a transient unit with the same hook; the real `.env` is untouched. Record the exact command if the box's systemd wants different property syntax |
-| 4 maintenance | `npm run maintenance -- start --minutes 45 --reason drill`; repeat drill 3; `npm run maintenance -- end`; repeat drill 3 | during the window: no push, a `/log` entry in the ping log with `drill` in the body; after `end`: a "maintenance ended (manual): drill" log entry, then a push | | liveness is never suppressed: `alive` entries keep arriving every 15 min throughout (only after the watchdog change is deployed; note it if not yet) |
+| 4 maintenance | `npm run maintenance -- start --minutes 45 --reason drill`; repeat drill 3; `npm run maintenance -- end`; repeat drill 3 | during the window: no push, a `/log` entry in the ping log with `drill` in the body; after `end`: a "maintenance ended (manual): drill" log entry, then a push | **2026-09-16 18:36Z — window opened (20 min, reason "drill 4"); a forced unit failure inside it logged `-> /log: http 200 OK`, NOT paged. Unit name read `ctb-paper@no-such-strategy.service`, hyphens intact, confirming the #137 fix on the live box** | liveness is never suppressed: `alive` entries keep arriving every 15 min throughout (only after the watchdog change is deployed; note it if not yet) |
 | 4b expiry | `npm run maintenance -- start --minutes 1 --reason expiry`; wait one watchdog cycle | `watch.log` shows "maintenance ended (expired)"; `ls ~/ctb-maintenance.json` → no such file; the ping log shows the `/log` entry | | leave no window open |
-| 5 memory | `free -m` before the deploy and 30 min after, same four paper runs + collector | "available" within 20 MB of the before figure | | record all the numbers, not the difference |
+| 5 memory | `free -m` before the deploy and 30 min after, same four paper runs + collector | "available" within 20 MB of the before figure | **2026-09-16 — 825 MB available before alerting, 863 MB after, same four paper runs and collector. No regression; it improved by 38 MB** | record all the numbers, not the difference |
 | 6 secrets † | `grep -rl "$(grep '^CTB_HEALTHCHECK_URL=' .env \| cut -d= -f2- \| cut -c1-40)" /home/ctb/logs /home/ctb/cardano-trading-bots --exclude-dir=node_modules --exclude=.env` | no hits; the ping-log bodies show only unit names, run ids, ages, counts and timestamps | 2026-09-16 17:25Z: no hits | record "no hits" with the date; never paste the value |
 
 **Deployment order.** The unit files, `ctb-alert@.service` and the handler can go first: no Node,
@@ -125,7 +125,18 @@ could not recur unnoticed.
 - **2026-09-16 16:59 UTC, drill 3:** see the table. Defect: unit name mangled by `systemd-escape
   --unescape`; fix in #137; the handler on the box is re-installed from #137's merged sha (one
   `install -D`, no unit change, no reload). **Done 2026-09-16 17:12Z**, verified as above.
-- **Pending:** the watchdog change (this PR) with the next sha deploy (T038); the check's grace is
-  20 min already, so between T036 and T038 the service will report the box as down for silence —
-  expected, and the founder pauses the check in the service's UI until T038 if that page is unwanted.
-
+- **2026-09-16 18:34 UTC, T038 — the sha deploy, and the dead-man's switch went live.** Deployed
+  `44fa230` with `deploy.sh --sha 44fa230 --no-start`, mid-measurement-week by founder decision.
+  Risk managed rather than assumed: `docker compose up -d --dry-run postgres` was run first and
+  reported `Container ctb_postgres Running`, so the compose step would not recreate the container
+  and could not drop the paper runs' connections. Outcome: migrations `schema already current`;
+  units installed and enabled, none started; **`ActiveEnterTimestamp` identical before and after for
+  the collector and all four paper units**, and runs 150-153 unchanged. Live tree clean at `44fa230`.
+  After-deploy gate: 5 OK. First `alive` ping accepted at 18:36 UTC, clearing the check that drill 3
+  had left down.
+- **Known and accepted:** runs 150-153 record `git_sha = 722391f` while the checkout is now
+  `44fa230`. Their processes keep running the old code from memory, so no equity point is affected,
+  and **no fee VALUE changed between those shas** — the cost-table work of 2026-09-16 changed only
+  provenance strings and the `basis` grade. But if a paper unit restarts, it resumes its run under
+  the new code while keeping the old recorded sha. That is the M3 report §7 defect, entered
+  knowingly this time rather than discovered afterwards.
