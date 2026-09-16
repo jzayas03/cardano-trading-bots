@@ -338,6 +338,54 @@ Write `docs/ops/<date>-m3-report.md` containing:
 Then open its PR. The run ids in the report are the whole audit trail: anyone can re-derive every
 number in it with `report <id>` and `report --compare`.
 
+### Add NIGHT as a second instrument, at this cutover
+
+Decided 2026-09-16. `MIN_ROUND_TRIPS` stays at 30 and the lever is more instruments in parallel, per
+`promotion.ts`'s own note. NIGHT costs **152.3 bps** per round trip at 500 ADA against SNEK's
+**293.3** — SNEK is the twelfth-cheapest of eighteen viable tokens, so every week so far has paid
+about 142 bps of avoidable handicap. Evidence: `docs/ops/2026-09-16-parallel-instruments.md`.
+
+**Instance names changed.** `ctb-paper@.service` no longer hardcodes `SNEK`; `%i` is now
+`<strategy>_<TICKER>`. So `ctb-paper@ma-crossover` becomes `ctb-paper@ma-crossover_SNEK`, and
+`infra/vps/paper-instances.txt` is the single source of truth for which instances exist.
+
+Run this **only with the old runs stopped** (the step above), and **in this order**:
+
+```
+# 1. Old instance names must not survive into the reboot. deploy.sh disables any enabled
+#    ctb-paper@ instance the file does not name, and prints each one it disables -- read that list.
+ssh root@<ip> 'bash -s' -- --sha <sha> --no-start < infra/vps/deploy.sh
+
+# 2. Confirm the file's eight instances are enabled and nothing else is.
+ssh root@<ip> "systemctl list-unit-files 'ctb-paper@*' --state=enabled --no-legend --plain"
+
+# 3. Start them ONE AT A TIME, checking memory between each. ~118 MB per process against ~855 MB
+#    free with four running; eight is feasible and TIGHT, and the box also needs headroom for the
+#    nightly pg_dump. If `available` drops under 250 MB, STOP and do not start the rest.
+for i in ma-crossover_SNEK rsi-mean-reversion_SNEK buy-and-hold_SNEK scheduled-accumulation_SNEK \
+         ma-crossover_NIGHT rsi-mean-reversion_NIGHT buy-and-hold_NIGHT scheduled-accumulation_NIGHT; do
+  ssh root@<ip> "systemctl start ctb-paper@$i && sleep 20 && free -m | sed -n 2p"
+done
+```
+
+**Then verify the thing that would otherwise be silently wrong:**
+
+```
+# Each run is on the token its unit name claims. A paper run against the wrong token does not
+# error -- it produces a clean, wrong equity curve, which is why paper-start.sh refuses a
+# mis-named instance outright (infra/vps/test-paper-start.sh step 4).
+docker exec -i ctb_postgres psql -U ctb -d ctb -At -F' | ' -c \
+  "SELECT r.id, r.strategy_id, t.ticker, r.status FROM runs r JOIN tokens t ON t.unit = r.base_unit
+    WHERE r.status = 'running' ORDER BY t.ticker, r.strategy_id"
+```
+
+Expect **eight running rows, four SNEK and four NIGHT**, each strategy appearing once per token. The
+gate compares within a token, so a token missing a baseline makes its candidates unpromotable.
+
+**If memory forces a stop**, drop NIGHT's `ma-crossover` first: keep both baselines plus one
+candidate per token, because a candidate without both baselines cannot clear `beats-baselines`
+whatever it returns.
+
 ### Enable multi-venue sampling once the runs are stopped
 
 Founder decision 2026-09-09: merged (#97) but **kept off until the run finishes**.

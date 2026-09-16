@@ -124,7 +124,34 @@ systemctl daemon-reload
 # enabled or started by itself, so it is deliberately absent from UNITS below.
 systemd-analyze verify /etc/systemd/system/ctb-*.service /etc/systemd/system/ctb-*.timer \
   || die "systemd unit verification failed; a bad OnFailure= would never fire"
-UNITS=(ctb-collector.service ctb-paper@ma-crossover.service ctb-paper@rsi-mean-reversion.service ctb-paper@buy-and-hold.service)
+# Read from infra/vps/paper-instances.txt rather than hardcoded here. The hardcoded array listed
+# THREE paper instances while the box ran four: scheduled-accumulation was live but never enabled for
+# boot, so a reboot would have silently dropped a BASELINE and left the candidates with nothing to be
+# compared against. A list that has to be edited in two places drifts; this one has one place.
+INSTANCES_FILE="$REPO/infra/vps/paper-instances.txt"
+[ -r "$INSTANCES_FILE" ] || die "missing $INSTANCES_FILE"
+UNITS=(ctb-collector.service)
+while read -r inst; do
+  case "$inst" in ''|\#*) continue ;; esac
+  UNITS+=("ctb-paper@${inst}.service")
+done < <(sed 's/#.*//; s/[[:space:]]//g' "$INSTANCES_FILE")
+[ "${#UNITS[@]}" -gt 1 ] || die "$INSTANCES_FILE named no paper instances"
+echo "  paper instances: $(( ${#UNITS[@]} - 1 ))"
+
+# Disable any enabled ctb-paper@ instance the file does NOT name. Without this the file is only
+# additive: renaming `ctb-paper@ma-crossover` to `ctb-paper@ma-crossover_SNEK` would leave BOTH
+# enabled, and the next reboot would start twelve paper processes on a box that fits eight -- an OOM
+# discovered by reboot, which is the worst way to discover it. `disable` does not stop a running
+# unit, so this only ever changes what comes back after a reboot.
+while read -r enabled; do
+  [ -n "$enabled" ] || continue
+  keep=0
+  for u in "${UNITS[@]}"; do [ "$u" = "$enabled" ] && keep=1 && break; done
+  if [ "$keep" = "0" ]; then
+    echo "  disabling for boot (not in paper-instances.txt): $enabled"
+    systemctl disable "$enabled" >/dev/null 2>&1 || true
+  fi
+done < <(systemctl list-unit-files 'ctb-paper@*.service' --state=enabled --no-legend --plain 2>/dev/null | awk '{print $1}')
 TIMERS=(ctb-backup.timer ctb-watch.timer)
 if [ "$NO_START" = "1" ]; then
   # enable (so a reboot brings them up) without starting now. The reboot test still means
@@ -136,8 +163,7 @@ else
 fi
 
 say "state"
-systemctl --no-pager --plain is-active ctb-collector.service ctb-paper@ma-crossover.service \
-  ctb-paper@rsi-mean-reversion.service ctb-paper@buy-and-hold.service || true
+systemctl --no-pager --plain is-active "${UNITS[@]}" || true
 systemctl --no-pager --plain list-timers 'ctb-*' | head -4
 
 cat <<EOF

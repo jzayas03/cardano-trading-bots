@@ -22,7 +22,11 @@ User=ctb
 WorkingDirectory=/home/ctb/cardano-trading-bots
 # NOT `npm run paper` directly: a restart must RESUME this strategy's existing run, never start a
 # second equity curve for it. See infra/vps/paper-start.sh.
-ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i SNEK --max-gap-min 20
+# %i is `<strategy>_<TICKER>`, e.g. `ma-crossover_SNEK`. The ticker used to be HARDCODED here as
+# SNEK, which meant every instance of this template traded the same token and a second instrument
+# needed a second template. paper-start.sh splits on the last underscore and refuses anything that
+# does not look like a ticker, so a mis-named instance fails loudly instead of trading nothing.
+ExecStart=/home/ctb/cardano-trading-bots/infra/vps/paper-start.sh %i --max-gap-min 20
 # SIGINT, not systemd's default SIGTERM. The clean-shutdown path — finish the candle in flight,
 # record status=finished and stop_reason=signal — is wired to SIGINT. With the default, every
 # `systemctl stop` or `restart` killed the process without it, leaving the run `running` with no
