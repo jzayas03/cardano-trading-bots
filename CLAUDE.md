@@ -23,3 +23,7 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   status.** A suppressed alert and a delivered one differ by four characters in `alert.log` --
   `-> /log` vs `-> /1` -- and BOTH read `http 200 OK`, so a drill that proved nothing looks exactly
   like one that passed (2026-09-16, #152: drill 3b ran 10 s inside drill 4b's window).
+- **The box is not the repo, and repo silence is not evidence.** An audit of `docs/`, commits and
+  `infra/` concluded the reboot-persistent firewall rule was unapplied; it had been live on the VPS
+  for a week. Check the server before reporting a control missing, and write the result down -- the
+  gap was the record, not the control (2026-09-16, #151).
