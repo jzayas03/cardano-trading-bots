@@ -1,5 +1,10 @@
 [Unit]
 Description=CTB collector
+# On entering `failed` (a one-shot exiting non-zero, or Restart=always hitting StartLimitBurst),
+# page via the dead-man's-switch service within seconds instead of at the next watchdog tick.
+# Belongs in [Unit], like StartLimit*: systemd silently ignores it under [Service].
+# docs/ops/RUNBOOK-alerting.md
+OnFailure=ctb-alert@%n.service
 # Postgres runs in Docker; without this the collector races the daemon at boot and dies on a
 # connection refused that reads like a database fault.
 After=network-online.target docker.service

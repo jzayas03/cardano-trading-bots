@@ -1,5 +1,10 @@
 [Unit]
 Description=CTB backup (dump, upload to R2, verify the remote copy)
+# On entering `failed` (a one-shot exiting non-zero, or Restart=always hitting StartLimitBurst),
+# page via the dead-man's-switch service within seconds instead of at the next watchdog tick.
+# Belongs in [Unit], like StartLimit*: systemd silently ignores it under [Service].
+# docs/ops/RUNBOOK-alerting.md
+OnFailure=ctb-alert@%n.service
 Requires=docker.service
 After=docker.service
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=CTB alert: %i failed
+# Instantiated by OnFailure=ctb-alert@%n.service in the watched units, so %i is the failed unit's
+# full name. specs/001-vps-alerting/contracts/unit-failure-handler.md; docs/ops/RUNBOOK-alerting.md.
+# No OnFailure= here, on purpose: an alert handler that alerts about itself loops.
+
+[Service]
+Type=oneshot
+User=ctb
+WorkingDirectory=/home/ctb/cardano-trading-bots
+ExecStart=/home/ctb/cardano-trading-bots/infra/vps/alert-unit-failure.sh %i
+StandardOutput=append:/home/ctb/logs/alert.log
+StandardError=append:/home/ctb/logs/alert.log
+# curl inside is -m 10 with two retries five seconds apart; this bounds the whole handler.
+TimeoutStartSec=30

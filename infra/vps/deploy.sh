@@ -115,6 +115,12 @@ asctb "npm run migrate"
 say "systemd units"
 install -m 644 "$REPO/infra/vps/systemd/"*.service "$REPO/infra/vps/systemd/"*.timer /etc/systemd/system/
 systemctl daemon-reload
+# An OnFailure= (or StartLimit*) line in the wrong section, or with a typo, is silently ignored by
+# systemd and the alert it was meant to send never fires. verify catches that here, not on the
+# night it mattered. ctb-alert@.service is a template instantiated by OnFailure=; it is never
+# enabled or started by itself, so it is deliberately absent from UNITS below.
+systemd-analyze verify /etc/systemd/system/ctb-*.service /etc/systemd/system/ctb-*.timer \
+  || die "systemd unit verification failed; a bad OnFailure= would never fire"
 UNITS=(ctb-collector.service ctb-paper@ma-crossover.service ctb-paper@rsi-mean-reversion.service ctb-paper@buy-and-hold.service)
 TIMERS=(ctb-backup.timer ctb-watch.timer)
 if [ "$NO_START" = "1" ]; then
