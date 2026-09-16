@@ -40,7 +40,17 @@ die() { echo "FAILED: $*" >&2; exit 1; }
 [ -f "$ENV_FILE" ] || die "$ENV_FILE missing"
 [ "$(stat -c '%a' "$ENV_FILE")" = "600" ] || die ".env is not mode 600"
 command -v openssl >/dev/null || die "openssl not found"
-docker exec -i ctb_postgres pg_isready -U ctb -d ctb >/dev/null 2>&1 || die "postgres is not accepting connections"
+
+# `</dev/null` on every `docker exec` below is load-bearing, not tidiness (the same trap deploy.sh
+# documents on its `asctb` helper).
+#
+# This script is fed to `bash -s` over ssh, so the script IS stdin. `docker exec -i` attaches stdin
+# and therefore SWALLOWS THE REST OF THE SCRIPT: bash runs out of input and exits 0 with no output,
+# no `die`, and nothing rotated. Run exactly as the header says, on 2026-09-16, this next line ate
+# everything after it. Nothing here needs stdin (every psql statement arrives via -c and every
+# secret via -e), so `-i` is gone, and stdin is closed so that a future `-i` cannot bring the bug
+# back. infra/vps/test-rotate-postgres-password.sh proves the script reaches its last line.
+docker exec ctb_postgres pg_isready -U ctb -d ctb </dev/null >/dev/null 2>&1 || die "postgres is not accepting connections"
 
 say "reading the current password (never printed)"
 OLD="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
@@ -60,17 +70,17 @@ echo "  $BACKUP"
 
 say "ALTER ROLE"
 # Passed via a variable so the value never appears in a process list or in this script's output.
-PGPASSWORD="$OLD" docker exec -i -e PGPASSWORD -e NEWPW="$NEW" ctb_postgres \
+PGPASSWORD="$OLD" docker exec -e PGPASSWORD -e NEWPW="$NEW" ctb_postgres \
   psql -U ctb -d ctb -v ON_ERROR_STOP=1 -q -c "ALTER ROLE ctb PASSWORD :'NEWPW'" \
-  >/dev/null 2>&1 || die "ALTER ROLE failed; nothing has changed"
+  </dev/null >/dev/null 2>&1 || die "ALTER ROLE failed; nothing has changed"
 echo "  done"
 
 # From here a failure leaves the database wanting NEW while .env still says OLD, so every path
 # below restores the old password rather than leaving the host in that state.
 rollback() {
   echo "!! rolling back" >&2
-  docker exec -i -e NEWPW="$NEW" -e OLDPW="$OLD" ctb_postgres \
-    psql -U ctb -d ctb -q -c "ALTER ROLE ctb PASSWORD :'OLDPW'" >/dev/null 2>&1 || true
+  docker exec -e NEWPW="$NEW" -e OLDPW="$OLD" ctb_postgres \
+    psql -U ctb -d ctb -q -c "ALTER ROLE ctb PASSWORD :'OLDPW'" </dev/null >/dev/null 2>&1 || true
   cp -p "$BACKUP" "$ENV_FILE"
   chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
   die "rolled back to the previous password"
@@ -101,10 +111,10 @@ chmod 600 "$ENV_FILE"
 echo "  done"
 
 say "verifying BOTH directions"
-PGPASSWORD="$NEW" docker exec -i -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' >/dev/null 2>&1 \
+PGPASSWORD="$NEW" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1 \
   || rollback
 echo "  new password authenticates"
-if PGPASSWORD="$OLD" docker exec -i -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' >/dev/null 2>&1; then
+if PGPASSWORD="$OLD" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1; then
   rollback   # the old one still works: the rotation did not take, and reporting success would be a lie
 fi
 echo "  old password is refused"
