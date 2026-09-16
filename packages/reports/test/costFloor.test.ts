@@ -111,6 +111,22 @@ describe('costObservations', () => {
     expect(exclusions[0]).toMatchObject({ venue: 'NotAVenue', reason: 'unmeasured-fee', snapshotsAvailable: 1 });
   });
 
+  it('lists a policy-excluded venue even when it has ZERO snapshots (FR-017)', () => {
+    // Otherwise "excluded by policy" is indistinguishable from "never collected". The first real
+    // run found VyFinance and Splash vanishing from the report for exactly this reason.
+    const excludedVenues = new Map([
+      ['Splash', { reason: 'varies-by-pool' as const, detail: 'take varies BY POOL' }],
+      ['VyFinance', { reason: 'unmeasured-fee' as const, detail: 'per-pool marketOrderAddress' }],
+    ]);
+    const { exclusions } = costObservations([snap()], DEPS, { excludedVenues });
+    expect(exclusions.map((e) => e.venue).sort()).toEqual(['Splash', 'VyFinance']);
+    for (const e of exclusions) {
+      expect(e.snapshotsAvailable).toBe(0);
+      expect(e.reason).toBe('no-snapshots');
+      expect(e.detail).toContain('no snapshots were collected');
+    }
+  });
+
   it('records a policy-excluded venue with its reason and the snapshots given up (FR-017)', () => {
     const excludedVenues = new Map([['Splash', { reason: 'varies-by-pool' as const, detail: 'take varies BY POOL' }]]);
     const { observations, exclusions } = costObservations([snap({ poolId: 'Splash:aa' })], DEPS, { excludedVenues });
