@@ -13,7 +13,10 @@
 # promotion gate compares within a token.
 #
 # MEMORY: ~118 MB resident per paper process against ~855 MB free with four running. Eight is
-# feasible and tight; sixteen is not possible on a 2 GB box. Check `free -m` between starts.
+# feasible and TIGHT on the 2 GB box; sixteen is not possible there. Check `free -m` between starts.
+# After the CPX21 resize (4 GB) sixteen fits with over a gigabyte to spare -- at which point a third
+# and fourth instrument can be added here. Cheapest next ones by measured round-trip cost at 500 ADA:
+# MIN 151.1, WMTX 174.0, INDY 193.4, HOSKY 206.7. Stablecoins are cheap and pointless: nothing moves.
 
 ma-crossover_SNEK
 rsi-mean-reversion_SNEK
