@@ -56,9 +56,14 @@ printf 'Result=%s\nExecMainStatus=%s\nNRestarts=%s\n' "${STUB_RESULT:-exit-code}
 EOF
 cat > "$STUB/systemd-escape" <<'EOF'
 #!/bin/bash
-# Fake `systemd-escape --unescape <name>`: the names the handler receives contain no escapes.
+# Fake `systemd-escape --unescape <name>` with the REAL semantics: in systemd's escaping a "-" stands
+# for "/", so unescaping a plain unit name mangles every hyphen. On 2026-09-16 the first live drill
+# paged with "unit: ctb/paper@no/such/strategy.service" because the handler unescaped %i, and this
+# stub had echoed names back unchanged -- looser than production, so the harness was green. The
+# handler must not call this at all (%i is already the literal instance name); if it does, the
+# body assertions below catch it.
 [ "${1:-}" = --unescape ] || { echo "stub: only --unescape is modelled" >&2; exit 64; }
-printf '%s\n' "$2"
+printf '%s\n' "${2//-//}"
 EOF
 cat > "$STUB/hostname" <<'EOF'
 #!/bin/bash

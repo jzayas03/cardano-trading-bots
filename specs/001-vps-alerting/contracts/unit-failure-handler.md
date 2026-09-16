@@ -47,7 +47,8 @@ Runs as `ctb`, under `set -euo pipefail` and `set +x`. Must pass shellcheck on C
 `hostname`. No Node, no database.
 
 ```text
-1. UNIT := systemd-escape --unescape "$1"
+1. UNIT := "$1" verbatim. NEVER `systemd-escape --unescape` it: in systemd escaping "-" means "/",
+   so a plain unit name is mangled (drill 3, 2026-09-16: "ctb/paper@no/such/strategy.service").
 2. read RESULT, STATUS, NRESTARTS := systemctl show -p Result -p ExecMainStatus -p NRestarts "$UNIT"
 3. read URL from .env: grep '^CTB_HEALTHCHECK_URL=' .env | cut -d= -f2-   (never echoed)
    if empty: log "alerting off (no CTB_HEALTHCHECK_URL); $UNIT failed: $RESULT/$STATUS" and exit 0
