@@ -24,6 +24,8 @@ export interface Config {
   refreshPolicy: 'deepest' | 'all';
   /** Lovelace floor for a pool to stay in the refresh set; 0n disables it. */
   minDepthLovelace: bigint;
+  /** Dead-man's-switch ping URL; undefined means alerting is off. Never log or print it. */
+  healthcheckUrl?: string;
 }
 
 /** DATABASE_URL with the read-only role's credentials; everything else (host, port, database) identical. */
@@ -125,6 +127,18 @@ const schema = z.object({
     .optional()
     .transform((v) => (v === undefined || v === '' ? 0 : Number(v)))
     .refine((n) => Number.isFinite(n) && n >= 0, 'COLLECT_MIN_DEPTH_ADA must be a non-negative number of ADA'),
+  // The dead-man's-switch ping URL. Absent (or a bare `CTB_HEALTHCHECK_URL=` line, same '' ->
+  // undefined preprocessing as the other optional knobs) means alerting is off and `watch` is
+  // unchanged. The shape is pinned because the box appends `/fail`, `/log` and `/<exit-status>` to
+  // it: a trailing slash or a query string would build a URL the service answers with a 200 and
+  // body "OK (not found)", which looks like success to anything that only checks the status.
+  CTB_HEALTHCHECK_URL: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().optional().refine(
+      (u) => u === undefined || (u.startsWith('https://') && !u.includes('?') && !u.endsWith('/')),
+      'CTB_HEALTHCHECK_URL must start with https://, carry no query string and have no trailing slash',
+    ),
+  ),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean }): Config {
@@ -172,5 +186,6 @@ export function loadConfig(env: NodeJS.ProcessEnv, needs: { blockfrost: boolean 
     minDepthLovelace: BigInt(Math.round(v.COLLECT_MIN_DEPTH_ADA * 1_000_000)),
     focusTicker: v.COLLECT_FOCUS_TICKER ?? null,
     focusIntervalSec: v.COLLECT_FOCUS_INTERVAL_SECONDS,
+    ...(v.CTB_HEALTHCHECK_URL !== undefined ? { healthcheckUrl: v.CTB_HEALTHCHECK_URL } : {}),
   };
 }

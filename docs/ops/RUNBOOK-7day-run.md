@@ -260,6 +260,14 @@ checkout with itself, which would read OK while proving nothing.
 
 Then, and only if before-stop is all OK:
 
+0. **Declare maintenance** — as `ctb` from `$LIVE`, before the before-stop gate runs:
+   `npm run maintenance -- start --minutes 180 --reason "M<N> cutover"`. Every stopped unit
+   below would otherwise page within two minutes (`OnFailure=` → `ctb-alert@`), and the watchdog
+   cycles during the stop would page with their `paper runs` FAILs. Maintenance suppresses failure
+   pages, never the dead-man's switch: if the box goes silent mid-cutover you will still be paged.
+   See `docs/ops/RUNBOOK-alerting.md`. (A sha older than the alerting feature has no
+   `maintenance` command; the `$GATE` checkout does.)
+
 1. **Stop the paper runs and the collector.**
    `systemctl stop ctb-paper@ma-crossover ctb-paper@rsi-mean-reversion ctb-paper@buy-and-hold ctb-collector`
 
@@ -307,6 +315,11 @@ Then, and only if before-stop is all OK:
    `infra/vps/resume-target.sql` for the race that made that necessary. A cutover spans a password
    rotation and a deploy, so it is far outside that window, but the flag says so rather than
    depending on it.
+
+8. **End maintenance** once the new runs are up and one watchdog cycle has passed clean:
+   `npm run maintenance -- end`. The window would expire on its own at 180 minutes, but ending it
+   is what puts "maintenance ended (manual)" in the check's log next to the start, and a FAIL
+   after this point pages again. `npm run maintenance -- status` confirms.
 
 Only then, the report below.
 

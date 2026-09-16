@@ -13,6 +13,7 @@ export { DEFAULT_COLLECT_INTERVAL_SEC, DEFAULT_GRACE_SEC, heartbeatAgeCell, isHe
 export { compareRows, compareRunRows, COMPARE_REHEARSAL_BANNER, MIXED_TOKENS_WARNING, sweepRows, type CompareInput, type CompareRow, type CompareRunInput, type CompareRunRow, type SweepInput, type SweepRow } from './compare.js';
 export { gridCombinations, gridRows, gridWarning, type GridInput, type GridRow } from './grid.js';
 export * from './watch.js';
+export * from './alerting.js';
 export * from './leadlag.js';
 export * from './opportunity.js';
 export { BASELINE_STRATEGIES, MAX_CAPITAL_DRIFT, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT, MIN_ROUND_TRIPS, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionCheck, type PromotionInput, type PromotionStatus, type PromotionVerdict, type RunContext } from './promotion.js';

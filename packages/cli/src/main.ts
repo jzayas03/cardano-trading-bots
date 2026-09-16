@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pino from 'pino';
+import { alertCommand } from './commands/alert.js';
 import { backfillCommand } from './commands/backfill.js';
 import { backupCommand, backupVerifyCommand } from './commands/backup.js';
 import { backtestCommand } from './commands/backtest.js';
@@ -10,6 +11,7 @@ import { devFakeCollectorCommand } from './commands/devFakeCollector.js';
 import { leadlagCommand } from './commands/leadlag.js';
 import { cutoverCommand } from './commands/cutover.js';
 import { lpCommand } from './commands/lp.js';
+import { maintenanceCommand } from './commands/maintenance.js';
 import { opportunityCommand } from './commands/opportunity.js';
 import { migrateCommand } from './commands/migrate.js';
 import { paperCommand } from './commands/paper.js';
@@ -63,6 +65,10 @@ async function main(): Promise<void> {
       return backupCommand(log, rest);
     case 'backup:verify':
       return backupVerifyCommand(log, rest);
+    case 'alert':
+      return alertCommand(log, rest);
+    case 'maintenance':
+      return maintenanceCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
@@ -74,6 +80,8 @@ async function main(): Promise<void> {
         ' opportunity [TICKER|ALL] [--since ISO] [--floor-bps 216] [--windows 1800,7200,86400]>',
         ' lp <TICKER> [--since ISO] [--pool ID]  — LP value by entry tick, vs holding the token>',
         ' cutover --phase before-stop|after-stop|after-deploy [--runs 146,147,148] [--expect-sha X]>',
+        ' alert test | alert send --kind alive|fail|log [--body <text>]>',
+        ' maintenance start --minutes <1..240> --reason "<text>" | maintenance end | maintenance status>',
       );
       process.exitCode = 2;
   }
