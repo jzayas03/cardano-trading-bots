@@ -114,6 +114,9 @@ asctb "npm run migrate"
 
 say "systemd units"
 install -m 644 "$REPO/infra/vps/systemd/"*.service "$REPO/infra/vps/systemd/"*.timer /etc/systemd/system/
+# The OnFailure= handler lives outside the checkout (see ctb-alert@.service) so that no hand-placed
+# file ever dirties the live tree; the repo stays its source and every deploy refreshes it.
+install -D -m 755 -o root -g root "$REPO/infra/vps/alert-unit-failure.sh" /usr/local/lib/ctb/alert-unit-failure.sh
 systemctl daemon-reload
 # An OnFailure= (or StartLimit*) line in the wrong section, or with a typo, is silently ignored by
 # systemd and the alert it was meant to send never fires. verify catches that here, not on the

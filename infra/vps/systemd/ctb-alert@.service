@@ -8,7 +8,10 @@ Description=CTB alert: %i failed
 Type=oneshot
 User=ctb
 WorkingDirectory=/home/ctb/cardano-trading-bots
-ExecStart=/home/ctb/cardano-trading-bots/infra/vps/alert-unit-failure.sh %i
+# Installed OUTSIDE the live checkout by deploy.sh (founder decision 2026-09-16): a file added by hand
+# inside the checkout dirties `git status`, which the cutover before-stop gate fails on. Root-owned,
+# so the ctb user that runs it cannot modify it either.
+ExecStart=/usr/local/lib/ctb/alert-unit-failure.sh %i
 StandardOutput=append:/home/ctb/logs/alert.log
 StandardError=append:/home/ctb/logs/alert.log
 # curl inside is -m 10 with two retries five seconds apart; this bounds the whole handler.
