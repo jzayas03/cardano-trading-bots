@@ -74,18 +74,32 @@ cycle and restarted after 120 s forks its run (`infra/vps/paper-start.sh`,
 restarts with it. Otherwise prove the pipe with `npm run alert -- send --kind fail --body drill`
 and record "deferred to the next stopped window" with the date.
 
-| drill | expected | observed (date, time) | notes |
-|---|---|---|---|
-| 0 self-test | | | |
-| 0b wrong credential | | | |
-| 1 silence | | | |
-| 2 failing check | | | |
-| 3 unit failure | | | |
-| 3b backup failure | | | |
-| 4 maintenance | | | |
-| 4b expiry | | | |
-| 5 memory | | | |
-| 6 secrets | | | |
+All as `ctb` from `/home/ctb/cardano-trading-bots` unless the row says root. Rows marked † need
+only the unit files, the handler and `CTB_HEALTHCHECK_URL` in `.env`; the rest need the watchdog
+change deployed with a sha.
+
+| drill | command | expected | observed (date, time) | notes |
+|---|---|---|---|---|
+| 0 self-test † | `npm run alert -- test` | exit 0 within 1 min; output `accepted (http 200 OK) host=<host>`; a `TEST from <host> at <ISO>` entry in the check's ping log | | must not print the URL |
+| 0b wrong credential † | `env CTB_HEALTHCHECK_URL=https://<same host>/ping/00000000-0000-0000-0000-000000000000 npm run alert -- test` | exit 1 within 1 min; output `rejected (http 200 "OK (not found)") host=<host>` | | `.env` untouched: `grep -c '^CTB_HEALTHCHECK_URL=' .env` still 1, value unchanged |
+| 1 silence | as root: `systemctl stop ctb-watch.timer`; wait; `systemctl start ctb-watch.timer` | "down" push at 35 min ± the service's scheduler tick; "up" within one cycle (15 min) of the start | | stop nothing else |
+| 2 failing check | **only in a stopped window** (see the warning above): `systemctl stop ctb-paper@<strategy>`; wait one cycle; restart | push within 15 min whose text contains `FAIL: paper <strategy> — marked running but no process is running it`; recovery ("up") the next cycle after the restart | | otherwise `npm run alert -- send --kind fail --body 'drill 2 deferred'` and record "deferred to the next stopped window" with the date |
+| 3 unit failure † | as root: `systemctl start ctb-paper@no-such-strategy`; afterwards `systemctl reset-failed ctb-paper@no-such-strategy` | five failures in ≤ 5 min then `start-limit-hit`; a push naming `ctb-paper@no-such-strategy.service` and `start-limit-hit` within 2 min of the fifth failure; `journalctl -u 'ctb-alert@*' --since -10min` shows one handler run; `SELECT count(*) FROM runs WHERE status='running'` unchanged | | a bad strategy never reaches `createRun`, so no run row |
+| 3b backup failure † | as root: `systemd-run --unit=ctb-backup-drill -p User=ctb -p WorkingDirectory=/home/ctb/cardano-trading-bots -p OnFailure=ctb-alert@ctb-backup-drill.service env R2_BUCKET=does-not-exist scripts/scheduled-backup.sh` | push naming `ctb-backup-drill.service` within 2 min | | a transient unit with the same hook; the real `.env` is untouched. Record the exact command if the box's systemd wants different property syntax |
+| 4 maintenance † | `npm run maintenance -- start --minutes 45 --reason drill`; repeat drill 3; `npm run maintenance -- end`; repeat drill 3 | during the window: no push, a `/log` entry in the ping log with `drill` in the body; after `end`: a "maintenance ended (manual): drill" log entry, then a push | | liveness is never suppressed: `alive` entries keep arriving every 15 min throughout (only after the watchdog change is deployed; note it if not yet) |
+| 4b expiry | `npm run maintenance -- start --minutes 1 --reason expiry`; wait one watchdog cycle | `watch.log` shows "maintenance ended (expired)"; `ls ~/ctb-maintenance.json` → no such file; the ping log shows the `/log` entry | | leave no window open |
+| 5 memory | `free -m` before the deploy and 30 min after, same four paper runs + collector | "available" within 20 MB of the before figure | | record all the numbers, not the difference |
+| 6 secrets † | `grep -rl "$(grep '^CTB_HEALTHCHECK_URL=' .env \| cut -d= -f2- \| cut -c1-40)" /home/ctb/logs /home/ctb/cardano-trading-bots --exclude-dir=node_modules --exclude=.env` | no hits; the ping-log bodies show only unit names, run ids, ages, counts and timestamps | | record "no hits" with the date; never paste the value |
+
+**Deployment order.** The unit files, `ctb-alert@.service` and the handler can go first: no Node,
+no `npm ci`, no checkout of the live tree, `daemon-reload` only. That protects the live week
+within a day and enables the † rows. The watchdog ping (`watch`, `alert`, `maintenance`) lands
+with the next sha, which enables rows 1, 2, 4b and 5. Between the two, the check in the service
+should be paused or given a long grace, or it will page for silence it was never promised.
+
+**SC-009 read-back.** Once rows 1 and 3 have observed times: a stopped paper run now pages within
+one watchdog period, and a unit that dies pages within two minutes; the 2026-09-16 eleven-hour gap
+could not recur unnoticed.
 
 ## Deployment history
 

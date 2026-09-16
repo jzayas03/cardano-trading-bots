@@ -139,9 +139,9 @@ on the real box, which every story's "done" depends on; phase 10 is polish and t
 
 **Independent Test**: on the box, `npm run alert -- test` → a labelled entry in the service's ping log within 1 min and exit 0; with a wrong UUID → exit 1 naming `OK (not found)` (T057, T058).
 
-- [ ] T032 [US5] Extend `packages/cli/test/alertCommand.test.ts`: `alert test` sends kind `log` with body matching `/^TEST from \S+ at \d{4}-\d{2}-\d{2}T/`; prints `accepted (http 200 OK) host=<host>` on success and exits 0; on `rejected` prints `rejected (http 200 "OK (not found)") host=<host>` and exits 1; on `unreachable` prints `unreachable host=<host>: <reason>` and exits 1; never prints the path. Show FAIL.
-- [ ] T033 [US5] Implement `test` in `packages/cli/src/commands/alert.ts`. T032 green.
-- [ ] T034 [P] [US5] Complete the "Drills" section of `docs/ops/RUNBOOK-alerting.md` with the exact commands and expected bounds for rows 0, 0b, 1, 2, 3, 3b, 4, 4b, 5, 6 from quickstart.md, the deployment-order note (unit files + handler first, watchdog ping with the next sha), and the SC-009 read-back sentence.
+- [X] T032 [US5] Extend `packages/cli/test/alertCommand.test.ts`: `alert test` sends kind `log` with body matching `/^TEST from \S+ at \d{4}-\d{2}-\d{2}T/`; prints `accepted (http 200 OK) host=<host>` on success and exits 0; on `rejected` prints `rejected (http 200 "OK (not found)") host=<host>` and exits 1; on `unreachable` prints `unreachable host=<host>: <reason>` and exits 1; never prints the path. Show FAIL.
+- [X] T033 [US5] Implement `test` in `packages/cli/src/commands/alert.ts`. T032 green.
+- [X] T034 [P] [US5] Complete the "Drills" section of `docs/ops/RUNBOOK-alerting.md` with the exact commands and expected bounds for rows 0, 0b, 1, 2, 3, 3b, 4, 4b, 5, 6 from quickstart.md, the deployment-order note (unit files + handler first, watchdog ping with the next sha), and the SC-009 read-back sentence.
 
 **Checkpoint**: everything is testable from the box with one command; the drill table awaits observed times.
 

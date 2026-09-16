@@ -104,3 +104,57 @@ describe('alert send', () => {
     expect(d.sent[0]!.body).toBe('[redacted: body failed the secret filter]');
   });
 });
+
+describe('alert test', () => {
+  it('sends a log report labelled TEST from <host> at <ISO>', async () => {
+    const d = deps({ outcome: 'accepted', status: 200, responseBody: 'OK' });
+    await alertCommand(log, ['test'], d.deps);
+    expect(d.sent).toHaveLength(1);
+    expect(d.sent[0]!.kind).toBe('log');
+    expect(d.sent[0]!.body).toMatch(/^TEST from \S+ at \d{4}-\d{2}-\d{2}T/);
+    expect(d.sent[0]!.body).toBe('TEST from box-1 at 2026-09-16T12:00:00.000Z');
+  });
+
+  it('prints accepted (http 200 OK) host=<host> and exits 0', async () => {
+    const d = deps({ outcome: 'accepted', status: 200, responseBody: 'OK' });
+    await alertCommand(log, ['test'], d.deps);
+    expect(process.exitCode).toBe(0);
+    expect(out).toEqual(['accepted (http 200 OK) host=hc.example.test']);
+  });
+
+  it('prints rejected (http 200 "OK (not found)") host=<host> and exits 1', async () => {
+    const d = deps({ outcome: 'rejected', status: 200, responseBody: 'OK (not found)' });
+    await alertCommand(log, ['test'], d.deps);
+    expect(process.exitCode).toBe(1);
+    expect(err).toEqual(['rejected (http 200 "OK (not found)") host=hc.example.test']);
+  });
+
+  it('prints unreachable host=<host>: <reason> and exits 1', async () => {
+    const d = deps({ outcome: 'unreachable', reason: 'TimeoutError' });
+    await alertCommand(log, ['test'], d.deps);
+    expect(process.exitCode).toBe(1);
+    expect(err).toEqual(['unreachable host=hc.example.test: TimeoutError']);
+  });
+
+  it('never prints the path', async () => {
+    for (const r of [
+      { outcome: 'accepted' as const, status: 200, responseBody: 'OK' },
+      { outcome: 'rejected' as const, status: 200, responseBody: 'OK (not found)' },
+      { outcome: 'unreachable' as const, reason: 'TypeError: ECONNREFUSED' },
+    ]) {
+      out = []; err = [];
+      await alertCommand(log, ['test'], deps(r).deps);
+      const all = [...out, ...err].join('\n');
+      expect(all).not.toContain('/ping/');
+      expect(all).not.toContain('00000000-0000');
+    }
+  });
+
+  it('exits 2 with the fixed message when CTB_HEALTHCHECK_URL is unset', async () => {
+    const d = deps({ outcome: 'accepted' }, { env: { DATABASE_URL: env.DATABASE_URL } });
+    await alertCommand(log, ['test'], d.deps);
+    expect(process.exitCode).toBe(2);
+    expect(err).toEqual(['CTB_HEALTHCHECK_URL is not set; alerting is off']);
+    expect(d.sent).toEqual([]);
+  });
+});

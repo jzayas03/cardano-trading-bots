@@ -52,7 +52,12 @@ export async function alertCommand(log: Logger, args: readonly string[], deps: A
 
   let kind: SendKind;
   let body: string;
-  if (sub === 'send') {
+  if (sub === 'test') {
+    // A `log` report: it attaches to the check's log and touches neither the alert state nor the
+    // 35-minute clock, so the self-test can be run at any time without faking liveness.
+    kind = 'log';
+    body = `TEST from ${host()} at ${now().toISOString()}`;
+  } else if (sub === 'send') {
     const k = arg(rest, '--kind');
     if (!isSendKind(k)) {
       console.error(USAGE);
