@@ -14,6 +14,7 @@
     "test:live": "RUN_LIVE_TESTS=1 vitest run packages/collector/test/dexterSource.live.test.ts",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint . && npm run typecheck",
+    "lint:sh": "shellcheck $(git ls-files 'infra/**/*.sh' 'scripts/*.sh')",
     "migrate": "tsx packages/cli/src/main.ts migrate",
     "collect": "tsx packages/cli/src/main.ts collect",
     "status": "tsx packages/cli/src/main.ts status",
