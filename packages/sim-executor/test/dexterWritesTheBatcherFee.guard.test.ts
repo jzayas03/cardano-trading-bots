@@ -14,9 +14,17 @@ import { VENUE_COSTS } from '../src/index.js';
  * Dexter 5.4.10 hardcodes `batcherFee: 2000000n` into the MinswapV2 datum; offering it in the datum
  * is paying it.
  *
- * The proof that Dexter's constant is not a reading of current policy is Minswap V1: Dexter carries
- * the IDENTICAL 2 ADA for a venue our own table has at ZERO from a documented source. So the library
- * does not distinguish the two, and its V2 figure is evidence about the library, not about Minswap.
+ * That argument used to rest on Minswap V1, and on 2026-09-16 the chain took the other side of it.
+ * This header read: "the proof that Dexter's constant is not a reading of current policy is Minswap
+ * V1 -- Dexter carries the IDENTICAL 2 ADA for a venue our own table has at ZERO from a documented
+ * source". Thirteen live V1 fulfilments reconcile to exactly 2.000000 ADA with zero variance, so
+ * Dexter was RIGHT about V1 and the documentation was wrong, the same way it was wrong about V2.
+ *
+ * The conclusion survives with a better reason. Dexter's constant is still not evidence about
+ * policy -- it is a hardcoded default, and it happens to match what both contracts charge. What was
+ * refuted is the idea that the DOCUMENTATION was the reliable side. Both venues are now measured,
+ * both agree with Dexter, and this guard's job is unchanged: pin the library's constants so a
+ * dependency bump is news rather than silent drift.
  *
  * This guard pins that whole situation so it cannot drift silently through a dependency bump. When
  * it fails, that is NEWS rather than breakage: read the new values, and change the SUBMISSION path
@@ -56,14 +64,15 @@ describe('the batcher fee we would actually pay is the one Dexter writes', () =>
     expect(VENUE_COSTS.MinswapV2.batcherFeeLovelace).toBe(batcher.value);
   });
 
-  it('Minswap V1 is the proof Dexter is stale: it writes 2 ADA where documentation says zero', () => {
+  it('Minswap V1: Dexter, the chain and the model now all say 2 ADA, and the documentation does not', () => {
     const batcher = feeOf('minswap', 'batcherFee');
     expect(batcher.value).toBe(2_000_000n);
-    // Deliberately asserting a DISAGREEMENT. Our V1 entry is 0 from a documented source; Dexter still
-    // writes 2 ADA. If this ever stops disagreeing, Dexter has been updated -- which is precisely the
-    // moment to re-examine V2 and the override below, so failing here is the alarm working.
-    expect(VENUE_COSTS.Minswap.batcherFeeLovelace).toBe(0n);
-    expect(VENUE_COSTS.Minswap.batcherFeeLovelace).not.toBe(batcher.value);
+    // This assertion was INVERTED on 2026-09-16. It used to pin a deliberate DISAGREEMENT -- our
+    // entry at 0 from documentation against Dexter at 2 -- and read that disagreement as evidence
+    // Dexter was stale. Then 13 of 13 live V1 fulfilments came back at exactly 2.000000 ADA with
+    // zero variance. The disagreement was real and the documentation was the wrong side of it.
+    expect(VENUE_COSTS.Minswap.batcherFeeLovelace).toBe(batcher.value);
+    expect(VENUE_COSTS.Minswap.basis).toBe('measured');
   });
 
   it('SundaeSwapV3: the model follows Dexter here too, and the docs do not', () => {

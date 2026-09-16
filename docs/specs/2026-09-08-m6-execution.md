@@ -210,6 +210,26 @@ Three requirements, deliberately blunt, because blunt survives:
    stopping every strategy, or the operator faces a choice between over-reacting and doing nothing —
    and under time pressure that choice is made badly.
 
+#### The allowlist's contents, decided 2026-09-16
+
+**Only venues whose cost is `measured` are eligible for execution: MinswapV2 and SundaeSwapV3.**
+Founder decision, on evidence rather than principle. All three `documented` venues were read off the
+chain that day (`docs/ops/2026-09-16-documented-venues-measured.md`) and all three failed:
+
+| venue | modelled then | chain said | |
+|---|---|---|---|
+| Minswap V1 | 0 ADA | **2.000000, 13 of 13, zero variance** | understated by 2 ADA, since corrected |
+| SundaeSwapV1 | 2.5 ADA | scooper net **exactly 0 in 5 of 5** | unverifiable; fee retained in-pool |
+| MuesliSwap | 0.95 ADA | **0.0049 to 3.4657**, one matchmaker net negative | refuted as a flat fee |
+
+Three for three, a documented figure failed to describe what the chain does. One was wrong in the
+direction that flatters a strategy. `documented` therefore does not qualify a venue for execution —
+a vendor describes intent, and the datum describes what the transaction pays.
+
+This costs 30 of the 140 routes the first cost-floor run found sufficient, 25 of them SundaeSwapV1.
+A venue returns to the allowlist by being measured, not by being argued for; the Koios method is
+free and the recipe is written down.
+
 **What this does not do.** It does not detect a compromise; it bounds the blast radius of one we
 learn about by other means. Detection is a human reading the ecosystem, which is exactly how this
 one surfaced. Any automated venue-health signal would be a new dependency to be wrong about, and is

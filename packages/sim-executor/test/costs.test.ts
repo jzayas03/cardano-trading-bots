@@ -4,15 +4,22 @@ import { assumedVenuesTouched, costsForPoolId } from '../src/index.js';
 
 describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () => {
   it('carries the documented values', () => {
-    expect(costsForPoolId('Minswap:x').batcherFeeLovelace).toBe(0n);
+    // Minswap V1 was 0n on the documentation until 2026-09-16, when 13 of 13 live fulfilments came
+    // back at exactly 2.000000 ADA with zero variance. Same correction V2 got, same reason.
+    expect(costsForPoolId('Minswap:x').batcherFeeLovelace).toBe(2_000_000n);
     expect(costsForPoolId('SundaeSwapV1:x').batcherFeeLovelace).toBe(2_500_000n);
     // 1.28, not the documented 0.5-1.0 range: measured on chain 2026-09-16, see the test below.
     expect(costsForPoolId('SundaeSwapV3:x').batcherFeeLovelace).toBe(1_280_000n);
-    expect(costsForPoolId('MuesliSwap:x').batcherFeeLovelace).toBe(950_000n);
-    expect(costsForPoolId('Minswap:x').basis).toBe('documented');
+    expect(costsForPoolId('MuesliSwap:x').batcherFeeLovelace).toBe(2_000_000n); // was 950_000n until 2026-09-16
+    expect(costsForPoolId('Minswap:x').basis).toBe('measured');
+    expect(costsForPoolId('SundaeSwapV1:x').basis).toBe('documented'); // unverified, NOT refuted
+    expect(costsForPoolId('MuesliSwap:x').basis).toBe('assumed'); // flat figure refuted in shape
   });
   it('marks the unverified venues as assumed at 2 ADA', () => {
-    for (const v of ['WingRiders', 'WingRidersV2', 'VyFinance', 'Splash']) {
+    // MuesliSwap joined this list on 2026-09-16 and its value went UP, from a documented 0.95. Seven
+    // live fulfilments spanned 0.0049 to 3.4657 ADA per order, so the flat figure is refuted in
+    // SHAPE rather than merely unverified, and `assumed` is exactly the grade for "no usable number".
+    for (const v of ['WingRiders', 'WingRidersV2', 'VyFinance', 'Splash', 'MuesliSwap']) {
       const c = costsForPoolId(`${v}:x`);
       expect(c.batcherFeeLovelace).toBe(2_000_000n);
       expect(c.basis).toBe('assumed');
