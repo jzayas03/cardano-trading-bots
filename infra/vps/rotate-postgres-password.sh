@@ -47,9 +47,11 @@ command -v openssl >/dev/null || die "openssl not found"
 # This script is fed to `bash -s` over ssh, so the script IS stdin. `docker exec -i` attaches stdin
 # and therefore SWALLOWS THE REST OF THE SCRIPT: bash runs out of input and exits 0 with no output,
 # no `die`, and nothing rotated. Run exactly as the header says, on 2026-09-16, this next line ate
-# everything after it. Nothing here needs stdin (every psql statement arrives via -c and every
-# secret via -e), so `-i` is gone, and stdin is closed so that a future `-i` cannot bring the bug
-# back. infra/vps/test-rotate-postgres-password.sh proves the script reaches its last line.
+# everything after it. So `-i` is gone from every call that does not need stdin, and their stdin is
+# closed so that a future `-i` cannot bring the bug back. The two ALTER ROLE calls DO need stdin
+# (see the note at the first one) and take it from a heredoc, which bash resolves from the script
+# text before the command runs -- their stdin is the heredoc, never the rest of the script.
+# infra/vps/test-rotate-postgres-password.sh proves the script reaches its last line.
 docker exec ctb_postgres pg_isready -U ctb -d ctb </dev/null >/dev/null 2>&1 || die "postgres is not accepting connections"
 
 # The two SELECT 1 checks at the end must connect over TCP to the container's OWN address, never
@@ -85,18 +87,31 @@ chmod 600 "$BACKUP"
 echo "  $BACKUP"
 
 say "ALTER ROLE"
-# Passed via a variable so the value never appears in a process list or in this script's output.
-PGPASSWORD="$OLD" docker exec -e PGPASSWORD -e NEWPW="$NEW" ctb_postgres \
-  psql -U ctb -d ctb -v ON_ERROR_STOP=1 -q -c "ALTER ROLE ctb PASSWORD :'NEWPW'" \
-  </dev/null >/dev/null 2>&1 || die "ALTER ROLE failed; nothing has changed"
+# The value travels in the ENVIRONMENT (-e NEWPW) and psql pulls it into a psql variable with
+# `\getenv`, so it never appears in a process list, in this script's output, or in the SQL text.
+# It cannot be a `-c` string: psql sends -c verbatim and only interpolates :'VAR' in SQL it reads
+# from stdin, and only from psql variables (\getenv, \set, -v) -- never from the environment. The
+# first rotation attempt on the VPS (2026-09-16, psql 16.15) died right here with "syntax error at
+# or near :" for exactly that reason. `-v` would work but puts the value in argv. The heredoc is
+# this command's own stdin, resolved by bash from the script text, so `bash -s` is unaffected.
+PGPASSWORD="$OLD" docker exec -i -e PGPASSWORD -e NEWPW="$NEW" ctb_postgres \
+  psql -U ctb -d ctb -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<'SQL' || die "ALTER ROLE failed; nothing has changed"
+\getenv NEWPW NEWPW
+ALTER ROLE ctb PASSWORD :'NEWPW';
+SQL
 echo "  done"
 
 # From here a failure leaves the database wanting NEW while .env still says OLD, so every path
 # below restores the old password rather than leaving the host in that state.
 rollback() {
   echo "!! rolling back" >&2
-  docker exec -e NEWPW="$NEW" -e OLDPW="$OLD" ctb_postgres \
-    psql -U ctb -d ctb -q -c "ALTER ROLE ctb PASSWORD :'OLDPW'" </dev/null >/dev/null 2>&1 || true
+  # Same shape as the forward ALTER, for the same reason: the value must reach psql as a psql
+  # variable via stdin, and a -c string would be a syntax error that silently left NEW in place.
+  docker exec -i -e OLDPW="$OLD" ctb_postgres \
+    psql -U ctb -d ctb -v ON_ERROR_STOP=1 -q >/dev/null 2>&1 <<'SQL' || true
+\getenv OLDPW OLDPW
+ALTER ROLE ctb PASSWORD :'OLDPW';
+SQL
   cp -p "$BACKUP" "$ENV_FILE"
   chown "$SERVICE_USER:$SERVICE_USER" "$ENV_FILE"
   die "rolled back to the previous password"
