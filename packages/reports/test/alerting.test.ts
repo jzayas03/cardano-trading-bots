@@ -179,6 +179,19 @@ describe('decideReport', () => {
     ]);
   });
 
+  // T029 (US4), FR-010 by construction: whatever the checks say, a window never removes the
+  // report. Liveness is what the dead-man's switch measures, and maintenance must not touch it.
+  it.each([
+    ['OK', [ok]],
+    ['WARN-only', [ok, warn, warn2]],
+    ['one FAIL', [ok, warn, fail]],
+    ['all FAIL', [fail, fail2]],
+  ] as const)('INVARIANT: with an active window, %s is still alive and the body names the window first', (_label, checks) => {
+    const r = decideReport([...checks], 'doctor: whatever', active);
+    expect(r.kind).toBe('alive');
+    expect(r.body.startsWith('[maintenance:')).toBe(true);
+  });
+
   it('with WARN only: kind alive and the WARN lines are still in the body (FR-005)', () => {
     const r = decideReport([ok, warn, warn2], 'doctor: OK with 2 warnings (backup, quota pace)', null);
     expect(r.kind).toBe('alive');
