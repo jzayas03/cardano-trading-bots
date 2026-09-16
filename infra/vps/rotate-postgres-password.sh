@@ -52,6 +52,19 @@ command -v openssl >/dev/null || die "openssl not found"
 # back. infra/vps/test-rotate-postgres-password.sh proves the script reaches its last line.
 docker exec ctb_postgres pg_isready -U ctb -d ctb </dev/null >/dev/null 2>&1 || die "postgres is not accepting connections"
 
+# The two SELECT 1 checks at the end must connect over TCP to the container's OWN address, never
+# over the Unix socket and never over loopback. The official postgres image's pg_hba.conf trusts
+# `local` and 127.0.0.1 outright, so psql is not asked for a password there at all; only
+# `host all all all scram-sha-256` enforces one. Proven 2026-09-16 on postgres:16 with this repo's
+# compose settings: over the socket a WRONG password is ACCEPTED, so "old password is refused" could
+# never fail, and every rotation rolled itself back. ALTER ROLE and rollback stay on the socket on
+# purpose: they must keep working whatever password the database currently wants.
+# Resolved here, before anything changes, so a container with no usable address stops the script
+# cleanly instead of forcing a rollback later.
+PG_ADDR="$(docker exec ctb_postgres hostname -i </dev/null 2>/dev/null | cut -d' ' -f1)"
+{ [[ "$PG_ADDR" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [[ "$PG_ADDR" != 127.* ]]; } \
+  || die "container address '${PG_ADDR:-}' is not a non-loopback IPv4; the verification would not enforce a password"
+
 say "reading the current password (never printed)"
 OLD="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
 [ -n "$OLD" ] || die "POSTGRES_PASSWORD is not set in .env; nothing to rotate from"
@@ -111,10 +124,10 @@ chmod 600 "$ENV_FILE"
 echo "  done"
 
 say "verifying BOTH directions"
-PGPASSWORD="$NEW" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1 \
+PGPASSWORD="$NEW" docker exec -e PGPASSWORD ctb_postgres psql -h "$PG_ADDR" -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1 \
   || rollback
 echo "  new password authenticates"
-if PGPASSWORD="$OLD" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1; then
+if PGPASSWORD="$OLD" docker exec -e PGPASSWORD ctb_postgres psql -h "$PG_ADDR" -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1; then
   rollback   # the old one still works: the rotation did not take, and reporting success would be a lie
 fi
 echo "  old password is refused"
