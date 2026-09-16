@@ -62,8 +62,11 @@ docker exec ctb_postgres pg_isready -U ctb -d ctb </dev/null >/dev/null 2>&1 || 
 # Resolved here, before anything changes, so a container with no usable address stops the script
 # cleanly instead of forcing a rollback later.
 PG_ADDR="$(docker exec ctb_postgres hostname -i </dev/null 2>/dev/null | cut -d' ' -f1)"
-{ [[ "$PG_ADDR" =~ ^[0-9]+(\.[0-9]+){3}$ ]] && [[ "$PG_ADDR" != 127.* ]]; } \
-  || die "container address '${PG_ADDR:-}' is not a non-loopback IPv4; the verification would not enforce a password"
+# Two plain tests, no `{3}` quantifier: the shellcheck CI runs reads a `}` inside `[[ =~ ]]` as the
+# end of a command group and then cannot find the closing `fi` of the checks below.
+[[ "$PG_ADDR" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || die "container address '${PG_ADDR:-}' is not an IPv4 address; the verification would not enforce a password"
+[[ "$PG_ADDR" != 127.* ]] || die "container address $PG_ADDR is loopback; the verification would not enforce a password"
 
 say "reading the current password (never printed)"
 OLD="$(grep '^POSTGRES_PASSWORD=' "$ENV_FILE" | cut -d= -f2-)"
