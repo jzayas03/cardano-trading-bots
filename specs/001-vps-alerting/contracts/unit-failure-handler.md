@@ -25,7 +25,7 @@ Description=CTB alert: %i failed
 Type=oneshot
 User=ctb
 WorkingDirectory=/home/ctb/cardano-trading-bots
-ExecStart=/home/ctb/cardano-trading-bots/infra/vps/alert-unit-failure.sh %i
+ExecStart=/usr/local/lib/ctb/alert-unit-failure.sh %i
 StandardOutput=append:/home/ctb/logs/alert.log
 StandardError=append:/home/ctb/logs/alert.log
 TimeoutStartSec=30
@@ -34,8 +34,9 @@ TimeoutStartSec=30
 `%i` is the failed unit's full name because the watched units use `OnFailure=ctb-alert@%n.service`
 (`%n` = full unit name, escaped; the handler unescapes with `systemd-escape --unescape`).
 
-`deploy.sh` must add `ctb-alert@.service` to the files it installs (it already globs
-`*.service`), must not add it to `UNITS` (a template is never enabled or started by itself), and
+`deploy.sh` installs the handler to `/usr/local/lib/ctb/alert-unit-failure.sh` (root-owned, outside the
+checkout, founder decision 2026-09-16 so a hand-placed file never dirties the live tree) and the template
+unit via its existing `*.service` glob; it must not add `ctb-alert@.service` to `UNITS` (a template is never enabled or started by itself), and
 `systemd-analyze verify` on all units is part of the deploy's checks so a typo in `OnFailure=` is
 caught before it silently never fires.
 
