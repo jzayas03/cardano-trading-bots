@@ -1,6 +1,8 @@
 # The database was on the public internet
 
-Date: 2026-09-09. Status: immediate block applied; durable fix is this PR plus the steps below.
+Date: 2026-09-09. Status: **closed 2026-09-09**, re-verified on the box 2026-09-16 — see
+[Verification](#verification-2026-09-16) at the end for what was checked and the one thing that is
+placed but still unproven. One item outstanding: the `ctb_dashboard` password, M6-gated.
 
 ## What was true
 
@@ -65,9 +67,11 @@ candle build is the worst moment to take the database away.
 2. Deploy: `ssh root@<ip> 'bash -s' < infra/vps/deploy.sh`
 3. Recreate so the new binding takes effect — `up -d` alone will not re-bind an existing container:
    `sudo -u ctb bash -lc 'cd ~/cardano-trading-bots && docker compose up -d --force-recreate postgres'`
-4. `ssh root@<ip> 'bash -s' < infra/vps/harden-docker-ports.sh`
+4. `ssh root@<ip> 'bash -s' < infra/vps/harden-docker-ports.sh` — **DONE 2026-09-09 01:19:09 UTC.**
+   Two `after.rules.bak-*` files (01:08:38 and 01:19:09) record two runs that night.
 5. Verify **from another machine**: `nc -z -w 8 <ip> 5433; echo rc=$?` — non-zero is the pass.
    And on the host: `ss -lntp | grep 5433` should show `127.0.0.1:5433`, not `0.0.0.0:5433`.
+   **DONE; re-confirmed 2026-09-16, see Verification below.**
 
 ## Step 3 — rotate the password (scripted; timing is the whole question)
 
@@ -115,3 +119,46 @@ Do not paste the new value into a chat, a commit, or a PR. Generate it on the ho
 **Also public and not yet rotated:** `ctb_dashboard_local_only` in `0006_dashboard_role.sql`. That
 role is SELECT-only and, with the port closed, only reachable from the host — lower priority, same
 milestone.
+
+## Verification (2026-09-16)
+
+Re-checked from scratch on 2026-09-16 19:09-19:10 UTC, because the repo carried no record that step 4
+had ever run and an audit of repo files alone concluded it was still open. **It was not open.** The
+box had been hardened on 2026-09-09 and nobody wrote it down. Absence of a record is not evidence of
+absence — the reverse mistake to the one this document was written about.
+
+| checked | result |
+|---|---|
+| block present in `/etc/ufw/after.rules` | yes, one copy, applied 2026-09-09 01:19:09 UTC |
+| block matches what the current script writes | **byte-identical** to `harden-docker-ports.sh` at `fcc447d`, comments included |
+| rules live in the running chain | `-i eth0 -p tcp -m tcp --dport 5432/5433 -j DROP`, then `RETURN` |
+| ufw replays `after.rules` at boot | `ufw` unit `enabled` **and** `active`; `ENABLED=yes` in `ufw.conf` |
+| compose binding still holds | `docker port ctb_postgres` -> `5432/tcp -> 127.0.0.1:5433` |
+| closed from off-host | `nc -z -w 8 <ip> 5432` and `5433` both rc=1 from a laptop over the internet |
+| host access unaffected | `docker exec -i ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1'` -> `1` |
+| paper runs undisturbed | all four `ctb-paper@*` plus `ctb-collector` active, `ActiveEnterTimestamp` unchanged |
+
+**The script was deliberately NOT re-run.** The installed block is byte-identical to what it would
+write, so a re-run would reload ufw during a measurement week for no gain. A change that is already
+correct is not improved by applying it again.
+
+### What is still unproven
+
+**Persistence has never actually been exercised.** The box booted 2026-09-08 19:33:18 UTC and the
+block was written 2026-09-09 01:19:09 UTC — so this kernel has never started *from* `after.rules`
+with the block in it. The mechanism is right (`after.rules` is exactly where ufw replays at boot,
+and ufw is enabled), but "right mechanism" is an argument, not a measurement, and this document
+exists because an argument of that shape was wrong once already.
+
+Proving it costs a reboot. Do not spend one during a measurement week. The cheap moment is the next
+reboot that happens anyway — unattended-upgrades will take one eventually. Whoever is next on the
+box after any reboot should run, from another machine:
+
+```
+nc -z -w 8 <ip> 5433 ; echo "rc=$?"     # non-zero is the pass
+```
+
+and record the result here with the date. Until that line exists, treat reboot-persistence as
+designed-for, not demonstrated. Note that the `127.0.0.1:5433` compose binding is a second, separate
+layer that does not depend on ufw at all, so a persistence failure would not by itself re-expose the
+port — it would remove the defence in depth that exists for the day someone publishes a port again.
