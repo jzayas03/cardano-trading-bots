@@ -251,7 +251,21 @@ Then, and only if before-stop is all OK:
 3. **Rotate the Postgres password** — `infra/vps/rotate-postgres-password.sh`. Here, and not earlier:
    nothing is connected, so a half-applied rotation cannot break a live writer.
 
-4. **Deploy.** Fetch, check out `NEW_SHA`, `npm ci`, `npm run migrate`.
+4. **Deploy, pinned, and starting nothing.**
+   `ssh root@<ip> 'bash -s' -- --sha NEW_SHA --no-start < infra/vps/deploy.sh`
+
+   Both flags are load-bearing. `--sha` lands exactly that commit on a detached HEAD instead of
+   whatever `main` happens to be at that second, which is what makes step 6's `--expect-sha` a check
+   rather than a formality — resolve `NEW_SHA` in your own checkout **before** deploying and keep
+   it, because reading it back off the server afterwards is the self-comparison the gate exists to
+   forbid. `--no-start` prevents the default `systemctl enable --now`, which would start the three
+   paper units the moment the deploy finished: before the env change in step 5, before the gate in
+   step 6, in the wrong order for step 7, and without `CTB_PAPER_FORCE_NEW=1`. The units are still
+   enabled for boot.
+
+   It does the `npm ci` and `npm run migrate` for you. It also runs `docker compose up -d postgres`,
+   which after step 3 recreates the container so its `POSTGRES_PASSWORD` matches the rotated one —
+   safe here because `pgdata` is a named volume and nothing is connected yet.
 
 5. **Turn multi-venue sampling on** (#98) in `~ctb/cardano-trading-bots/.env`:
    `COLLECT_MULTI_VENUE_EVERY_N_TICKS=4` and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA=50000`.
