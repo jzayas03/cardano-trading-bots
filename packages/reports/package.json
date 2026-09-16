@@ -3,5 +3,10 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "dependencies": { "@ctb/engine": "*" }
+  "dependencies": {
+    "@ctb/engine": "*"
+  },
+  "devDependencies": {
+    "@ctb/sim-executor": "*"
+  }
 }

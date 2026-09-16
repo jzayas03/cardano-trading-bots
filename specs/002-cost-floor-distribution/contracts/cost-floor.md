@@ -14,10 +14,10 @@ cost table) and `@ctb/engine` **types only**.
 ### `costObservations(snapshots, opts) -> CostObservation[]`
 
 - **C1.1** One observation per (snapshot, size bucket). A snapshot with zero or negative reserves on either side yields **no** observation, not an `Infinity` one.
-- **C1.2** `roundTripBps` is `curveLossBps + fixedFeeBps` and nothing else. The round trip is priced through the curve twice, the second leg against reserves updated by the first.
+- **C1.2** `roundTripBps` is `impactBps + fixedFeeBps` and nothing else, where `impactBps` is **twice the one-way** shortfall against mid. CORRECTED 2026-09-16: pricing a there-and-back through the same pool makes own impact cancel exactly (0.000000 bps at `feeBps = 0`), which is true of a self-reversing trade and useless as a model of trading. See data-model.md.
 - **C1.3** Fixed fees come from the venue's `VENUE_COSTS` entry, counted **twice** (once per leg), expressed over the lovelace notional.
 - **C1.4** A venue absent from `VENUE_COSTS` yields no observation and an `ExclusionRecord`. It never falls back to a default cost — an unknown venue is a rejection, matching `simExecutor`.
-- **C1.5** Monotonicity: for a fixed pool and tick, `roundTripBps` at a larger notional is **>=** the smaller one on the curve component. Fixed-fee bps move the other way, so the assertion is on `impactBps`, not on the total.
+- **C1.5** Monotonicity: for a fixed pool and tick, `impactBps` at a larger notional is **>=** the smaller one. Fixed-fee bps move the other way, so the assertion is on `impactBps`, not the total. **This is the assertion that caught the wrong model**, so it must be tested on a pool shallow enough that the curve, not integer truncation, is what moves.
 - **C1.6** Exact arithmetic. Reserves and fees are `bigint` throughout; no `Number` division on lovelace before the final bps conversion.
 
 ### `costDistributions(observations, opts) -> { distributions, exclusions, provenance }`

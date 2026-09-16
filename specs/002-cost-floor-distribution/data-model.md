@@ -61,14 +61,37 @@ One modelled round trip on one route at one size at one tick. **The unit of the 
 | `tvlLovelace` | bigint | carried so a thin-pool figure is recognisable as one |
 | `source` | `'quote' \| 'fill'` | never mixed inside a cell |
 
-**The arithmetic, stated once so it can be checked.** For a round trip of notional `N` lovelace on a
-pool with reserves `(rQuote, rBase)` and fee `feeBps`:
+**The arithmetic, stated once so it can be checked.** CORRECTED 2026-09-16 during implementation;
+the original version of this section is wrong and the reason is worth keeping. For a round trip of
+notional `N` lovelace on a pool with reserves `(rQuote, rBase)` and fee `feeBps`:
 
-1. Buy: `outBase = cpmmAmountOut(N, rQuote, rBase, feeBps)` — the pool fee is **inside** this.
-2. Sell the same base back through the post-buy reserves: `backQuote = cpmmAmountOut(outBase, rBase', rQuote', feeBps)`.
-3. `curveLossBps = (N - backQuote) / N` in bps. This is pool fee (twice) plus own impact (twice), and nothing else.
-4. `fixedFeeBps = 2 * (batcherFeeLovelace + networkFeeLovelace) / N` in bps.
-5. `roundTripBps = curveLossBps + fixedFeeBps`.
+1. `idealBase = N * rBase / rQuote` — what `N` buys **at mid**: no fee, no impact.
+2. `outBase = cpmmAmountOut(N, rQuote, rBase, feeBps)` — the pool fee is **inside** this.
+3. `oneWayBps = (idealBase - outBase) / idealBase` in bps. Pool fee **and** own impact, fee-inclusive.
+4. `impactBps = 2 * oneWayBps` — a round trip is two one-way legs.
+5. `fixedFeeBps = 2 * (batcherFeeLovelace + networkFeeLovelace) / N` in bps.
+6. `roundTripBps = impactBps + fixedFeeBps`.
+
+**Why one way doubled, and not a there-and-back through the pool.** The original arithmetic priced
+a buy and then sold the base straight back through the post-buy reserves. That is wrong, and
+measurably so: an immediate round trip returns you to the same point on the constant-product curve,
+so **own price impact cancels exactly**. Measured at `feeBps = 0`, a 50,000 ADA there-and-back into a
+100,000 ADA pool costs **0.000000 bps**. With a fee it gets *cheaper* as size grows — 59.85 bps at
+100 ADA falling to 40.02 at 50,000 — because the favourable price displacement from the buy offsets
+the sell's fee.
+
+That is a true property of a self-reversing trade and a useless model of trading. A strategy buys at
+`t` and sells at `t+k` against reserves that have moved, so the two impacts do not cancel. Doubling
+the one-way cost is also exactly the structure `docs/specs/2026-09-08-m6-execution.md` §2.1 uses to
+reach 216 from 108.
+
+The monotonicity test (C1.5) is what caught it: impact was *decreasing* with order size, which
+cannot be right. That test exists for this.
+
+**Assumption worth naming**: the sell leg is modelled as symmetric to the buy leg, at the same
+notional against the same reserves. The real sell happens at a different time and size. This is the
+same assumption §2.1 makes by doubling, and it is part of why the output is **modelled**, not
+realised.
 
 **What is NOT in this sum, and must never be added to it**: `slippageBps` and `priceImpactBps` as
 computed at fill time. Both already contain the pool fee, and so does `curveLossBps`. Adding any of
