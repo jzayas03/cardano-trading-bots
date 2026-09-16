@@ -12,12 +12,33 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
     expect(costsForPoolId('Minswap:x').basis).toBe('documented');
   });
   it('marks the unverified venues as assumed at 2 ADA', () => {
-    for (const v of ['MinswapV2', 'WingRiders', 'WingRidersV2', 'VyFinance', 'Splash']) {
+    for (const v of ['WingRiders', 'WingRidersV2', 'VyFinance', 'Splash']) {
       const c = costsForPoolId(`${v}:x`);
       expect(c.batcherFeeLovelace).toBe(2_000_000n);
       expect(c.basis).toBe('assumed');
     }
   });
+  // MinswapV2 was in the list above until 2026-09-16, when four live mainnet orders were read and
+  // every one carried 2 ADA in the datum field the validator enforces. Same number, different grade:
+  // it is no longer an inference from what Dexter writes, it is what the chain takes.
+  it('MinswapV2 is measured, at the same 2 ADA, and cites its evidence', () => {
+    const c = costsForPoolId('MinswapV2:x');
+    expect(c.batcherFeeLovelace).toBe(2_000_000n);
+    expect(c.basis).toBe('measured');
+    expect(c.source).toMatch(/MEASURED ON CHAIN 2026-09-16/);
+    expect(c.readAt).toBe('2026-09-16');
+  });
+
+  // The behavioural point of the grade: a measured venue stops being named in the report's
+  // assumed-costs warning, because the warning means "this number might not be what you pay" and
+  // for this one venue we went and looked.
+  it('assumedVenuesTouched does NOT flag a measured venue', () => {
+    const filled = (poolId: string): { result: FillResult } => ({ result: { status: 'filled', poolId, unitIn: 'lovelace', amountIn: 1n, unitOut: 'x', amountOut: 1n,
+      midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: new Date(0) } });
+    expect(assumedVenuesTouched([filled('MinswapV2:a')])).toEqual([]);
+    expect(assumedVenuesTouched([filled('MinswapV2:a'), filled('Splash:b')])).toEqual(['Splash']);
+  });
+
   it('an override becomes assumed with a cli source', () => {
     const c = costsForPoolId('Minswap:x', { batcherFeeLovelace: 1_500_000n });
     expect(c).toMatchObject({ batcherFeeLovelace: 1_500_000n, basis: 'assumed', source: 'cli override' });
