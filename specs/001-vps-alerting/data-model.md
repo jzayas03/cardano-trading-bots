@@ -94,8 +94,14 @@ service hits `StartLimitBurst`). Handled by one templated unit `ctb-alert@.servi
 | exit status | `ExecMainStatus` | sent as `/<exit-status>` when non-zero and not in maintenance |
 | timestamp | the handler's own clock | included in the body as data; the service stamps receipt |
 
-Rate limiting: systemd fires `OnFailure` once per entry into `failed`, not once per restart
-attempt, which satisfies FR-008's "one alert per restart-limit event" without any state on the box.
+Firing frequency, measured on the box 2026-09-16 (drill 3): for a `Restart=always` unit systemd
+runs `OnFailure=` on EVERY failed attempt (once per `RestartSec`; six handler runs before
+`StartLimitBurst` stopped the loop), not once at the limit, and the unit's final `Result` is
+`exit-code`, not `start-limit-hit`, so the handler cannot tell the last attempt from the others.
+One-shot units (backup) fire once. The dead-man's-switch service pages on the transition to down
+and dedupes the rest, so FR-008's "one alert per restart-limit event" holds for the PAGE; the
+handler log and the service's ping log carry one line per attempt. A per-unit debounce on the box
+is a possible follow-up (T039, reserved range).
 
 ## Relationships
 
