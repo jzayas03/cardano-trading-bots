@@ -8,6 +8,9 @@ dist/
 coverage/
 pgdata/
 .superpowers/
+# Spec Kit's CLI writes agent skill files here (DEFAULT_SKILLS_DIR in specify_cli); generated,
+# not source. The vendored tree that IS source lives in .specify/ and stays tracked.
+.agents/
 
 # Written by the collector at startup; runtime state, never committed.
 collect.pid
