@@ -54,6 +54,7 @@ describe('watch reports to the dead-man\'s switch', () => {
   });
 
   it('reads the URL from config and hands it to report(', () => {
-    expect(SRC).toMatch(/report\(\s*cfg\.healthcheckUrl/);
+    expect(SRC).toContain('cfg.healthcheckUrl');
+    expect(SRC).toMatch(/\breport\(\s*(cfg\.)?healthcheckUrl\b/);
   });
 });

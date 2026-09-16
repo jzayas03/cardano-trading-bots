@@ -73,6 +73,36 @@ export async function report(
   return out;
 }
 
+/** The env keys whose VALUES must never travel in a report body (data-model.md, Report). */
+const SECRET_ENV_KEYS = [
+  'DATABASE_URL', 'DASHBOARD_DATABASE_URL', 'POSTGRES_PASSWORD', 'BLOCKFROST_PROJECT_ID',
+  'R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'CTB_HEALTHCHECK_URL',
+] as const;
+
+/**
+ * The strings `filterSecrets` must never let through: each secret env value, and for the URLs
+ * also the password component on its own, because a check's detail is far more likely to quote a
+ * password than an entire connection string. The result is handed to a pure function and never
+ * logged.
+ */
+export function knownSecretsFrom(env: NodeJS.ProcessEnv): string[] {
+  const out = new Set<string>();
+  for (const key of SECRET_ENV_KEYS) {
+    const value = (env[key] ?? '').trim();
+    if (value === '') continue;
+    out.add(value);
+    if (value.includes('://')) {
+      try {
+        const pw = new URL(value).password;
+        if (pw) out.add(decodeURIComponent(pw));
+      } catch {
+        // intentional: a value that is not a URL is still a secret by itself, already added
+      }
+    }
+  }
+  return [...out];
+}
+
 // --- Maintenance window file -------------------------------------------------------------------
 
 /**

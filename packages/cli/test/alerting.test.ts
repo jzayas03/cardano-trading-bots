@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { report } from '../src/alerting.js';
+import { knownSecretsFrom, report } from '../src/alerting.js';
 
 /**
  * The one function that touches the network. The stub must reproduce the property under test:
@@ -94,5 +94,31 @@ describe('report', () => {
     const r = await report(BASE, 'alive', 'body', s.fetchImpl);
     expect(r.outcome).toBe('rejected');
     expect(r.responseBody).toHaveLength(200);
+  });
+});
+
+describe('knownSecretsFrom', () => {
+  it('collects the values the config loader treats as secrets, plus the password inside each URL', () => {
+    const secrets = knownSecretsFrom({
+      DATABASE_URL: 'postgres://ctb:pw-one@localhost:5433/ctb',
+      DASHBOARD_DATABASE_URL: '',
+      POSTGRES_PASSWORD: 'pw-two',
+      BLOCKFROST_PROJECT_ID: 'mainnetabc',
+      R2_ACCESS_KEY_ID: 'akid',
+      R2_SECRET_ACCESS_KEY: 'sak',
+      R2_ACCOUNT_ID: 'acct',
+      CTB_HEALTHCHECK_URL: 'https://hc.example.test/ping/uuid',
+      LOG_LEVEL: 'info',
+    });
+    expect(secrets).toEqual(expect.arrayContaining([
+      'postgres://ctb:pw-one@localhost:5433/ctb', 'pw-one', 'pw-two', 'mainnetabc', 'akid', 'sak', 'acct',
+      'https://hc.example.test/ping/uuid',
+    ]));
+    expect(secrets).not.toContain('info');
+    expect(secrets).not.toContain('');
+  });
+
+  it('is empty on an empty env', () => {
+    expect(knownSecretsFrom({})).toEqual([]);
   });
 });
