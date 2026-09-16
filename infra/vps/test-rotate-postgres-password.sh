@@ -109,7 +109,8 @@ grep -q '^FOO=bar$' "$ENV_FILE" || fail "unrelated .env line was disturbed"
 [ "$(stat -c '%a %U' "$ENV_FILE")" = "600 ctb" ] || fail ".env mode/owner wrong: $(stat -c '%a %U' "$ENV_FILE")"
 [ "$(cat /stub/db-password)" = "$new" ] || fail "database and .env disagree on the password"
 baks=("$ENV_FILE".bak-rotate-*)
-[ "${#baks[@]}" -eq 1 ] && [ -f "${baks[0]}" ] || fail "expected exactly one .env backup, found ${#baks[@]}"
+[ "${#baks[@]}" -eq 1 ] || fail "expected exactly one .env backup, found ${#baks[@]}"
+[ -f "${baks[0]}" ] || fail "no .env backup was written"
 bak="${baks[0]}"
 grep -q '^POSTGRES_PASSWORD=before_rotation$' "$bak" || fail "backup does not hold the previous .env"
 expected=$'pg_isready\npsql\npsql\npsql\nsystemctl restart ctb-collector\nsystemctl is-active ctb-collector'
