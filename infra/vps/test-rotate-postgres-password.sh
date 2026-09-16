@@ -19,6 +19,14 @@
 # on 2026-09-16 (the old password was "still accepted" over the socket), so a script that verifies
 # without `-h <container address>` fails this harness the same way it failed on the VPS.
 #
+# The stub's fake psql also has the real one's variable rules: `:'VAR'` is interpolated only in SQL
+# read from stdin and only from psql variables (\getenv, \set, -v), never from the environment and
+# never inside a -c string. The first rotation attempt on the VPS (2026-09-16, after the stdin fix)
+# died at ALTER ROLE with "syntax error at or near :" because the statement was a -c string and the
+# value only ever existed as an environment variable -- and this harness passed it, because its stub
+# read $NEWPW straight from its own environment. A stand-in that is looser than production proves
+# nothing; this one now fails the same way psql 16.15 did.
+#
 # Run on any machine with Docker:  infra/vps/test-rotate-postgres-password.sh
 # Exit 0 = the script reached its final line and rotated the fake .env. Anything else = it did not.
 set -euo pipefail
@@ -68,24 +76,49 @@ while [ $# -gt 0 ]; do
   shift
 done
 # The property under test. Real `docker exec -i` attaches stdin and drains it, so when stdin is the
-# calling script the rest of that script lands here and the bash upstream runs out of input.
-if [ "$interactive" = 1 ]; then cat >/dev/null; fi
+# calling script the rest of that script lands here and the bash upstream runs out of input. It is
+# captured rather than discarded because a psql fed SQL on stdin (see below) has to read it.
+input=""
+if [ "$interactive" = 1 ]; then input="$(cat)"; fi
 echo "$1" >> /stub/calls                     # command name only: the arguments carry the secret
 case "$1" in
   pg_isready) exit 0 ;;
   hostname) [ "${2:-}" = -i ] || { echo "stub: only 'hostname -i' is modelled" >&2; exit 64; }; echo "$PG_ADDR"; exit 0 ;;
   psql)
-    sql="${*: -1}"                           # the -c statement is last in every call the script makes
+    shift
     host=socket                              # no -h: psql uses the Unix socket
-    while [ $# -gt 0 ]; do case "$1" in -h) host="$2"; shift ;; esac; shift; done
+    cstr=""; has_c=0
+    while [ $# -gt 0 ]; do case "$1" in -h) host="$2"; shift ;; -c) cstr="$2"; has_c=1; shift ;; esac; shift; done
     case "$host" in                          # pg_hba.conf of the official image, see the header
       socket|127.*|localhost|::1) enforce=0 ;;
       "$PG_ADDR")                  enforce=1 ;;
       *) echo "stub: psql -h '$host' is not an address the fake container has" >&2; exit 64 ;;
     esac
+    # Second property under test. Real psql interpolates :'VAR' ONLY in SQL it reads from stdin, and
+    # ONLY from psql variables (\set, -v, \getenv) -- never from the environment, and never inside a
+    # -c string, which goes to the server verbatim. The first version of this stub read $NEWPW from
+    # its own environment and so passed a script whose ALTER ROLE was a syntax error on the real
+    # psql 16.15 (2026-09-16: "syntax error at or near :"). Here the value has to travel the way it
+    # does in production or the ALTER does not happen.
+    if [ "$has_c" = 1 ]; then
+      case "$cstr" in *":'"*) echo "ERROR:  syntax error at or near \":\"" >&2; exit 1 ;; esac
+      sql="$cstr"
+    else
+      declare -A pgvar=()
+      sql=""
+      while IFS= read -r line; do
+        case "$line" in
+          '\getenv '*) set -- $line; [ -n "${!3+x}" ] || { echo "stub: \\getenv $3: not set" >&2; exit 3; }; pgvar["$2"]="${!3}" ;;
+          '\set '*)    set -- $line; pgvar["$2"]="$3" ;;
+          '\'*)        echo "stub: unexpected meta-command $line" >&2; exit 64 ;;
+          *)           sql="$sql$line"$'\n' ;;
+        esac
+      done <<<"$input"
+      for v in "${!pgvar[@]}"; do sql="${sql//:\'$v\'/\'${pgvar[$v]}\'}"; done
+      case "$sql" in *":'"*) echo "ERROR:  syntax error at or near \":\"" >&2; exit 3 ;; esac
+    fi
     case "$sql" in
-      *"ALTER ROLE ctb PASSWORD :'NEWPW'"*) echo "$NEWPW" > /stub/db-password; exit 0 ;;
-      *"ALTER ROLE ctb PASSWORD :'OLDPW'"*) echo "$OLDPW" > /stub/db-password; exit 0 ;;
+      *"ALTER ROLE ctb PASSWORD '"*"';"*) v="${sql#*PASSWORD \'}"; v="${v%%\'*}"; echo "$v" > /stub/db-password; exit 0 ;;
       *"SELECT 1"*) [ "$enforce" = 0 ] || [ "${PGPASSWORD:-}" = "$(cat /stub/db-password)" ] ;;
       *) echo "stub: unexpected sql" >&2; exit 64 ;;
     esac ;;
