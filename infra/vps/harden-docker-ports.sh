@@ -19,6 +19,12 @@
 # This is DEFENCE IN DEPTH. The actual fix is `127.0.0.1:5433:5432` in docker-compose.yml, which
 # stops the port being published off-host at all. Keep both: the compose binding is what protects
 # you, and this is what protects you when someone adds a service and forgets.
+#
+# STDIN: this script is delivered as `ssh root@<ip> 'bash -s' < this-file`, so the script IS bash's
+# stdin. Any child that reads stdin swallows the rest of it and bash exits 0 having done part of the
+# job. `ufw reload` shells out to iptables-restore, which reads stdin by default. Every command below
+# that could read is given `</dev/null`. The Postgres rotate script learned this the expensive way
+# (#127): it rotated nothing, twice, and reported success.
 set -euo pipefail
 
 AFTER=/etc/ufw/after.rules
@@ -52,10 +58,24 @@ COMMIT
 $MARK_END
 EOF
 
+# The block must actually be in the file before a reload can put it in force.
+grep -q "$MARK_BEGIN" "$AFTER" || { echo "the hardening block did not land in $AFTER" >&2; exit 1; }
+
 echo "--- reloading ufw"
-ufw reload
+ufw reload </dev/null
 echo "--- DOCKER-USER now:"
-iptables -S DOCKER-USER
+iptables -S DOCKER-USER </dev/null
+
+# A reload that printed is not a rule that is loaded. Assert both DROPs are live in the running
+# chain, or fail loudly: a silent half-application here looks exactly like success.
+live="$(iptables -S DOCKER-USER </dev/null)"
+# Matched loosely on purpose: iptables -S inserts "-m tcp" and the exact spelling differs between
+# the legacy and nft backends, so an exact-string check would fail on a rule that is actually there.
+for port in 5432 5433; do
+  printf '%s\n' "$live" | grep -- "--dport $port -j DROP" | grep -q -- "-i $IF" \
+    || { echo "DOCKER-USER is missing the DROP for $port on $IF; after.rules backup is $AFTER.bak-*" >&2; exit 1; }
+done
+echo "--- both DROP rules confirmed live on $IF"
 
 echo
 echo "VERIFY FROM ANOTHER MACHINE, not from here -- a check run on the host cannot see this:"
