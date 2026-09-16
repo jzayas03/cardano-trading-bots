@@ -6,7 +6,7 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
   it('carries the documented values', () => {
     expect(costsForPoolId('Minswap:x').batcherFeeLovelace).toBe(0n);
     expect(costsForPoolId('SundaeSwapV1:x').batcherFeeLovelace).toBe(2_500_000n);
-    // 1.28, not the documented 1.0: the model follows what Dexter writes into the order (#104's rule).
+    // 1.28, not the documented 0.5-1.0 range: measured on chain 2026-09-16, see the test below.
     expect(costsForPoolId('SundaeSwapV3:x').batcherFeeLovelace).toBe(1_280_000n);
     expect(costsForPoolId('MuesliSwap:x').batcherFeeLovelace).toBe(950_000n);
     expect(costsForPoolId('Minswap:x').basis).toBe('documented');
@@ -37,6 +37,25 @@ describe('VENUE_COSTS (read from venue docs 2026-09-06, see M2 report §1)', () 
       midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: new Date(0) } });
     expect(assumedVenuesTouched([filled('MinswapV2:a')])).toEqual([]);
     expect(assumedVenuesTouched([filled('MinswapV2:a'), filled('Splash:b')])).toEqual(['Splash']);
+  });
+
+  // Measured the same way MinswapV2 was, and it CONFIRMED the number rather than correcting it.
+  // The grade moved documented -> measured because the old label was the wrong word: SundaeV3.pdf
+  // documents a 0.5-1.0 range that neither the library nor the chain uses. Note the fee is a PER-POOL
+  // datum value here, not one global constant, which is why the evidence spans several pools.
+  it('SundaeSwapV3 is measured, at the same 1.28 ADA, and cites its evidence', () => {
+    const c = costsForPoolId('SundaeSwapV3:x');
+    expect(c.batcherFeeLovelace).toBe(1_280_000n);
+    expect(c.basis).toBe('measured');
+    expect(c.source).toMatch(/MEASURED ON CHAIN 2026-09-16/);
+    expect(c.readAt).toBe('2026-09-16');
+  });
+
+  // Both documented and measured are evidence, so neither is named by the warning; only a guess is.
+  it('assumedVenuesTouched flags neither a measured nor a documented venue', () => {
+    const filled = (poolId: string): { result: FillResult } => ({ result: { status: 'filled', poolId, unitIn: 'lovelace', amountIn: 1n, unitOut: 'x', amountOut: 1n,
+      midPrice: '1', fillPrice: '1', poolFeeIn: 0n, batcherFeeLovelace: 0n, networkFeeLovelace: 0n, slippageBps: 0, priceImpactBps: 0, poolAfter: null, tsFill: new Date(0) } });
+    expect(assumedVenuesTouched([filled('SundaeSwapV3:a'), filled('Minswap:b'), filled('MinswapV2:c')])).toEqual([]);
   });
 
   it('an override becomes assumed with a cli source', () => {
