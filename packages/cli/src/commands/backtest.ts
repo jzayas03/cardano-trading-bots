@@ -81,10 +81,13 @@ export function parseBacktestArgs(args: string[]): BacktestArgs {
       case '--source':
         if (val !== 'candles' && val !== 'external') throw new Error(`--source must be candles or external\n${USAGE}`);
         out.source = val === 'external' ? 'candles_external' : 'candles'; i++; break;
+      // `val`, not `args[i + 1]`. `rest` is args.slice(4), so indexing `args` with a `rest` index
+      // reads four positions to the left -- `--currency ada` read the TICKER and threw. Every other
+      // case here uses `val`; this one did not, and no test covered it (the --currency test in
+      // sweep.test.ts exercises parseBackfillFlags, a different command). Fixed 2026-09-16.
       case '--currency': {
-        const v = args[i + 1];
-        if (v !== 'ada' && v !== 'usd') throw new Error(`--currency must be ada or usd\n${USAGE}`);
-        out.denomination = v; i++; break;
+        if (val !== 'ada' && val !== 'usd') throw new Error(`--currency must be ada or usd\n${USAGE}`);
+        out.denomination = val; i++; break;
       }
       case '--cash-ada': out.cashAda = num(flag, val); i++; break;
       case '--depth-ada': out.depthAda = val === 'auto' ? 'auto' : num(flag, val); i++; break;

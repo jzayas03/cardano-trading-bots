@@ -2,6 +2,36 @@ import { describe, expect, it } from 'vitest';
 import { parseBacktestArgs, parseStrategyList } from '../src/commands/backtest.js';
 
 describe('parseBacktestArgs', () => {
+  const BASE = ['ma-crossover', 'SNEK', '2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z'];
+
+  // `--currency` had never worked. It read `args[i + 1]` while every other flag reads the `rest`
+  // array, and `rest` is args.slice(4) -- so `--currency ada` inspected the TICKER and threw
+  // "must be ada or usd". The flag defaulted to 'ada' when omitted, which is why nobody noticed:
+  // the only way to hit it was to say out loud what you were already getting.
+  //
+  // This is a UNITS flag. External candles arrive in USD and internal accounting is in ADA, and a
+  // USD return read against an ADA cost floor is meaningless and looks entirely normal -- three
+  // months of rows already landed wrong that way (Principle II). A units switch that silently
+  // refuses to be set is the same defect waiting to happen in the other direction.
+  it('--currency reads its own value, not a positional argument', () => {
+    expect(parseBacktestArgs([...BASE, '--currency', 'ada']).denomination).toBe('ada');
+    expect(parseBacktestArgs([...BASE, '--currency', 'usd']).denomination).toBe('usd');
+  });
+
+  it('--currency defaults to ada and refuses anything else', () => {
+    expect(parseBacktestArgs(BASE).denomination).toBe('ada');
+    expect(() => parseBacktestArgs([...BASE, '--currency', 'eur'])).toThrow(/--currency must be ada or usd/);
+    expect(() => parseBacktestArgs([...BASE, '--currency'])).toThrow(/--currency must be ada or usd/);
+  });
+
+  it('--currency still works when it is not the first flag', () => {
+    // The old bug's offset depended on position, so pin a case where the index differs.
+    const a = parseBacktestArgs([...BASE, '--source', 'external', '--depth-ada', 'auto', '--cash-ada', '500', '--currency', 'usd']);
+    expect(a.denomination).toBe('usd');
+    expect(a.source).toBe('candles_external');
+    expect(a.cashAda).toBe(500);
+  });
+
   it('parses positionals, defaults, and params', () => {
     const a = parseBacktestArgs(['ma-crossover', 'SNEK', '2026-08-01T00:00:00Z', '2026-09-01T00:00:00Z', '--param', 'fast=6', '--param', 'slow=24']);
     expect(a).toMatchObject({ strategyIds: ['ma-crossover'], ticker: 'SNEK', source: 'candles', cashAda: 1000, depthAda: null, params: { fast: 6, slow: 24 }, syntheticPrice: 'close' });
