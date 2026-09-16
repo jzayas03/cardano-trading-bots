@@ -338,6 +338,62 @@ Write `docs/ops/<date>-m3-report.md` containing:
 Then open its PR. The run ids in the report are the whole audit trail: anyone can re-derive every
 number in it with `report <id>` and `report --compare`.
 
+### Resize the box to 4 GB, at this cutover, BEFORE starting any units
+
+**This is a founder action in the Hetzner console.** No agent has Hetzner API access and none should.
+
+The box is a **CPX11**: 2 vCPU AMD EPYC, 1,914 MB RAM, 38 GB disk with 30 G free, Ashburn. The target
+is **CPX21** — 3 vCPU, 4 GB, 80 GB. Check current pricing in the console; the delta has been on the
+order of a few dollars a month.
+
+**Why, in one line:** 2 GB fits eight paper processes tightly and sixteen not at all. At 4 GB, four
+instruments x four strategies (~1,890 MB of paper plus ~590 MB of collector, Postgres and OS) leaves
+well over a gigabyte of headroom. That is the difference between two instruments and four, which is
+the difference between roughly a year and roughly six months to a promotable answer.
+
+**The one irreversible choice.** Hetzner's rescale dialog offers CPU+RAM only, or CPU+RAM+disk.
+**Choose CPU and RAM only.** A disk upgrade cannot be undone — the server can never be rescaled back
+down afterwards — and disk is not the constraint here: 30 G of 38 G is free. Keeping the 40 GB disk
+keeps the whole change reversible.
+
+**The reboot is the cost, so do it in the window that is already stopped.** A CPU/RAM rescale
+requires the server powered off, which stops the paper runs. That is precisely what this cutover has
+already done, which is why this step sits here and not on any other day.
+
+Order:
+
+```
+# 1. Runs are already stopped (see above). Confirm nothing is writing:
+ssh ctb@<ip> "systemctl is-active 'ctb-paper@*' ctb-collector; \
+  docker exec -i ctb_postgres psql -U ctb -d ctb -At -c \
+  \"SELECT count(*) FROM runs WHERE status='running'\" </dev/null"
+#    Expect: inactive for every paper unit, and 0 running rows.
+
+# 2. Stop the collector and Postgres cleanly, then power off from the console.
+ssh root@<ip> "systemctl stop ctb-collector ctb-backup.timer ctb-watch.timer; \
+  cd /home/ctb/cardano-trading-bots && sudo -u ctb docker compose stop postgres; poweroff"
+
+# 3. In the Hetzner console: Rescale -> CPX21 -> "CPU and RAM only". Then Power on.
+
+# 4. Verify the box came back as expected BEFORE deploying anything:
+ssh ctb@<ip> "nproc; free -m | sed -n 2p; df -h / | tail -1; uptime -p"
+#    Expect: 3 vCPU, ~3,900 MB total, the SAME 38 G disk, and a fresh uptime.
+
+# 5. The firewall's reboot persistence is now finally testable, and this is the only free chance
+#    to test it. From ANOTHER machine, not the box:
+nc -z -w 8 <ip> 5433 ; echo "rc=$?"     # non-zero is the pass
+#    Record the result in docs/ops/RUNBOOK-postgres-exposure.md. Until this line exists, that
+#    control is designed-for and not demonstrated -- the block was written six hours AFTER the
+#    kernel that is running now booted, so it has never actually replayed from after.rules.
+
+# 6. Confirm Postgres and the collector came back, then continue to the NIGHT step below.
+ssh ctb@<ip> "docker ps --format '{{.Names}} {{.Status}}'; systemctl is-active ctb-collector"
+```
+
+**If anything about step 4 or 5 surprises you, stop and do not start the paper units.** A cutover that
+starts eight runs on a box whose firewall or database did not come back correctly is a week spent
+measuring the wrong thing.
+
 ### Add NIGHT as a second instrument, at this cutover
 
 Decided 2026-09-16. `MIN_ROUND_TRIPS` stays at 30 and the lever is more instruments in parallel, per
