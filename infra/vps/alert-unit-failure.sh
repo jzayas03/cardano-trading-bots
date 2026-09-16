@@ -22,9 +22,12 @@ ENV_FILE="$REPO/.env"
 MAINT_FILE="$HOME/ctb-maintenance.json"
 say() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
 
-RAW_UNIT="${1:-}"
-if [ -z "$RAW_UNIT" ]; then say "alert-unit-failure: no unit name given"; exit 0; fi
-UNIT="$(systemd-escape --unescape "$RAW_UNIT" 2>/dev/null || printf '%s' "$RAW_UNIT")"
+# %i is the failed unit's literal name (OnFailure=ctb-alert@%n.service). Do NOT pass it through
+# `systemd-escape --unescape`: in systemd's escaping "-" stands for "/", so unescaping a plain name
+# mangles every hyphen. The first live drill (2026-09-16 16:59 UTC) paged with
+# "unit: ctb/paper@no/such/strategy.service" for exactly that reason.
+UNIT="${1:-}"
+if [ -z "$UNIT" ]; then say "alert-unit-failure: no unit name given"; exit 0; fi
 
 # What failed, from systemd's own record. Any of these may be empty on an odd unit type.
 RESULT=""; STATUS=""; NRESTARTS=""
