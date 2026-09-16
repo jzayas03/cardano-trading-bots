@@ -91,15 +91,15 @@ Monorepo at the repository root. Pure computation in `packages/reports/`, SQL an
 
 ### Tests for User Story 2 ⚠️ write these first
 
-- [ ] T017 [P] [US2] Extend `packages/reports/test/costFloor.test.ts`: a venue absent from `VENUE_COSTS` yields **no observation** and an `ExclusionRecord`, never a fallback to a default cost (C1.4) — matching `simExecutor`, where an unknown venue is a rejection. Must fail before T019.
-- [ ] T018 [P] [US2] Extend `packages/reports/test/costFloor.test.ts`: `basis` on a distribution is the **weakest** of its components (C2.5), so a route whose venue basis is `assumed` can never report as `measured`. Assert with a fixture where the venue is `assumed` and everything else is `measured`.
+- [X] T017 [P] [US2] Extend `packages/reports/test/costFloor.test.ts`: a venue absent from `VENUE_COSTS` yields **no observation** and an `ExclusionRecord`, never a fallback to a default cost (C1.4) — matching `simExecutor`, where an unknown venue is a rejection. Must fail before T019.
+- [X] T018 [P] [US2] Extend `packages/reports/test/costFloor.test.ts`: `basis` on a distribution is the **weakest** of its components (C2.5), so a route whose venue basis is `assumed` can never report as `measured`. Assert with a fixture where the venue is `assumed` and everything else is `measured`.
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Implement exclusion and basis propagation in `packages/reports/src/costFloor.ts` so T017 and T018 pass. Exclusion reasons per [data-model.md](./data-model.md): `unmeasured-fee`, `varies-by-pool`, `no-snapshots`, `not-a-market`.
-- [ ] T020 [US2] Apply D1 in `packages/cli/src/commands/costFloor.ts`: exclude venues whose cost cannot be measured. Expected on today's table — `WingRiders`, `WingRidersV2`, `VyFinance` → `unmeasured-fee`; `Splash` → `varies-by-pool` (its take varies **by pool** while `VENUE_COSTS` is keyed by venue, so the key is wrong, not just the shape); `synthetic` and `Fake` → `not-a-market`.
-- [ ] T021 [US2] Render the exclusions list, and assert in `packages/cli/test/costFloorRender.test.ts` that **it is emitted even when empty** (C5.2, FR-017) — the price of the exclusion policy must never be invisible.
-- [ ] T022 [US2] Emit the provenance block in `renderCostFloor`: the `VENUE_COSTS` amounts, `basis`, `source` and `readAt` used; the snapshot date range; `MIN_OBSERVATIONS`; the size buckets; the git sha; and the words **modelled, not realised** (C5.4, FR-007). Note in the block that the grade is read from the LIVE table, per `costs.ts:92-93`, so it reflects what is known now.
+- [X] T019 [US2] Implement exclusion and basis propagation in `packages/reports/src/costFloor.ts` so T017 and T018 pass. Exclusion reasons per [data-model.md](./data-model.md): `unmeasured-fee`, `varies-by-pool`, `no-snapshots`, `not-a-market`.
+- [X] T020 [US2] Apply D1 in `packages/cli/src/commands/costFloor.ts`: exclude venues whose cost cannot be measured. Expected on today's table — `WingRiders`, `WingRidersV2`, `VyFinance` → `unmeasured-fee`; `Splash` → `varies-by-pool` (its take varies **by pool** while `VENUE_COSTS` is keyed by venue, so the key is wrong, not just the shape); `synthetic` and `Fake` → `not-a-market`.
+- [X] T021 [US2] Render the exclusions list, and assert in `packages/cli/test/costFloorRender.test.ts` that **it is emitted even when empty** (C5.2, FR-017) — the price of the exclusion policy must never be invisible.
+- [X] T022 [US2] Emit the provenance block in `renderCostFloor`: the `VENUE_COSTS` amounts, `basis`, `source` and `readAt` used; the snapshot date range; `MIN_OBSERVATIONS`; the size buckets; the git sha; and the words **modelled, not realised** (C5.4, FR-007). Note in the block that the grade is read from the LIVE table, per `costs.ts:92-93`, so it reflects what is known now.
 
 **Checkpoint**: US2 is complete when the report labels provenance, lists every exclusion with a reason, and the gate is green.
 
@@ -113,12 +113,12 @@ Monorepo at the repository root. Pure computation in `packages/reports/`, SQL an
 
 ### Tests for User Story 3 ⚠️ write these first
 
-- [ ] T023 [P] [US3] Extend `packages/reports/test/costFloor.test.ts` for `lookupFloor`: exactly three result kinds — `floor`, `insufficient`, `excluded` — and **no default-bearing fourth** (C3.1). A notional **between** buckets resolves to the **larger** bucket, the more conservative answer (C3.2). A notional **above** the largest bucket returns `insufficient`, never the top bucket extrapolated (C3.3). An **unknown** `poolId` returns `excluded`, not `insufficient` — they are different facts (C3.4). Must fail before T024.
+- [X] T023 [P] [US3] Extend `packages/reports/test/costFloor.test.ts` for `lookupFloor`: exactly three result kinds — `floor`, `insufficient`, `excluded` — and **no default-bearing fourth** (C3.1). A notional **between** buckets resolves to the **larger** bucket, the more conservative answer (C3.2). A notional **above** the largest bucket returns `insufficient`, never the top bucket extrapolated (C3.3). An **unknown** `poolId` returns `excluded`, not `insufficient` — they are different facts (C3.4). Must fail before T024.
 
 ### Implementation for User Story 3
 
-- [ ] T024 [US3] Implement `lookupFloor(distributions, poolId, notionalLovelace)` in `packages/reports/src/costFloor.ts` so T023 passes. **There is deliberately no code path that returns a number when data is missing** — M6 §7 requires fail closed, and a silent fallback to 216 is the behaviour this feature exists to remove.
-- [ ] T025 [US3] Add `--json` to `packages/cli/src/commands/costFloor.ts` emitting the same structure as data (C5.6), for the M6.3 consumer that does not exist yet. Note in the task and in the code comment that **the promotion gate does not check cost at all** (research.md R5), so this ships with no consumer by design.
+- [X] T024 [US3] Implement `lookupFloor(distributions, poolId, notionalLovelace)` in `packages/reports/src/costFloor.ts` so T023 passes. **There is deliberately no code path that returns a number when data is missing** — M6 §7 requires fail closed, and a silent fallback to 216 is the behaviour this feature exists to remove.
+- [X] T025 [US3] Add `--json` to `packages/cli/src/commands/costFloor.ts` emitting the same structure as data (C5.6), for the M6.3 consumer that does not exist yet. Note in the task and in the code comment that **the promotion gate does not check cost at all** (research.md R5), so this ships with no consumer by design.
 
 **Checkpoint**: US3 is complete when `lookupFloor` has three cases, no fallback, and `--json` round-trips.
 
@@ -139,19 +139,19 @@ Monorepo at the repository root. Pure computation in `packages/reports/`, SQL an
 
 ## Phase 7: Verification against reality
 
-- [ ] T032 Run the gate: `npm run lint`, `npm run lint:sh`, `npm run test:pg`. All three green, failures reported with their output. Nothing before this point counts as implemented.
-- [ ] T033 **Real run against real data.** Execute `npm run cost-floor` against the ~19,948 measured-venue snapshots (MinswapV2 19,756 over 20 pools and 2,407 ticks; SundaeSwapV3 192 over 9 pools), and record the observed output. Check it against research.md R9's **written-in-advance** predictions: MinswapV2 mostly sufficient; SundaeSwapV3 mostly insufficient; exactly four venues excluded; no global figure anywhere; exit code 0 even if nothing is sufficient; p90 above 216 bps at 2,500 ADA on thin pools and possibly below it at 100 ADA on deep ones. **A result that contradicts R9 is investigated, not accepted** — a global number appearing, or SundaeSwapV3 reporting n≥30 on most pools, means the implementation is wrong rather than the market surprising.
+- [X] T032 Run the gate: `npm run lint`, `npm run lint:sh`, `npm run test:pg`. All three green, failures reported with their output. Nothing before this point counts as implemented.
+- [X] T033 **Real run against real data.** Execute `npm run cost-floor` against the ~19,948 measured-venue snapshots (MinswapV2 19,756 over 20 pools and 2,407 ticks; SundaeSwapV3 192 over 9 pools), and record the observed output. Check it against research.md R9's **written-in-advance** predictions: MinswapV2 mostly sufficient; SundaeSwapV3 mostly insufficient; exactly four venues excluded; no global figure anywhere; exit code 0 even if nothing is sufficient; p90 above 216 bps at 2,500 ADA on thin pools and possibly below it at 100 ADA on deep ones. **A result that contradicts R9 is investigated, not accepted** — a global number appearing, or SundaeSwapV3 reporting n≥30 on most pools, means the implementation is wrong rather than the market surprising.
 - [ ] T034 **STOP AND ASK.** If T033's distribution suggests the cost model or the constitution's stated 216 bps should change, write the recommendation with its evidence and **stop**. Lowering or re-parameterising the cost model is a founder decision under Constitution Principle I and the stop-and-ask list. Do not edit `costs.ts`, `promotion.ts`, `depth.ts` or `constitution.md`.
-- [ ] T035 Corroboration replay, as `packages/cli/test/costFloorCorroboration.pg.test.ts` (`describe.skipIf(!PG_ENABLED)`, requires `RUN_PG_TESTS=1`). Price the 41 filled MinswapV2 orders through the same curve code at their own notional and compare modelled one-way impact against each fill's stored `slippage_bps`. **This is a sanity check, not a validation** — 41 observations across 3 pools cannot validate a model, but they will catch a sign error, a units error or a factor of two. **Expected direction: modelled impact SMALLER than stored `slippage_bps`**, because slippage measures the fill against the decision-time mid and so also contains whatever the price did between t and t+1. **If modelled comes out LARGER, something is wrong — the quote is charging a cost the fill did not pay.** Record the comparison.
-- [ ] T036 Quickstart scenario 6: run `git diff origin/main --stat -- packages/sim-executor/src/costs.ts packages/reports/src/promotion.ts packages/sim-executor/src/depth.ts .specify/memory/constitution.md` and assert it is **empty**. No fee value, no promotion threshold, no depth threshold, no constitutional wording changed.
+- [X] T035 Corroboration replay, as `packages/cli/test/costFloorCorroboration.pg.test.ts` (`describe.skipIf(!PG_ENABLED)`, requires `RUN_PG_TESTS=1`). Price the 41 filled MinswapV2 orders through the same curve code at their own notional and compare modelled one-way impact against each fill's stored `slippage_bps`. **This is a sanity check, not a validation** — 41 observations across 3 pools cannot validate a model, but they will catch a sign error, a units error or a factor of two. **Expected direction: modelled impact SMALLER than stored `slippage_bps`**, because slippage measures the fill against the decision-time mid and so also contains whatever the price did between t and t+1. **If modelled comes out LARGER, something is wrong — the quote is charging a cost the fill did not pay.** Record the comparison.
+- [X] T036 Quickstart scenario 6: run `git diff origin/main --stat -- packages/sim-executor/src/costs.ts packages/reports/src/promotion.ts packages/sim-executor/src/depth.ts .specify/memory/constitution.md` and assert it is **empty**. No fee value, no promotion threshold, no depth threshold, no constitutional wording changed.
 
 ---
 
 ## Phase 8: Polish
 
-- [ ] T037 [P] Write `docs/ops/2026-09-16-cost-floor-distribution.md` recording the first real run's numbers with their date, so the distribution is citable the way the venue fee measurements are.
-- [ ] T038 [P] Document in `packages/sim-executor/src/depth.ts`'s comment — **without changing the value** — that `DEFAULT_MAX_IMPACT_BPS = 34` is justified from the fee-**inclusive** `simExecutor.priceImpactBps` while being compared against the fee-**exclusive** `depth.priceImpactBps` (research.md R4). It has zero production consumers, so this is a documentation correction, not a behaviour change. **Do not change 34.**
-- [ ] T039 Update `README.md`'s command list with `cost-floor`.
+- [X] T037 [P] Write `docs/ops/2026-09-16-cost-floor-distribution.md` recording the first real run's numbers with their date, so the distribution is citable the way the venue fee measurements are.
+- [X] T038 [P] Document in `packages/sim-executor/src/depth.ts`'s comment — **without changing the value** — that `DEFAULT_MAX_IMPACT_BPS = 34` is justified from the fee-**inclusive** `simExecutor.priceImpactBps` while being compared against the fee-**exclusive** `depth.priceImpactBps` (research.md R4). It has zero production consumers, so this is a documentation correction, not a behaviour change. **Do not change 34.**
+- [X] T039 Update `README.md`'s command list with `cost-floor`.
 
 ---
 

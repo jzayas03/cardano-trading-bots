@@ -72,6 +72,17 @@ export function priceImpactBps(sizeLovelace: bigint, reserveQuote: bigint, reser
  *
  * On the 2026-09-12 SNEK corpus this lands in a tenfold gap rather than cutting through a cluster:
  * 0.5 and 6.4 bps on the two live pools, then 61, 265 and 1,402 on the three dead ones.
+ *
+ * BASIS MISMATCH, recorded 2026-09-16 and deliberately NOT fixed. The 34 is sourced from a
+ * FEE-INCLUSIVE measurement -- `simExecutor.priceImpactBps` prices the fill with `cpmmAmountOut(...,
+ * pool.feeBps)`, so the pool fee is inside it -- while `priceImpactBps` in THIS file calls
+ * `cpmmAmountOut(..., 0)` and therefore EXCLUDES the fee. Same name, opposite treatment, and the
+ * threshold's stated derivation is the wrong quantity for the place it is used. Correcting it means
+ * changing either the number or the derivation, and both are cost-model changes that are a founder
+ * decision under Constitution Principle I, so this is a note and not an edit. It is also currently
+ * harmless: a repo-wide grep finds no production caller of `filterByDepth`, `liquidEnough` or this
+ * constant -- the only call sites are in depth.test.ts. Found while implementing
+ * specs/002-cost-floor-distribution (research.md R4).
  */
 export const DEFAULT_MAX_IMPACT_BPS = 34;
 

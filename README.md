@@ -27,6 +27,17 @@ Three plumbing proofs, none a recommendation: `ma-crossover`, `rsi-mean-reversio
 
 Each strategy gets its own persisted run; a comparison table follows the per-run reports.
 
+## What a trade costs
+
+    npm run cost-floor                 # round-trip cost per route and order size, from pool snapshots
+
+A distribution, not a single number, with an observation count and date range on every figure and an
+explicit "not enough observations" where the data does not support one. Read-only, safe to run while
+a paper run is live. The figures are **modelled** -- they contain the pool fee, our own price impact
+and the fixed venue fees, and they contain none of batcher latency, the price moving between
+submission and execution, partial fills, or expiry. First real run:
+[docs/ops/2026-09-16-cost-floor-distribution.md](docs/ops/2026-09-16-cost-floor-distribution.md).
+
 ## Checks
 
     npm test        # unit tests

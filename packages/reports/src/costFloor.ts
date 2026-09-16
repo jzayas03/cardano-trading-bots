@@ -215,9 +215,20 @@ export function costObservations(
   }
 
   const exclusions: ExclusionRecord[] = [];
-  for (const [venue, count] of excludedCounts) {
-    const policy = excluded.get(venue)!;
-    exclusions.push({ venue, reason: policy.reason, detail: policy.detail, snapshotsAvailable: count });
+  // EVERY policy-excluded venue is listed, including those with zero snapshots. Listing only the
+  // ones that happened to appear in the data makes "excluded by policy" indistinguishable from
+  // "never collected", and FR-017 exists so the price of the exclusion policy stays visible. Found
+  // by the first real run: VyFinance and Splash have no snapshots at all, so they vanished from the
+  // report entirely and a reader would have concluded the policy did not apply to them.
+  for (const [venue, policy] of excluded) {
+    exclusions.push({
+      venue,
+      reason: excludedCounts.has(venue) ? policy.reason : 'no-snapshots',
+      detail: excludedCounts.has(venue)
+        ? policy.detail
+        : `${policy.detail} -- and no snapshots were collected for it in this window`,
+      snapshotsAvailable: excludedCounts.get(venue) ?? 0,
+    });
   }
   for (const [venue, count] of noCostVenues) {
     exclusions.push({
