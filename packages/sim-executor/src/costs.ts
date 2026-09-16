@@ -28,13 +28,18 @@ export const VENUE_COSTS: Record<DexName, VenueCosts> = {
   // disagreement on purpose — if it ever stops disagreeing, Dexter has been updated, and that is the
   // moment to re-examine MinswapV2 above.
   Minswap: { batcherFeeLovelace: 0n, networkFeeLovelace: NETWORK, basis: 'documented', source: MINSWAP_DOC, readAt: READ_AT },
+  // 2026-09-16: no longer an inference. Four live mainnet orders were read and every one carries
+  // 2 ADA in the datum the validator enforces, so this is a MEASUREMENT of the chain, not a reading
+  // of Dexter. Minswap's docs say all batcher fees were removed in May 2025; the V2 order contract
+  // disagrees, and the contract is the one that takes the money. See
+  // docs/ops/2026-09-16-minswap-v2-batcher-fee.md for the method, which is repeatable and free.
   // 2026-09-09: kept at 2 ADA on EVIDENCE, not inertia. Dexter 5.4.10's minswap-v2 adapter hardcodes
   // `batcherFee: 2000000n` (isReturned: false) into the order datum, and offering a fee in the datum
   // is paying it. Minswap's own policy may well be zero since May 2025 — that is a claim about the
   // VENUE; this number is about our SUBMISSION PATH. Lower it only after the datum parameter is
   // overridden at submission (M6 spec §7.2), never before: modelling 176 bps while paying 216
   // overstates every strategy's edge by 40 bps, in the direction that pushes losers through the gate.
-  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'Dexter 5.4.10 minswap-v2.js swapOrderFees() writes batcherFee 2000000n into the datum (read 2026-09-09), so this is what WE would pay regardless of Minswap policy; docs.minswap.org batcher page says only "previously around 2 ADA per order" (read 2026-09-07) and does not distinguish V1/V2. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: READ_AT },
+  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'MEASURED ON CHAIN 2026-09-16: four live mainnet V2 orders at block 13949171 (epoch 655) all carry batcherFee 2000000 in top-level datum field 7 — txs 1bbf64d2, 1dfbf2c8, f14c1813, 1a784066; two of them are a round swap plus exactly 4 ADA (2 batcher, not returned + 2 deposit, returned), which is the same arithmetic Dexter builds. docs.minswap.org claims ALL batcher fees were removed in May 2025; the V2 order contract does not implement that, which is Principle I twice over. Dexter 5.4.10 minswap-v2.js swapOrderFees() writes the same 2000000n into the datum. Method and raw evidence: docs/ops/2026-09-16-minswap-v2-batcher-fee.md. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: '2026-09-16' },
   SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
   // 2026-09-09: raised 1.00 -> 1.28 on the same rule as MinswapV2 — the model follows the SUBMISSION
   // path. Dexter 5.4.10's sundaeswap-v3 adapter writes `protocolFeeDefault = 1280000n` into the
