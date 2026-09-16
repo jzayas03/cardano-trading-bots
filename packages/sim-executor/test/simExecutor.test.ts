@@ -203,7 +203,7 @@ describe('SimExecutor cpmm_synthetic_depth', () => {
 
 describe('costsForPoolId', () => {
   it('returns the venue table and applies overrides', () => {
-    expect(costsForPoolId('MinswapV2:abc')).toMatchObject({ batcherFeeLovelace: 2_000_000n, basis: 'assumed' });
+    expect(costsForPoolId('MinswapV2:abc')).toMatchObject({ batcherFeeLovelace: 2_000_000n, basis: 'measured' });
     expect(costsForPoolId('Splash:abc', { batcherFeeLovelace: 1_500_000n }))
       .toMatchObject({ batcherFeeLovelace: 1_500_000n, networkFeeLovelace: 200_000n, basis: 'assumed', source: 'cli override' });
     expect(() => costsForPoolId('FutureSwap:abc')).toThrow(/unknown venue/);

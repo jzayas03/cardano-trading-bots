@@ -7,11 +7,23 @@ import type { FillResult } from '@ctb/engine';
  * not state a number is `assumed` at 2 ADA and is named in every report it touches. The network fee is an
  * estimate (0.2 ADA) everywhere; `basis` describes the batcher fee. Lowering a fee makes reported results
  * better, which is exactly why a value with no source is not allowed here (costsProvenance.guard).
+ *
+ * THREE GRADES, in ascending order of what they are worth:
+ *   `assumed`    - no usable figure; charged 2 ADA and NAMED in every report that touches it.
+ *   `documented` - the venue's own page or paper states it. Better than a guess, and still only a claim.
+ *   `measured`   - read off the chain: live order datums carrying the value the validator enforces.
+ *
+ * `measured` outranks `documented` on purpose, and the reason is Principle I. Documentation describes
+ * a venue's intent; the datum describes what our transaction will actually pay. On 2026-09-16 those
+ * two disagreed outright — docs.minswap.org said every batcher fee was removed in May 2025 while all
+ * four live V2 orders sampled paid 2 ADA. A vocabulary that cannot say "we went and looked" would
+ * have forced that reading to be filed as a guess, one word away from being promoted to the claim it
+ * disproves. `measured` must cite the reading and its dated note; the guard refuses it otherwise.
  */
 export interface VenueCosts {
   batcherFeeLovelace: bigint;
   networkFeeLovelace: bigint;
-  basis: 'documented' | 'assumed';
+  basis: 'documented' | 'assumed' | 'measured';
   source: string;
   readAt: string;
 }
@@ -39,7 +51,7 @@ export const VENUE_COSTS: Record<DexName, VenueCosts> = {
   // VENUE; this number is about our SUBMISSION PATH. Lower it only after the datum parameter is
   // overridden at submission (M6 spec §7.2), never before: modelling 176 bps while paying 216
   // overstates every strategy's edge by 40 bps, in the direction that pushes losers through the gate.
-  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'assumed', source: 'MEASURED ON CHAIN 2026-09-16: four live mainnet V2 orders at block 13949171 (epoch 655) all carry batcherFee 2000000 in top-level datum field 7 — txs 1bbf64d2, 1dfbf2c8, f14c1813, 1a784066; two of them are a round swap plus exactly 4 ADA (2 batcher, not returned + 2 deposit, returned), which is the same arithmetic Dexter builds. docs.minswap.org claims ALL batcher fees were removed in May 2025; the V2 order contract does not implement that, which is Principle I twice over. Dexter 5.4.10 minswap-v2.js swapOrderFees() writes the same 2000000n into the datum. Method and raw evidence: docs/ops/2026-09-16-minswap-v2-batcher-fee.md. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: '2026-09-16' },
+  MinswapV2: { batcherFeeLovelace: 2_000_000n, networkFeeLovelace: NETWORK, basis: 'measured', source: 'MEASURED ON CHAIN 2026-09-16: four live mainnet V2 orders at block 13949171 (epoch 655) all carry batcherFee 2000000 in top-level datum field 7 — txs 1bbf64d2, 1dfbf2c8, f14c1813, 1a784066; two of them are a round swap plus exactly 4 ADA (2 batcher, not returned + 2 deposit, returned), which is the same arithmetic Dexter builds. docs.minswap.org claims ALL batcher fees were removed in May 2025; the V2 order contract does not implement that, which is Principle I twice over. Dexter 5.4.10 minswap-v2.js swapOrderFees() writes the same 2000000n into the datum. Method and raw evidence: docs/ops/2026-09-16-minswap-v2-batcher-fee.md. Pinned by dexterWritesTheBatcherFee.guard.test.ts', readAt: '2026-09-16' },
   SundaeSwapV1: { batcherFeeLovelace: 2_500_000n, networkFeeLovelace: NETWORK, basis: 'documented', source: 'SundaeV3.pdf §3 (scooper fee)', readAt: READ_AT },
   // 2026-09-09: raised 1.00 -> 1.28 on the same rule as MinswapV2 — the model follows the SUBMISSION
   // path. Dexter 5.4.10's sundaeswap-v3 adapter writes `protocolFeeDefault = 1280000n` into the
@@ -74,8 +86,11 @@ export function costsForPoolId(poolId: string, overrides?: Partial<Pick<VenueCos
 }
 
 /**
- * Distinct venues with assumed (never documented) costs among FILLED orders, sorted; the report
- * names them. A `DexName` venue is assumed when its `VENUE_COSTS` entry says so. Any OTHER venue —
+ * Distinct venues with assumed costs among FILLED orders, sorted; the report names them. A `DexName`
+ * venue is assumed when its `VENUE_COSTS` entry says so — `documented` and `measured` venues are both
+ * left out, because the warning means "this fee may not be what you pay" and for those two it is not
+ * a guess. Note the grade is read from the LIVE table, not from the run's persisted `params.costs`,
+ * so re-running `report` on an old run reflects what is known NOW rather than what was known then. Any OTHER venue —
  * `synthetic` (the `cpmm_synthetic_depth` fill model's own pool id) or `Fake` (`dev:fake-collector`,
  * Plan 3 Task 6) — has no venue-specific documentation to look up at all; `SimExecutor.costsFor`
  * charges it `DEFAULT_COSTS` (`basis: 'assumed'`), so the report treats it the same way here rather
