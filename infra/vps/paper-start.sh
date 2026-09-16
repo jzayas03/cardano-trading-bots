@@ -19,9 +19,42 @@ set -euo pipefail
 # Generous against the ~5s restart observed, tiny against any deliberate stop-and-start-later.
 RESUME_WINDOW_SECONDS="${CTB_PAPER_RESUME_WINDOW_SECONDS:-120}"
 
-STRATEGY="${1:?usage: paper-start.sh <strategy> <TICKER> [extra args...]}"
-TICKER="${2:?usage: paper-start.sh <strategy> <TICKER> [extra args...]}"
-shift 2
+# Two call shapes, because systemd and a human want different things.
+#
+#   paper-start.sh ma-crossover SNEK --max-gap-min 20     <- by hand, explicit
+#   paper-start.sh ma-crossover_SNEK --max-gap-min 20     <- from a unit, where %i is all we get
+#
+# The second exists because `ctb-paper@.service` had the ticker HARDCODED as `SNEK` in its
+# ExecStart, so every instance of the template traded the same token and a second instrument was
+# impossible without a second template. `%i` is the only thing systemd hands a template, so the
+# instance name has to carry both parts.
+#
+# Separator is `_`, not `:`. Strategy ids use hyphens (`ma-crossover`, `rsi-mean-reversion`,
+# `buy-and-hold`, `scheduled-accumulation`) so a hyphen cannot separate them, and a colon would land
+# inside `StandardOutput=append:/path`, whose own syntax is colon-separated. Underscore appears in
+# neither a strategy id nor a ticker, and is safe in a filename. Split on the LAST underscore.
+USAGE="usage: paper-start.sh <strategy> <TICKER> [extra args...]  |  paper-start.sh <strategy>_<TICKER> [extra args...]"
+RAW="${1:?$USAGE}"
+case "$RAW" in
+  *_*)
+    STRATEGY="${RAW%_*}"
+    TICKER="${RAW##*_}"
+    shift
+    ;;
+  *)
+    STRATEGY="$RAW"
+    TICKER="${2:?$USAGE}"
+    shift 2
+    ;;
+esac
+
+# Catch the mistake this refactor makes newly possible: an instance named `ctb-paper@ma-crossover`
+# with no ticker would otherwise take `--max-gap-min` as the token and start a run against nothing.
+[ -n "$STRATEGY" ] || { echo "empty strategy in '$RAW'. $USAGE" >&2; exit 1; }
+if ! [[ "$TICKER" =~ ^[A-Z][A-Z0-9]*$ ]]; then
+  echo "ticker '$TICKER' does not look like a ticker (expected uppercase alphanumeric). $USAGE" >&2
+  exit 1
+fi
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"

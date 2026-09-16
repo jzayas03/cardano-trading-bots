@@ -1,0 +1,26 @@
+# Paper-run instances, one per line, as `<strategy>_<TICKER>`.
+#
+# THE single source of truth for which units deploy.sh enables. It used to be a hardcoded array in
+# deploy.sh that listed three instances while the box ran four -- scheduled-accumulation was live but
+# was never enabled for boot, so a reboot would have silently dropped a BASELINE and left the other
+# runs with nothing to be compared against.
+#
+# Blank lines and `#` comments are ignored. Adding an instrument is a line here plus a cutover.
+#
+# Instrument choice is measured, not habitual: docs/ops/2026-09-16-parallel-instruments.md ranks
+# eighteen tokens by round-trip cost at 500 ADA. SNEK is TWELFTH at 293.3 bps; NIGHT is second at
+# 152.3 on a 4.7M ADA pool. Every strategy needs BOTH baselines on its OWN token, because the
+# promotion gate compares within a token.
+#
+# MEMORY: ~118 MB resident per paper process against ~855 MB free with four running. Eight is
+# feasible and tight; sixteen is not possible on a 2 GB box. Check `free -m` between starts.
+
+ma-crossover_SNEK
+rsi-mean-reversion_SNEK
+buy-and-hold_SNEK
+scheduled-accumulation_SNEK
+
+ma-crossover_NIGHT
+rsi-mean-reversion_NIGHT
+buy-and-hold_NIGHT
+scheduled-accumulation_NIGHT
