@@ -147,10 +147,63 @@ the laptop, which is the M5 candidate in `docs/specs/2026-09-07-m4-dashboard.md`
 
 ### The cutover, in order
 
-Every step is gated by `npm run cutover`, which performs nothing and refuses when the state is not
-what the next step needs. **Any FAIL stops the sequence.** Every fact it cannot read comes back as a
+Every step is gated by the `cutover` command, which performs nothing and refuses when the state is
+not what the next step needs. **Any FAIL stops the sequence.** Every fact it cannot read comes back as a
 FAIL, not a pass — a check that could not run is not a verdict, and here the cost of stopping to look
 is minutes while the cost of proceeding on an unknown is the week's data.
+
+**The gate is not on the server.** `npm run cutover` arrived in `dfc1d50`; the VPS runs `0d42901`,
+62 commits behind and deliberately so, because the week's equity curve has to come from one git sha.
+`dfc1d50` is not an ancestor of `0d42901`, so on the live checkout the command does not exist — and
+because the deploy is step 4, the two gates that matter most (`before-stop`, and the load-bearing
+`after-stop`) would both be unrunnable at the moment they are invoked. Only `after-deploy` works as
+written. So bootstrap the gate from a throwaway checkout first:
+
+```bash
+# On the VPS, AS ctb -- not as root. The backup check reads $HOME/ctb-backups; root's $HOME has
+# none, and that fails closed as a mysterious `backup` FAIL on the one morning you cannot afford one.
+LIVE=~ctb/cardano-trading-bots
+GATE=/tmp/ctb-cutover
+git clone https://github.com/jzayas03/cardano-trading-bots.git "$GATE"
+git -C "$GATE" checkout NEW_SHA
+( cd "$GATE" && npm ci )      # its own node_modules; it never touches the live tree
+```
+
+**Run it from `$LIVE`, never from `$GATE`.** The directory you stand in is the thing being measured.
+`cutover` shells out to `git` without passing a `cwd`, and `main.ts` begins with
+`import 'dotenv/config'`, so `deployedSha`, `gitDirtyFiles`, `DATABASE_URL` and the tick interval all
+come from the current directory while the code comes from wherever the script lives. Run it from
+`$GATE` and one of two things happens, neither of them a gate. Usually it simply dies: a fresh clone
+has `.env.example` and not `.env`, and `DATABASE_URL` is required. But if `DATABASE_URL` happens to
+be exported in your shell it runs anyway — and then `worktree clean` and `deployed sha` are
+answering about the throwaway, which is clean by construction and already at the new sha. Two fake
+passes, on precisely the two checks whose whole job is to describe the server.
+
+```bash
+cd "$LIVE" && "$GATE/node_modules/.bin/tsx" "$GATE/packages/cli/src/main.ts" cutover \
+  --phase before-stop --expect-sha OLD_SHA --runs 147,148,149
+```
+
+From step 4 the live checkout has the tool, so step 6 is the plain `npm run cutover`. Delete `$GATE`
+when the cutover is done, so that nobody later runs a stale gate against a server that has moved on.
+
+The alternatives, written down so they are not re-had under time pressure. Running the gate **from
+the laptop** measures the laptop: `git` reads the local checkout, `$HOME/ctb-backups` is the local
+backup directory, and only `runs alive` reaches the server — three of four checks would be answering
+about the wrong machine. **Deploying the tooling first** means checking out the new sha and running
+`npm ci` in the live tree while the runs are alive, which swaps `node_modules` under three running
+processes and ends the one-sha invariant the whole week rests on. A **standalone psql/bash** version
+of the checks is a second copy of a load-bearing gate that no test covers and that drifts from the
+TypeScript one — and an ad-hoc psql script breaking on first use is not a hypothesis here:
+`/root/post-reset.sh` did exactly that, over a boolean comparison, and skipped the restart silently.
+
+**Do the bootstrap and one dry run the day BEFORE**, not on cutover morning. The gate is read-only —
+a few SELECTs and a pool that closes in a `finally` — so a `before-stop` dry run against the live box
+costs nothing, and that day it is `--expect-sha 0d42901` with the runs still up. It should read
+all-OK; if it does not, you have found the problem with a day of slack rather than with the runs
+already stopped. (The 62 commits add no *required* configuration — `COLLECT_MULTI_VENUE_EVERY_N_TICKS`
+and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA` are both optional with defaults — so the new sha's
+`loadConfig` is satisfied by the `.env` already on the server.)
 
 **The run ids are 147, 148 and 149, not 146, 147, 148.** Run 146 (rsi-mean-reversion) finished at
 the 2026-09-11 06:16 restart and its successor is 149; the history is intact across the two rows
@@ -159,20 +212,38 @@ EXACT equality, deliberately — so the old list does not warn, it FAILS, and on
 stale doc reads as an alarming unexplained failure. Re-read the ids before the day rather than
 trusting this line: `SELECT id, strategy_id FROM runs WHERE mode='paper' AND status='running';`
 
-`SHA` below is the commit being deployed. Pass it explicitly: without `--expect-sha` the check
-refuses, because comparing the checkout with itself would read OK while proving nothing.
+**The gate's query is wider than that one.** Both `beforeStopChecks` and `afterStopChecks` are fed
+`SELECT id FROM runs WHERE status = 'running'` — no `mode` filter and no `rehearsal` filter. The id
+query above has both, so it can show you three ids while the gate sees four. Only paper runs are
+ever written `running` (a backtest row is created `finished`), so the stray in practice is a
+**rehearsal** row from the day-2 drills, or a paper run somebody started by hand on another token.
+Either one fails `runs alive` on exact equality at before-stop, and `no running rows` at after-stop.
+The fix is to find that row and stop it, never to pad `--runs` until the gate goes quiet. What the
+gate actually sees is `SELECT id, mode, rehearsal, strategy_id FROM runs WHERE status='running'
+ORDER BY id;`
 
-```bash
-npm run cutover -- --phase before-stop --expect-sha SHA --runs 147,148,149
-```
+**Two different shas, and they are not interchangeable.** `shaCheck` compares `--expect-sha` against
+the HEAD of the checkout the gate is *run from* — cwd, per above, not where the code lives — so the
+right value depends on when you are asking:
 
-Then, and only if that is all OK:
+- `before-stop` wants **`OLD_SHA` — `0d42901`**, the sha the week actually ran on. `$LIVE` has not
+  been deployed yet at that point, and the question the check is asking is "is the server still
+  where I left it?". Passing the deploy target here fails the gate at the worst possible moment for
+  no reason at all.
+- `after-deploy` wants **`NEW_SHA`**, the commit being deployed. There the same check is asking the
+  opposite question: "did the deploy actually land?".
+
+Pass it explicitly in both cases: without `--expect-sha` the check refuses rather than comparing the
+checkout with itself, which would read OK while proving nothing.
+
+Then, and only if before-stop is all OK:
 
 1. **Stop the paper runs and the collector.**
    `systemctl stop ctb-paper@ma-crossover ctb-paper@rsi-mean-reversion ctb-paper@buy-and-hold ctb-collector`
 
-2. **Prove the stop was clean.**
-   `npm run cutover -- --phase after-stop --runs 147,148,149`
+2. **Prove the stop was clean.** Same bootstrap invocation, from `$LIVE`, no `--expect-sha` (this
+   phase does not check the sha):
+   `cd "$LIVE" && "$GATE/node_modules/.bin/tsx" "$GATE/packages/cli/src/main.ts" cutover --phase after-stop --runs 147,148,149`
    The load-bearing check is **no running rows**. `paper-start.sh` RESUMES a row marked `running`, so
    one row left in that state turns the next start into a silent continuation of the old run — and
    the ids look right either way, which is what makes it dangerous rather than merely wrong.
@@ -180,13 +251,13 @@ Then, and only if that is all OK:
 3. **Rotate the Postgres password** — `infra/vps/rotate-postgres-password.sh`. Here, and not earlier:
    nothing is connected, so a half-applied rotation cannot break a live writer.
 
-4. **Deploy.** Fetch, check out `SHA`, `npm ci`, `npm run migrate`.
+4. **Deploy.** Fetch, check out `NEW_SHA`, `npm ci`, `npm run migrate`.
 
 5. **Turn multi-venue sampling on** (#98) in `~ctb/cardano-trading-bots/.env`:
    `COLLECT_MULTI_VENUE_EVERY_N_TICKS=4` and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA=50000`.
 
-6. **Start the collector**, wait one tick interval, then:
-   `npm run cutover -- --phase after-deploy --expect-sha SHA`
+6. **Start the collector**, wait one tick interval, then — from `$LIVE`, which now has the tool:
+   `npm run cutover -- --phase after-deploy --expect-sha NEW_SHA`
    This checks the collector has **ticked**, not merely that the unit is `active` — this project has
    a documented history of green deploy jobs that deployed nothing.
 
