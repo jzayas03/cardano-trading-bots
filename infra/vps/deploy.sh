@@ -4,6 +4,13 @@
 #
 #   ssh root@<ip> 'bash -s' < infra/vps/deploy.sh
 #   ssh root@<ip> 'bash -s' -- --no-start < infra/vps/deploy.sh
+#   ssh root@<ip> 'bash -s' -- --sha <commit> --no-start < infra/vps/deploy.sh
+#
+# --sha pins the deploy to one commit instead of landing whatever `main` is at that second. The
+# end-of-run cutover needs this: `cutover --phase after-deploy --expect-sha X` is only a check if
+# the deploy was TOLD which sha to land. Without it the only way to fill in --expect-sha is to read
+# HEAD back off the server after deploying, which compares the checkout with itself and proves
+# nothing -- the exact non-check that --expect-sha is mandatory in order to prevent.
 #
 # --no-start installs and enables the units for boot but does NOT start them now. Use it whenever
 # another machine is still the live one: the collector and this one share a single Blockfrost key
@@ -16,7 +23,7 @@
 set -euo pipefail
 
 NO_START=0
-[ "${1:-}" = "--no-start" ] && NO_START=1
+SHA=""
 
 SERVICE_USER=ctb
 HOME_DIR="/home/$SERVICE_USER"
@@ -34,6 +41,18 @@ die() { echo "FAILED: $*" >&2; exit 1; }
 #
 # Proven: the same script with and without this redirect prints 1 line vs 3.
 asctb() { sudo -u "$SERVICE_USER" -H bash -lc "cd '$REPO' && $*" </dev/null; }
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-start) NO_START=1 ;;
+    --sha) shift; SHA="${1:-}"; [ -n "$SHA" ] || die "--sha needs a commit" ;;
+    --sha=*) SHA="${1#--sha=}"; [ -n "$SHA" ] || die "--sha needs a commit" ;;
+    # Unknown flags die rather than being ignored: a typo'd --no-start that silently started the
+    # paper units mid-cutover would be discovered by its consequences, which is too late.
+    *) die "unknown argument: $1 (accepts --sha <commit>, --no-start)" ;;
+  esac
+  shift
+done
 
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [ -d "$REPO/.git" ] || die "$REPO is not a git checkout; clone it as $SERVICE_USER first"
@@ -55,7 +74,18 @@ say "logs"
 install -d -m 755 -o "$SERVICE_USER" -g "$SERVICE_USER" "$HOME_DIR/logs" "$HOME_DIR/ctb-backups"
 
 say "code"
-asctb "git fetch --prune origin && git checkout main && git pull --ff-only"
+if [ -n "$SHA" ]; then
+  # Detached on purpose: this is "install exactly this commit", not "follow a branch". A later bare
+  # deploy re-attaches via the `git checkout main` below, so the detached state is not a trap.
+  #
+  # `fetch --prune origin` brings refs/heads/*, so a sha that is not on a branch is not fetched and
+  # the checkout dies here rather than half-deploying. That is the right failure: pin to a commit
+  # that is actually on main.
+  asctb "git fetch --prune origin && git checkout --detach '$SHA'"
+  echo "  pinned at $SHA (detached HEAD)"
+else
+  asctb "git fetch --prune origin && git checkout main && git pull --ff-only"
+fi
 asctb "git log --oneline -1"
 
 say "dependencies"
