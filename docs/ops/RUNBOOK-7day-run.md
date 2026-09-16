@@ -163,10 +163,15 @@ written. So bootstrap the gate from a throwaway checkout first:
 # On the VPS, AS ctb -- not as root. The backup check reads $HOME/ctb-backups; root's $HOME has
 # none, and that fails closed as a mysterious `backup` FAIL on the one morning you cannot afford one.
 LIVE=~ctb/cardano-trading-bots
-GATE=/tmp/ctb-cutover
+# NOT /tmp. On this box /tmp is a 957M tmpfs -- it is RAM, and the clone plus ~120M of node_modules
+# would come out of the ~840M the three paper runs, the collector and Postgres are sharing on 2GB.
+# /var/tmp is on / with 30G free. Checked on the live box 2026-09-16.
+GATE=/var/tmp/ctb-cutover
 git clone https://github.com/jzayas03/cardano-trading-bots.git "$GATE"
 git -C "$GATE" checkout NEW_SHA
-( cd "$GATE" && npm ci )      # its own node_modules; it never touches the live tree
+# nice/ionice so the install always loses to the collector: a paper run that hits maxTickFailures
+# aborts, and its restart creates a NEW run id, which restarts the week.
+( cd "$GATE" && nice -n 19 ionice -c3 npm ci )   # its own node_modules; never touches the live tree
 ```
 
 **Run it from `$LIVE`, never from `$GATE`.** The directory you stand in is the thing being measured.
@@ -180,9 +185,20 @@ answering about the throwaway, which is clean by construction and already at the
 passes, on precisely the two checks whose whole job is to describe the server.
 
 ```bash
-cd "$LIVE" && "$GATE/node_modules/.bin/tsx" "$GATE/packages/cli/src/main.ts" cutover \
+cd "$LIVE" && "$GATE/node_modules/.bin/tsx" --tsconfig "$GATE/tsconfig.json" \
+  "$GATE/packages/cli/src/main.ts" cutover \
   --phase before-stop --expect-sha OLD_SHA --runs 147,148,149
 ```
+
+**`--tsconfig` is not optional, and leaving it off does not fail safe.** `tsconfig.json` maps
+`@ctb/*` to `packages/*/src/index.ts` against `baseUrl: "."`, and tsx finds the tsconfig by walking
+up from the CURRENT DIRECTORY. Standing in `$LIVE` therefore points that mapping at `$LIVE`, so the
+sidecar's new CLI loads the LIVE checkout's OLD libraries -- the one thing this whole arrangement
+exists to avoid. On 2026-09-16 that surfaced as
+`SyntaxError: The requested module '@ctb/reports' does not provide an export named
+'effectiveTickIntervalSec'`, because the deployed sha predates that export. Pointing `--tsconfig` at
+the sidecar's own file fixes it: `baseUrl` resolves relative to the tsconfig, so the mapping lands
+back inside `$GATE` while cwd keeps supplying git, `.env` and `$HOME` from the live box.
 
 From step 4 the live checkout has the tool, so step 6 is the plain `npm run cutover`. Delete `$GATE`
 when the cutover is done, so that nobody later runs a stale gate against a server that has moved on.
@@ -204,6 +220,12 @@ all-OK; if it does not, you have found the problem with a day of slack rather th
 already stopped. (The 62 commits add no *required* configuration — `COLLECT_MULTI_VENUE_EVERY_N_TICKS`
 and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA` are both optional with defaults — so the new sha's
 `loadConfig` is satisfied by the `.env` already on the server.)
+
+This recipe was run end to end against the live box on **2026-09-16** and read four OK at exit 0,
+with the sidecar at `a42927a`. It is the rehearsal that found both the `/tmp` and the `--tsconfig`
+problems above — neither was visible from a laptop, because a stand-in `$LIVE` with no `tsconfig.json`
+and no `packages/` cannot reproduce either one. `npm ci` took 4 s, moved available memory by 8 MB,
+and the collector and three paper runs were at twelve processes before and after.
 
 **The run ids are 147, 148 and 149, not 146, 147, 148.** Run 146 (rsi-mean-reversion) finished at
 the 2026-09-11 06:16 restart and its successor is 149; the history is intact across the two rows
@@ -243,7 +265,7 @@ Then, and only if before-stop is all OK:
 
 2. **Prove the stop was clean.** Same bootstrap invocation, from `$LIVE`, no `--expect-sha` (this
    phase does not check the sha):
-   `cd "$LIVE" && "$GATE/node_modules/.bin/tsx" "$GATE/packages/cli/src/main.ts" cutover --phase after-stop --runs 147,148,149`
+   `cd "$LIVE" && "$GATE/node_modules/.bin/tsx" --tsconfig "$GATE/tsconfig.json" "$GATE/packages/cli/src/main.ts" cutover --phase after-stop --runs 147,148,149`
    The load-bearing check is **no running rows**. `paper-start.sh` RESUMES a row marked `running`, so
    one row left in that state turns the next start into a silent continuation of the old run — and
    the ids look right either way, which is what makes it dangerous rather than merely wrong.
