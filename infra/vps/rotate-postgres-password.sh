@@ -131,6 +131,10 @@ PGPASSWORD="$NEW" docker exec -e PGPASSWORD ctb_postgres psql -h "$PG_ADDR" -U c
   || rollback
 echo "  new password authenticates"
 if PGPASSWORD="$OLD" docker exec -e PGPASSWORD ctb_postgres psql -h "$PG_ADDR" -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1; then
+PGPASSWORD="$NEW" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1 \
+  || rollback
+echo "  new password authenticates"
+if PGPASSWORD="$OLD" docker exec -e PGPASSWORD ctb_postgres psql -U ctb -d ctb -At -c 'SELECT 1' </dev/null >/dev/null 2>&1; then
   rollback   # the old one still works: the rotation did not take, and reporting success would be a lie
 fi
 echo "  old password is refused"
