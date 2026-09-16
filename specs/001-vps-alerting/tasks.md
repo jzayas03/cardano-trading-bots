@@ -44,10 +44,10 @@ on the real box, which every story's "done" depends on; phase 10 is polish and t
 
 **Purpose**: the config key, the scripts, and the example env, so every later task has a place to plug in.
 
-- [ ] T001 Write `packages/cli/test/configAlerting.test.ts`: `loadConfig` accepts `CTB_HEALTHCHECK_URL` absent (→ `undefined`), blank `''` (→ `undefined`, the dotenv `KEY=` case), and `https://example.test/abc` (→ same string); rejects `http://…` (message names the key), a query string `?x=1`, and a trailing `/`. Run `npx vitest run packages/cli/test/configAlerting.test.ts` and show it FAIL.
-- [ ] T002 Add `CTB_HEALTHCHECK_URL` to `packages/cli/src/config.ts`: the `z.preprocess((v) => (v === '' ? undefined : v), z.string().optional())` idiom at `config.ts:45`, then `.refine` for `https://`, no `?`, no trailing `/`; add `healthcheckUrl?: string` to the `Config` interface (`config.ts:7-27`) and map it in the return object (`config.ts:161-175`). T001 green.
-- [ ] T003 [P] Add `"alert": "tsx packages/cli/src/main.ts alert"` and `"maintenance": "tsx packages/cli/src/main.ts maintenance"` to the root `package.json` scripts, in the existing pattern beside `"watch"`.
-- [ ] T004 [P] Add a commented `# CTB_HEALTHCHECK_URL=https://<service>/<uuid>   (no trailing slash, no query; absent = alerting off)` line to `.env.example`.
+- [X] T001 Write `packages/cli/test/configAlerting.test.ts`: `loadConfig` accepts `CTB_HEALTHCHECK_URL` absent (→ `undefined`), blank `''` (→ `undefined`, the dotenv `KEY=` case), and `https://example.test/abc` (→ same string); rejects `http://…` (message names the key), a query string `?x=1`, and a trailing `/`. Run `npx vitest run packages/cli/test/configAlerting.test.ts` and show it FAIL.
+- [X] T002 Add `CTB_HEALTHCHECK_URL` to `packages/cli/src/config.ts`: the `z.preprocess((v) => (v === '' ? undefined : v), z.string().optional())` idiom at `config.ts:45`, then `.refine` for `https://`, no `?`, no trailing `/`; add `healthcheckUrl?: string` to the `Config` interface (`config.ts:7-27`) and map it in the return object (`config.ts:161-175`). T001 green.
+- [X] T003 [P] Add `"alert": "tsx packages/cli/src/main.ts alert"` and `"maintenance": "tsx packages/cli/src/main.ts maintenance"` to the root `package.json` scripts, in the existing pattern beside `"watch"`.
+- [X] T004 [P] Add a commented `# CTB_HEALTHCHECK_URL=https://<service>/<uuid>   (no trailing slash, no query; absent = alerting off)` line to `.env.example`.
 
 ---
 
