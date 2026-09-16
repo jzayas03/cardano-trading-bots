@@ -19,3 +19,7 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   merge commit. Before pushing to a branch that was updated from `main` in the UI, `git fetch` and
   diff the remote branch against your last verified tree; fix forward, never force-push over the
   founder's commit (2026-09-16, #128: verification block, stub body and expected list each doubled).
+- **Never run one alerting drill inside another's maintenance window, and read the endpoint, not the
+  status.** A suppressed alert and a delivered one differ by four characters in `alert.log` --
+  `-> /log` vs `-> /1` -- and BOTH read `http 200 OK`, so a drill that proved nothing looks exactly
+  like one that passed (2026-09-16, #152: drill 3b ran 10 s inside drill 4b's window).
