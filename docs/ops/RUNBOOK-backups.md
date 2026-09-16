@@ -45,10 +45,20 @@ env -i HOME="$HOME" /bin/bash scripts/scheduled-backup.sh
 
 ## How you find out it stopped
 
-`npm run watch` checks backup freshness: **warn past 26 hours, fail past 48**, and a **fail** when
-no backup has ever been taken. An empty directory because the schedule never once fired looks
-exactly like a directory nobody has looked at, so absence is treated as a failure rather than a
-skip.
+Two ways, one fast and one slow.
+
+**Fast: the unit pages when it fails.** `ctb-backup.service` carries
+`OnFailure=ctb-alert@%n.service`, so the moment `scheduled-backup.sh` exits non-zero (dump, upload,
+or the remote verify) `infra/vps/alert-unit-failure.sh` sends the failure to the dead-man's-switch
+service and the founder's phone shows `unit: ctb-backup.service` with the exit status within about
+two minutes — unless a maintenance window is declared, in which case it is logged, not paged. Setup,
+what the alert body contains, and the drill that proves it are in `RUNBOOK-alerting.md`.
+
+**Slow, and the backstop:** `npm run watch` checks backup freshness: **warn past 26 hours, fail past
+48**, and a **fail** when no backup has ever been taken. An empty directory because the schedule
+never once fired looks exactly like a directory nobody has looked at, so absence is treated as a
+failure rather than a skip. This catches the case the fast path cannot: the timer that never fires
+at all, which produces no failure for `OnFailure=` to see.
 
 The likely causes of a stopped schedule, in order: Docker Desktop not running, a rotated R2 key,
 and a node upgrade that moved the binary.
