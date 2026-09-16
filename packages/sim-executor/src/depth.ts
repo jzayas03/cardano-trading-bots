@@ -15,8 +15,10 @@ import { cpmmAmountOut } from './cpmm.js';
  *
  * **Depth is measured against a trade, not in the abstract.** A pool is not "big" or "small" — it is
  * big enough for the size you intend, or it is not. `sizeLovelace` is therefore required, with no
- * default: naming the trade is the point. A 100 ADA buy (the engine's `MIN_BUY_LOVELACE`) is the
- * natural probe, because below that the fixed fees already exceed a whole round trip's floor.
+ * default: naming the trade is the point. A `MIN_BUY_LOVELACE` buy is the natural probe, because
+ * below that the fixed fees already exceed a whole round trip's floor. That constant was 100 ADA
+ * and became 500 ADA on 2026-09-16, measured rather than derived: a 100 ADA round trip costs a
+ * median 590.9 bps on a deep MinswapV2 pool. Do not re-hardcode the old number here.
  */
 
 /**
