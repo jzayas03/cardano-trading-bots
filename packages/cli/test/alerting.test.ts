@@ -68,6 +68,16 @@ describe('report', () => {
     await expect(report(BASE, 'alive', 'watch: OK', s.fetchImpl)).resolves.toMatchObject({ outcome: 'unreachable' });
   });
 
+  it('names the reason for unreachable by error name and cause code, never by URL', async () => {
+    const e = new TypeError('fetch failed');
+    (e as { cause?: unknown }).cause = Object.assign(new Error(`connect ECONNREFUSED ${BASE}`), { code: 'ECONNREFUSED' });
+    const r = await report(BASE, 'alive', 'watch: OK', throwing(e).fetchImpl);
+    expect(r.reason).toBe('TypeError: ECONNREFUSED');
+    expect(JSON.stringify(r)).not.toContain('/ping/');
+    const t = await report(BASE, 'alive', 'watch: OK', throwing(new DOMException('timed out', 'TimeoutError')).fetchImpl);
+    expect(t.reason).toBe('TimeoutError');
+  });
+
   it.each([
     ['fail', `${BASE}/fail`],
     ['log', `${BASE}/log`],
@@ -104,14 +114,14 @@ describe('knownSecretsFrom', () => {
       DASHBOARD_DATABASE_URL: '',
       POSTGRES_PASSWORD: 'pw-two',
       BLOCKFROST_PROJECT_ID: 'mainnetabc',
-      R2_ACCESS_KEY_ID: 'akid',
-      R2_SECRET_ACCESS_KEY: 'sak',
-      R2_ACCOUNT_ID: 'acct',
+      R2_ACCESS_KEY_ID: 'r2-access-key-id',
+      R2_SECRET_ACCESS_KEY: 'r2-secret-key',
+      R2_ACCOUNT_ID: 'r2-account',
       CTB_HEALTHCHECK_URL: 'https://hc.example.test/ping/uuid',
       LOG_LEVEL: 'info',
     });
     expect(secrets).toEqual(expect.arrayContaining([
-      'postgres://ctb:pw-one@localhost:5433/ctb', 'pw-one', 'pw-two', 'mainnetabc', 'akid', 'sak', 'acct',
+      'postgres://ctb:pw-one@localhost:5433/ctb', 'pw-one', 'pw-two', 'mainnetabc', 'r2-access-key-id', 'r2-secret-key', 'r2-account',
       'https://hc.example.test/ping/uuid',
     ]));
     expect(secrets).not.toContain('info');
@@ -120,5 +130,10 @@ describe('knownSecretsFrom', () => {
 
   it('is empty on an empty env', () => {
     expect(knownSecretsFrom({})).toEqual([]);
+  });
+
+  it('drops a password shorter than 4 characters: it would match inside ordinary words and redact every body', () => {
+    const secrets = knownSecretsFrom({ DATABASE_URL: 'postgres://ctb:x@localhost:5433/ctb' });
+    expect(secrets).toEqual(['postgres://ctb:x@localhost:5433/ctb']);
   });
 });

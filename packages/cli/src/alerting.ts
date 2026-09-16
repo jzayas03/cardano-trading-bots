@@ -21,6 +21,15 @@ export interface ReportResult {
   responseBody?: string;
   /** URL host only, for messages; never the path. */
   host?: string;
+  /** On `unreachable`: the error's name and, when present, its cause's code. Never a URL. */
+  reason?: string;
+}
+
+function reasonOf(e: unknown): string {
+  if (!(e instanceof Error)) return String(e).slice(0, 80);
+  const cause = (e as { cause?: { code?: unknown } }).cause;
+  const code = cause && typeof cause.code === 'string' ? `: ${cause.code}` : '';
+  return `${e.name || 'Error'}${code}`;
 }
 
 /** Ten seconds: a watchdog cycle must not hang on the service, and the service answers in tens of ms. */
@@ -70,6 +79,7 @@ export async function report(
   if (host !== undefined) out.host = host;
   if (status !== null) out.status = status;
   if (text !== null) out.responseBody = text;
+  if (error !== null) out.reason = reasonOf(error);
   return out;
 }
 
@@ -87,14 +97,18 @@ const SECRET_ENV_KEYS = [
  */
 export function knownSecretsFrom(env: NodeJS.ProcessEnv): string[] {
   const out = new Set<string>();
+  const add = (s: string): void => {
+    // Anything shorter is not a secret, and would match inside ordinary words and redact every body.
+    if (s.length >= MIN_SECRET_CHARS) out.add(s);
+  };
   for (const key of SECRET_ENV_KEYS) {
     const value = (env[key] ?? '').trim();
     if (value === '') continue;
-    out.add(value);
+    add(value);
     if (value.includes('://')) {
       try {
         const pw = new URL(value).password;
-        if (pw) out.add(decodeURIComponent(pw));
+        if (pw) add(decodeURIComponent(pw));
       } catch {
         // intentional: a value that is not a URL is still a secret by itself, already added
       }
@@ -102,6 +116,7 @@ export function knownSecretsFrom(env: NodeJS.ProcessEnv): string[] {
   }
   return [...out];
 }
+const MIN_SECRET_CHARS = 4;
 
 // --- Maintenance window file -------------------------------------------------------------------
 

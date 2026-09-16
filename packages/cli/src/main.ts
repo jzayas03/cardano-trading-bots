@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import pino from 'pino';
+import { alertCommand } from './commands/alert.js';
 import { backfillCommand } from './commands/backfill.js';
 import { backupCommand, backupVerifyCommand } from './commands/backup.js';
 import { backtestCommand } from './commands/backtest.js';
@@ -63,6 +64,8 @@ async function main(): Promise<void> {
       return backupCommand(log, rest);
     case 'backup:verify':
       return backupVerifyCommand(log, rest);
+    case 'alert':
+      return alertCommand(log, rest);
     default:
       console.error(
         'usage: tsx packages/cli/src/main.ts <migrate|doctor|collect [--once]|status [--digest]|candles [TICKER]|backfill <TICKER|ALL> <from-ISO> <to-ISO> [--spacing-sec 3]|' +
@@ -74,6 +77,7 @@ async function main(): Promise<void> {
         ' opportunity [TICKER|ALL] [--since ISO] [--floor-bps 216] [--windows 1800,7200,86400]>',
         ' lp <TICKER> [--since ISO] [--pool ID]  — LP value by entry tick, vs holding the token>',
         ' cutover --phase before-stop|after-stop|after-deploy [--runs 146,147,148] [--expect-sha X]>',
+        ' alert test | alert send --kind alive|fail|log [--body <text>]>',
       );
       process.exitCode = 2;
   }

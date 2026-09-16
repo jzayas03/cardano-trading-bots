@@ -68,6 +68,12 @@ Rules that hold regardless of state:
 
 Every row is done when the observed time is written in. Bounds are the spec's success criteria.
 
+**Drill 2 — only in a window where the paper runs are already stopped.** A unit stopped for one
+cycle and restarted after 120 s forks its run (`infra/vps/paper-start.sh`,
+`infra/vps/resume-target.sql`): the restart creates a NEW run id, and the measurement week
+restarts with it. Otherwise prove the pipe with `npm run alert -- send --kind fail --body drill`
+and record "deferred to the next stopped window" with the date.
+
 | drill | expected | observed (date, time) | notes |
 |---|---|---|---|
 | 0 self-test | | | |
