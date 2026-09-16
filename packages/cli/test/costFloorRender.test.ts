@@ -3,7 +3,7 @@
  * here is what a human can and cannot be shown -- in the style of opportunityRender's "never a bare
  * percentage" test.
  */
-import type { CostDistribution, ExclusionRecord } from '@ctb/reports';
+import type { CostDistribution, ExclusionRecord, ThinPoolRecord } from '@ctb/reports';
 import { describe, expect, it } from 'vitest';
 import { renderCostFloor } from '../src/commands/costFloor.js';
 
@@ -35,9 +35,11 @@ const PROV = {
   firstTs: new Date('2026-09-06T00:00:00Z'),
   lastTs: new Date('2026-09-16T00:00:00Z'),
   venuesUsed: [{ venue: 'MinswapV2', batcherAda: '2.00', basis: 'measured', readAt: '2026-09-16' }],
+  minDepthAda: 50000,
 };
 
-const render = (d: CostDistribution[], e: ExclusionRecord[] = []) => renderCostFloor(d, e, PROV).join('\n');
+const render = (d: CostDistribution[], e: ExclusionRecord[] = [], t: ThinPoolRecord[] = []) =>
+  renderCostFloor(d, e, t, PROV).join('\n');
 
 describe('renderCostFloor', () => {
   it('never prints a bps figure without its n beside it', () => {
@@ -83,6 +85,23 @@ describe('renderCostFloor', () => {
       }
     }
     expect(text).not.toMatch(/^\s*(overall|global|all venues)/im);
+  });
+
+  it('emits the thin-pool section EVEN WHEN EMPTY, and names the depth floor', () => {
+    const text = render([dist()]);
+    expect(text).toContain('TOO THIN TO PRICE (0 pools');
+    expect(text).toMatch(/depth floor\s+50000 ADA/);
+  });
+
+  it('a pool dropped for depth is reported, not silently absent', () => {
+    const thin: ThinPoolRecord[] = [
+      { poolId: 'MinswapV2:dust', venue: 'MinswapV2', snapshotsDropped: 916, medianDepthLovelace: 9n, requiredLovelace: 50_000n * ADA },
+    ];
+    const text = render([dist()], [], thin);
+    expect(text).toContain('MinswapV2:dust');
+    expect(text).toContain('916 snapshots');
+    // and it must NOT appear as a priced route with a cost
+    expect(text).not.toMatch(/MinswapV2:dust.*19982/);
   });
 
   it('carries the provenance a figure needs to be re-derived', () => {

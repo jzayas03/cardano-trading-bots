@@ -104,6 +104,36 @@ describe('costObservations', () => {
     }
   });
 
+  it('drops a snapshot below the depth floor and RECORDS the pool, never silently', () => {
+    // The first real run showed a pool with a median TVL of 9 lovelace quoting 19,982 bps.
+    // Principle III: a quoted price on a pool that thin is not a market.
+    const thinSnap = snap({ poolId: 'MinswapV2:dust', reserveQuote: 500n * ADA, reserveBase: 500n * ADA });
+    const { observations, thinPools } = costObservations([thinSnap, thinSnap, snap()], DEPS, {
+      minDepthLovelace: 50_000n * ADA,
+    });
+    // The deep pool still prices; the dust pool contributes nothing.
+    expect(observations.every((o) => o.poolId !== 'MinswapV2:dust')).toBe(true);
+    expect(observations.length).toBe(SIZE_BUCKETS_LOVELACE.length);
+
+    expect(thinPools).toHaveLength(1);
+    expect(thinPools[0]).toMatchObject({
+      poolId: 'MinswapV2:dust',
+      venue: 'MinswapV2',
+      snapshotsDropped: 2,
+      requiredLovelace: 50_000n * ADA,
+    });
+    expect(thinPools[0]!.medianDepthLovelace).toBe(500n * ADA);
+  });
+
+  it('applies no depth filter by default, so the option cannot silently shrink a corpus', () => {
+    // 1,000 ADA a side: far below the 50,000 floor the CLI passes, but still able to price a
+    // 100 ADA trade. With no `minDepthLovelace` it must be priced, not dropped.
+    const shallow = snap({ reserveQuote: 1_000n * ADA, reserveBase: 1_000n * ADA });
+    const { observations, thinPools } = costObservations([shallow], DEPS, { sizes: [100n * ADA] });
+    expect(thinPools).toEqual([]);
+    expect(observations).toHaveLength(1);
+  });
+
   it('refuses an unknown venue with an exclusion, never a default cost (C1.4)', () => {
     const { observations, exclusions } = costObservations([snap({ poolId: 'NotAVenue:abc' })], DEPS);
     expect(observations).toEqual([]);

@@ -86,9 +86,54 @@ strongest evidence here that the curve maths is right.
 This is a sanity check, not a validation. 41 observations across 3 pools cannot validate a model;
 they can catch a sign error, a units error or a factor of two, and they did not find one.
 
+## Second run, with the depth filter (same day)
+
+The dust problem below was fixed by reusing the project's existing `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA`
+(50,000 ADA a side) rather than inventing a threshold. Its own justification is the one that applies
+here: "a spread against a pool nobody can trade is not an opportunity."
+
+| | before | after |
+|---|---|---|
+| sufficient routes | 140 | 100 |
+| **max p90** | **19,981.6 bps** | **1,045.3 bps** |
+| pools reported as too thin | — | 53 |
+
+The fiction is gone, and the 53 dropped pools are listed rather than vanishing — a pool dropped for
+depth has not been judged expensive, it has not been judged at all, and those are different facts.
+
+**MinswapV2 p90 across 18 pools, after filtering:**
+
+| size | min | median | max |
+|---|---|---|---|
+| 100 ADA | 500.6 | **590.9** | 1,045.3 |
+| 250 ADA | 237.6 | 328.3 | 789.2 |
+| 500 ADA | 151.1 | 254.1 | 714.4 |
+| **1,000 ADA** | 110.2 | **216.3** | 696.7 |
+| 2,500 ADA | 93.2 | 251.5 | 834.8 |
+
+### 216 bps is not the floor. It is the floor's minimum.
+
+The median p90 at 1,000 ADA is **216.3 bps**. The constitution says 216. Run 139, the single fill
+that produced that number, was **990 ADA**. Once the dust is removed, the measured median at that
+size lands within 0.3 bps of the figure derived from one observation.
+
+That is a much better result for the existing number than the first run suggested, and it sharpens
+what is actually wrong with it. 216 is not optimistic **for the size it was measured at**. It is
+close to exact there. What is wrong is treating it as **size-independent**:
+
+- at 100 ADA the real median is **590.9 bps** — 2.7x the stated floor
+- at 1,000 ADA it is 216.3 — the stated floor, and the cheapest size
+- at 2,500 it rises again to 251.5 as own impact starts to outweigh the fixed fee
+
+The curve is U-shaped and its minimum sits near 1,000 ADA, where the 4.4 ADA of fixed fees has been
+amortised but price impact has not yet taken over. **216 bps is the best case, achievable only at
+the right size on a deep pool** — not a floor that holds across sizes.
+
+Surviving venues after filtering: MinswapV2 90 routes, SundaeSwapV1 5, SundaeSwapV3 5.
+
 ## Two problems this run exposed
 
-**1. Dust pools produce fiction, and the report showed it as a number.** Ten sufficient routes have
+**1. Dust pools produce fiction, and the report showed it as a number.** FIXED the same day; see the second run above. Ten sufficient routes have
 a median TVL under 1,000 ADA, and the worst quotes **19,982 bps**. One pool has a median TVL of 9
 lovelace. Constitution Principle III is explicit that a quoted price on a pool that thin is not a
 market. The report carries TVL beside every figure so the reader can see it, but it does not filter,
