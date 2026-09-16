@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import pino from 'pino';
 import { alertCommand } from './commands/alert.js';
+import { costFloorCommand } from './commands/costFloor.js';
 import { backfillCommand } from './commands/backfill.js';
 import { backupCommand, backupVerifyCommand } from './commands/backup.js';
 import { backtestCommand } from './commands/backtest.js';
@@ -61,6 +62,8 @@ async function main(): Promise<void> {
       return cutoverCommand(log, rest);
     case 'watch':
       return watchCommand(log, rest);
+    case 'cost-floor':
+      return costFloorCommand(log, rest);
     case 'backup':
       return backupCommand(log, rest);
     case 'backup:verify':

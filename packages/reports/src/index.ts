@@ -22,3 +22,4 @@ export { bcaInterval, bcaStability, BOOTSTRAP_RESAMPLES, conservativeBounds, mea
 export { ASSUMED_STAKING_APR_PCT, stakingCredit, withStakingCredit } from './staking.js';
 export { roundTrips, roundTripStats, type RoundTrip, type RoundTripStats } from './roundTrips.js';
 export { lpEntryRows, lpEntrySummary, type LpCandle, type LpEntryRow, type LpEntrySummary } from './lp.js';
+export * from './costFloor.js';

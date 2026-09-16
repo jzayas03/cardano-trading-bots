@@ -35,7 +35,8 @@
     "dashboard": "tsx packages/cli/src/main.ts dashboard",
     "backup": "tsx packages/cli/src/main.ts backup",
     "backup:verify": "tsx packages/cli/src/main.ts backup:verify",
-    "backup:verify:remote": "tsx packages/cli/src/main.ts backup:verify --remote"
+    "backup:verify:remote": "tsx packages/cli/src/main.ts backup:verify --remote",
+    "cost-floor": "tsx packages/cli/src/main.ts cost-floor"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
