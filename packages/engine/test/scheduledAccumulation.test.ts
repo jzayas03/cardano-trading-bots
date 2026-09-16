@@ -68,12 +68,12 @@ describe('scheduledAccumulation', () => {
   });
 
   it('honours a non-default period', () => {
-    const p = { periodHours: 6, buyAda: 150 };
+    const p = { periodHours: 6, buyAda: 600 };
     const same = [at('2026-09-09T00:05:00Z'), at('2026-09-09T05:55:00Z')];
     expect(scheduledAccumulation.onCandle(ctx(same, CASH, 0n, p))).toEqual([]);
     const rolled = [at('2026-09-09T05:55:00Z'), at('2026-09-09T06:05:00Z')];
     expect(scheduledAccumulation.onCandle(ctx(rolled, CASH, 0n, p))).toEqual([
-      { side: 'buy', amountIn: 150_000_000n, reason: 'scheduled accumulation: period 2026-09-09T06:00:00.000Z (6h)' },
+      { side: 'buy', amountIn: 600_000_000n, reason: 'scheduled accumulation: period 2026-09-09T06:00:00.000Z (6h)' },
     ]);
   });
 
@@ -85,23 +85,29 @@ describe('scheduledAccumulation', () => {
 
   it('spends what is left when the cash runs short, holding back a flat fee reserve', () => {
     const h = [at('2026-09-10T00:05:00Z')];
-    // 200 ADA left against a 500 ADA installment: spend all but the 5 ADA fee reserve. A PERCENTAGE
-    // headroom would leave 2 ADA here against a 2.2 ADA fee — rejected, and rejected again every
-    // period after, because a schedule always ends up in this regime.
-    expect(scheduledAccumulation.onCandle(ctx(h, 200_000_000n))).toEqual([
-      { side: 'buy', amountIn: 195_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
+    // NOTE the non-default `buyAda`. Since 2026-09-16 `MIN_BUY_LOVELACE` is 500 ADA, the same as
+    // `defaultParams.buyAda`, so at DEFAULT params this branch is unreachable: a remainder large
+    // enough to clear the floor is also large enough to fund a full installment. It is still live
+    // whenever the installment is bigger than the floor, which is what this exercises.
+    // 700 ADA left against a 1,000 ADA installment: spend all but the 5 ADA fee reserve. A
+    // PERCENTAGE headroom would leave 7 ADA here against a 2.2 ADA fee — and a schedule always
+    // ends up in this regime.
+    expect(scheduledAccumulation.onCandle(ctx(h, 700_000_000n, 0n, { ...scheduledAccumulation.defaultParams, buyAda: 1000 }))).toEqual([
+      { side: 'buy', amountIn: 695_000_000n, reason: 'scheduled accumulation: period 2026-09-10T00:00:00.000Z (24h)' },
     ]);
   });
 
   it('ends the schedule rather than emit an order the fixed costs would eat', () => {
     const h = [at('2026-09-10T00:05:00Z')];
-    // The floor is 100 ADA, derived: below it one leg's fixed cost exceeds the whole round-trip
-    // floor. 104.999999 ADA leaves 99.999999 after the reserve — one lovelace short.
+    // The floor is 500 ADA since 2026-09-16, measured rather than derived: at 100 ADA the median
+    // round-trip cost on a deep MinswapV2 pool is 590.9 bps, so the old minimum needed a 6% move
+    // just to break even. 504.999999 ADA leaves 499.999999 after the reserve — one lovelace short.
+    expect(scheduledAccumulation.onCandle(ctx(h, 504_999_999n))).toEqual([]);
     expect(scheduledAccumulation.onCandle(ctx(h, 104_999_999n))).toEqual([]);
     expect(scheduledAccumulation.onCandle(ctx(h, 5_000_000n))).toEqual([]);
     expect(scheduledAccumulation.onCandle(ctx(h, 0n))).toEqual([]);
     // And one lovelace over it clears.
-    expect(scheduledAccumulation.onCandle(ctx(h, 105_000_000n))).toHaveLength(1);
+    expect(scheduledAccumulation.onCandle(ctx(h, 505_000_000n))).toHaveLength(1);
   });
 
   it('throws on an unparseable candle timestamp instead of buying on every candle', () => {

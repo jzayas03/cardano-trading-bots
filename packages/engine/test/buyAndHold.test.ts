@@ -11,14 +11,19 @@ describe('buyAndHold', () => {
   it('buys 99% of the cash balance on the first candle it sees while flat, leaving room for the lovelace fees it cannot see', () => {
     expect(buyAndHold.defaultParams).toEqual({ fraction: 0.99 });
     expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n))).toEqual([{ side: 'buy', amountIn: 990_000_000n, reason: 'buy-and-hold entry' }]);
-    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n, { fraction: 0.25 }))).toEqual([{ side: 'buy', amountIn: 250_000_000n, reason: 'buy-and-hold entry' }]);
+    // 4,000 ADA rather than 1,000: since 2026-09-16 the floor is 500 ADA, and a quarter of 1,000
+    // is 250 — now correctly refused. The point of this line is that `fraction` is honoured, so it
+    // uses a balance where a quarter still clears the floor.
+    expect(buyAndHold.onCandle(ctxFor(4_000_000_000n, 0n, { fraction: 0.25 }))).toEqual([{ side: 'buy', amountIn: 1_000_000_000n, reason: 'buy-and-hold entry' }]);
+    // A quarter of 1,000 ADA is 250, below the floor: refused, and that is the change of 2026-09-16.
+    expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n, { fraction: 0.25 }))).toEqual([]);
   });
   it('never sells and never re-buys while holding', () => {
     expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 1n))).toEqual([]);
   });
   it('tries again while still flat (a rejected first buy is retried next candle) and respects the 5 ADA floor', () => {
     expect(buyAndHold.onCandle(ctxFor(1_000_000_000n, 0n))).toHaveLength(1);
-    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n))).toEqual([]); // 99% of 100 ADA < the 100 ADA floor
+    expect(buyAndHold.onCandle(ctxFor(100_000_000n, 0n))).toEqual([]); // 99% of 100 ADA < the 500 ADA floor
   });
   it('needs one candle of warmup and fails closed on a missing fraction', () => {
     expect(buyAndHold.warmup).toBe(1);

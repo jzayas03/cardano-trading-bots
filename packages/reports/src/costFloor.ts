@@ -59,9 +59,9 @@ const LOVELACE = 1_000_000n;
  * and the mistake that already cost this project three months of mis-denominated candles.
  */
 export const SIZE_BUCKETS_LOVELACE: readonly bigint[] = [
-  100n * LOVELACE,   // MIN_BUY_LOVELACE -- the smallest order a strategy will place
+  100n * LOVELACE,   // the OLD MIN_BUY_LOVELACE; kept as a bucket because it shows why it moved
   250n * LOVELACE,
-  500n * LOVELACE,   // scheduledAccumulation.defaultParams.buyAda
+  500n * LOVELACE,   // MIN_BUY_LOVELACE since 2026-09-16, and scheduledAccumulation's buyAda
   1_000n * LOVELACE, // ~ the 990 ADA of run 139, the fill 216 bps came from
   2_500n * LOVELACE, // impact should dominate the fixed fee here
 ];
