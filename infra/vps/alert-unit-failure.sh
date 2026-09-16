@@ -11,7 +11,8 @@
 #
 # Deliberately shell, not Node: this must work when node_modules is mid-`npm ci`, when Postgres is
 # the thing that failed, and when the failing unit is the collector the Node CLI shares code with.
-# It needs only bash, curl, systemctl, systemd-escape, date, hostname, mktemp.
+# It needs only bash, curl, systemctl, date, hostname, mktemp. (systemd-escape was in this list
+# until #137: the handler used to unescape %i, which is exactly the bug that fix removed.)
 #
 # ALWAYS exits 0. A handler that fails makes systemd log a second failure and alerts nobody.
 set -euo pipefail
