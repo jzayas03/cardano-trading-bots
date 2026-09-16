@@ -359,9 +359,11 @@ ssh root@<ip> 'bash -s' -- --sha <sha> --no-start < infra/vps/deploy.sh
 # 2. Confirm the file's eight instances are enabled and nothing else is.
 ssh root@<ip> "systemctl list-unit-files 'ctb-paper@*' --state=enabled --no-legend --plain"
 
-# 3. Start them ONE AT A TIME, checking memory between each. ~118 MB per process against ~855 MB
-#    free with four running; eight is feasible and TIGHT, and the box also needs headroom for the
-#    nightly pg_dump. If `available` drops under 250 MB, STOP and do not start the rest.
+# 3. Start them ONE AT A TIME, checking memory between each. Each run is now ONE process, not three:
+#    paper-start.sh execs tsx directly instead of going through `npm run paper`, which on 2026-09-16
+#    was measured holding 267 MB of wrappers across four runs -- 28% of the 966 MB the runs used.
+#    Budget ~120 MB per run rather than the ~240 the old tree cost. If `available` drops under
+#    250 MB, STOP and do not start the rest.
 for i in ma-crossover_SNEK rsi-mean-reversion_SNEK buy-and-hold_SNEK scheduled-accumulation_SNEK \
          ma-crossover_NIGHT rsi-mean-reversion_NIGHT buy-and-hold_NIGHT scheduled-accumulation_NIGHT; do
   ssh root@<ip> "systemctl start ctb-paper@$i && sleep 20 && free -m | sed -n 2p"

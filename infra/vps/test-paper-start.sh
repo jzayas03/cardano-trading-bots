@@ -41,12 +41,18 @@ printf 'DATABASE_URL=postgres://stub\n' > "$REPO/.env"
 
 ARGV="$WORK/argv"
 
-# `npm` records exactly what it was asked to run and exits 0. The script `exec`s it, so this is the
-# last thing that happens and the file is the whole verdict.
-cat > "$STUB/npm" <<'NPMEOF'
+# The runner records exactly what it was asked to run and exits 0. The script `exec`s it, so this is
+# the last thing that happens and the file is the whole verdict.
+#
+# It is `node_modules/.bin/tsx`, not `npm`: paper-start.sh stopped going through `npm run paper` on
+# 2026-09-16 because the wrapper held 267 MB across four runs and did nothing after startup. A stub
+# named `npm` would now never be called, and every assertion below would pass against an empty file.
+mkdir -p "$REPO/node_modules/.bin"
+cat > "$REPO/node_modules/.bin/tsx" <<'TSXEOF'
 #!/bin/bash
 printf '%s\n' "$*" > "$ARGV_FILE"
-NPMEOF
+TSXEOF
+chmod +x "$REPO/node_modules/.bin/tsx"
 
 # `psql` decides whether there is a run to resume. Default: nothing to resume.
 write_psql_empty() { printf '#!/bin/bash\nexit 0\n' > "$STUB/psql"; chmod +x "$STUB/psql"; }
@@ -60,7 +66,6 @@ PSQLEOF
   chmod +x "$STUB/psql"
 }
 
-chmod +x "$STUB/npm"
 export PATH="$STUB:$PATH"
 export ARGV_FILE="$ARGV"
 
@@ -70,7 +75,7 @@ argv() { cat "$ARGV"; }
 echo "1. the instance form splits strategy from ticker"
 write_psql_empty
 run ma-crossover_SNEK --max-gap-min 20
-[ "$(argv)" = "run paper -- ma-crossover SNEK --max-gap-min 20" ] || fail "1: got '$(argv)'"
+[ "$(argv)" = "packages/cli/src/main.ts paper ma-crossover SNEK --max-gap-min 20" ] || fail "1: got '$(argv)'"
 pass "ma-crossover_SNEK -> ma-crossover SNEK"
 
 echo "2. a hyphenated strategy survives the split (the whole reason the separator is not a hyphen)"
@@ -79,13 +84,13 @@ for pair in "rsi-mean-reversion_NIGHT:rsi-mean-reversion NIGHT" \
             "scheduled-accumulation_NIGHT:scheduled-accumulation NIGHT"; do
   inst="${pair%%:*}"; want="${pair#*:}"
   run "$inst" --max-gap-min 20
-  [ "$(argv)" = "run paper -- $want --max-gap-min 20" ] || fail "2: $inst gave '$(argv)'"
+  [ "$(argv)" = "packages/cli/src/main.ts paper $want --max-gap-min 20" ] || fail "2: $inst gave '$(argv)'"
 done
 pass "three hyphenated strategies split on the LAST underscore"
 
 echo "3. the two-argument form still works, so a human can call it by hand"
 run ma-crossover SNEK --max-gap-min 20
-[ "$(argv)" = "run paper -- ma-crossover SNEK --max-gap-min 20" ] || fail "3: got '$(argv)'"
+[ "$(argv)" = "packages/cli/src/main.ts paper ma-crossover SNEK --max-gap-min 20" ] || fail "3: got '$(argv)'"
 pass "explicit <strategy> <TICKER> unchanged"
 
 echo "4. THE ONE THAT MATTERS: a mis-named instance FAILS, it does not trade the wrong thing"
@@ -95,8 +100,8 @@ echo "4. THE ONE THAT MATTERS: a mis-named instance FAILS, it does not trade the
 if ( cd "$WORK" && "$REPO/infra/vps/paper-start.sh" ma-crossover --max-gap-min 20 ) >/dev/null 2>&1; then
   fail "4: a ticker-less instance was accepted"
 fi
-[ ! -s "$ARGV" ] || fail "4: npm was invoked anyway with '$(argv)'"
-pass "ticker-less instance refused, npm never called"
+[ ! -s "$ARGV" ] || fail "4: the runner was invoked anyway with '$(argv)'"
+pass "ticker-less instance refused, runner never called"
 
 echo "5. a value that is not a ticker is refused too"
 : > "$ARGV"
@@ -105,7 +110,7 @@ for bad in ma-crossover_snek ma-crossover_ ma-crossover_--max-gap-min; do
     fail "5: '$bad' was accepted"
   fi
 done
-[ ! -s "$ARGV" ] || fail "5: npm was invoked with '$(argv)'"
+[ ! -s "$ARGV" ] || fail "5: the runner was invoked with '$(argv)'"
 pass "lowercase, empty and flag-shaped tickers all refused"
 
 echo "6. the TICKER reaches the resume query, not just the paper command"
@@ -113,14 +118,30 @@ write_psql_resume
 run rsi-mean-reversion_NIGHT --max-gap-min 20
 grep -q -- "-v ticker=NIGHT" "$WORK/psql-argv" || fail "6: psql got '$(cat "$WORK/psql-argv")'"
 grep -q -- "-v strategy=rsi-mean-reversion" "$WORK/psql-argv" || fail "6: strategy missing"
-[ "$(argv)" = "run paper -- rsi-mean-reversion NIGHT --resume 77 --max-gap-min 20" ] || fail "6: got '$(argv)'"
+[ "$(argv)" = "packages/cli/src/main.ts paper rsi-mean-reversion NIGHT --resume 77 --max-gap-min 20" ] || fail "6: got '$(argv)'"
 pass "resume matches on strategy AND ticker, and resumes that run"
 
 echo "7. CTB_PAPER_FORCE_NEW skips the resume lookup but keeps the token"
 : > "$ARGV"
 ( cd "$WORK" && CTB_PAPER_FORCE_NEW=1 "$REPO/infra/vps/paper-start.sh" buy-and-hold_MIN --max-gap-min 20 ) >/dev/null 2>&1
-[ "$(argv)" = "run paper -- buy-and-hold MIN --max-gap-min 20" ] || fail "7: got '$(argv)'"
+[ "$(argv)" = "packages/cli/src/main.ts paper buy-and-hold MIN --max-gap-min 20" ] || fail "7: got '$(argv)'"
 pass "force-new still carries the right token"
 
+echo "8. the npm wrapper is gone, not merely bypassed"
+# A stub `npm` that is never called is the proof. If paper-start.sh ever goes back through
+# `npm run`, this file gets written and 267 MB of wrapper comes back with it.
+NPM_CALLED="$WORK/npm-called"
+cat > "$STUB/npm" <<'NPMEOF'
+#!/bin/bash
+printf 'npm was called: %s\n' "$*" > "$NPM_CALLED_FILE"
+NPMEOF
+chmod +x "$STUB/npm"
+export NPM_CALLED_FILE="$NPM_CALLED"
+: > "$NPM_CALLED"
+write_psql_empty
+run ma-crossover_SNEK --max-gap-min 20
+[ ! -s "$NPM_CALLED" ] || fail "8: $(cat "$NPM_CALLED")"
+pass "npm was never invoked"
+
 echo
-echo "PASS: all seven steps held."
+echo "PASS: all eight steps held."
