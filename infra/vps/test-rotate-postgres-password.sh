@@ -18,9 +18,6 @@
 # container's own address enforces the password. That is what made the real script roll itself back
 # on 2026-09-16 (the old password was "still accepted" over the socket), so a script that verifies
 # without `-h <container address>` fails this harness the same way it failed on the VPS.
-# The stub ENFORCES passwords on SELECT 1, which is what the script's two-way verification assumes.
-# Whether the real container does the same over its Unix socket is a separate question this harness
-# does not answer.
 #
 # Run on any machine with Docker:  infra/vps/test-rotate-postgres-password.sh
 # Exit 0 = the script reached its final line and rotated the fake .env. Anything else = it did not.
@@ -57,9 +54,6 @@ cat > "$STUB/docker" <<EOF
 PG_ADDR=$PG_ADDR
 EOF
 cat >> "$STUB/docker" <<'EOF'
-cat > "$STUB/docker" <<'EOF'
-#!/bin/bash
-# Fake `docker exec [-i] [-e K[=V]]... ctb_postgres CMD...`. Anything else is a harness bug.
 set -euo pipefail
 [ "${1:-}" = exec ] || { echo "stub: only 'docker exec' is modelled, got: ${1:-}" >&2; exit 64; }
 shift
@@ -93,12 +87,6 @@ case "$1" in
       *"ALTER ROLE ctb PASSWORD :'NEWPW'"*) echo "$NEWPW" > /stub/db-password; exit 0 ;;
       *"ALTER ROLE ctb PASSWORD :'OLDPW'"*) echo "$OLDPW" > /stub/db-password; exit 0 ;;
       *"SELECT 1"*) [ "$enforce" = 0 ] || [ "${PGPASSWORD:-}" = "$(cat /stub/db-password)" ] ;;
-  psql)
-    sql="${*: -1}"                           # the -c statement is last in every call the script makes
-    case "$sql" in
-      *"ALTER ROLE ctb PASSWORD :'NEWPW'"*) echo "$NEWPW" > /stub/db-password; exit 0 ;;
-      *"ALTER ROLE ctb PASSWORD :'OLDPW'"*) echo "$OLDPW" > /stub/db-password; exit 0 ;;
-      *"SELECT 1"*) [ "${PGPASSWORD:-}" = "$(cat /stub/db-password)" ] ;;
       *) echo "stub: unexpected sql" >&2; exit 64 ;;
     esac ;;
   *) echo "stub: unexpected command $1" >&2; exit 64 ;;
@@ -140,7 +128,6 @@ baks=("$ENV_FILE".bak-rotate-*)
 bak="${baks[0]}"
 grep -q '^POSTGRES_PASSWORD=before_rotation$' "$bak" || fail "backup does not hold the previous .env"
 expected=$'pg_isready\nhostname\npsql\npsql\npsql\nsystemctl restart ctb-collector\nsystemctl is-active ctb-collector'
-expected=$'pg_isready\npsql\npsql\npsql\nsystemctl restart ctb-collector\nsystemctl is-active ctb-collector'
 [ "$(cat /stub/calls)" = "$expected" ] || fail "call sequence differs from expected"
 
 echo "PASS: rotate-postgres-password.sh completed under 'bash -s' and rotated .env and the (fake) database together"
