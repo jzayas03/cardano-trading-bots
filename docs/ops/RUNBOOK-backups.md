@@ -30,6 +30,37 @@ footgun rather than an instruction.
 
 Step 4 is the point. A backup job that runs is not a backup; a restore that worked is.
 
+**FIRST VERIFIED 2026-09-17 10:45 UTC** — and until that morning step 4 had never actually been
+run, so this file asserted the principle while the project had no evidence for it. The backup job
+itself had been green for weeks; what nobody had done was restore one.
+
+```
+downloaded r2://ctb-backups/ctb/ctb-2026-09-17T03-30-00-965Z.dump
+restoring into a scratch database            scratch: ctb_verify_20260917104527
+verified: ctb-2026-09-17T03-30-00-965Z.dump
+          11 tables, 150023 rows, all matching the manifest taken at snapshot 00000004-00000411-1
+```
+
+Run on the box at `44fa230` against the R2 copy, not a local dump — the remote object is the one
+that matters, because a same-disk backup does not survive the failure a backup exists for. Cost and
+blast radius, measured rather than assumed: a 3.7 MB download, ~112 MB of scratch database against
+30 G free, and **3 seconds end to end** -- 10:45:25 to 10:45:28.34 -- with no change to memory or
+disk afterwards. It is cheap enough to run during a live week, which is the question this number
+exists to answer; the earlier deferral of this check "for resource reasons" was costing nothing and
+buying nothing. The paper runs and the collector
+stayed up throughout; nothing writes to the live database at any point.
+
+Afterwards, confirm the scratch is gone rather than trusting the `finally`:
+
+```bash
+docker compose exec -T postgres psql -U ctb -d postgres -At \
+  -c "select datname from pg_database where datname like 'ctb_verify_%';" </dev/null
+```
+
+Empty is the pass. A leaked `ctb_verify_*` means the process was killed mid-restore; drop it by
+hand. The DROP in the command is guarded by `assertDroppable`, whose regex is
+`^ctb_verify_[0-9]{14}$`, so a verify can never drop `ctb` however badly it goes wrong.
+
 ## Why the wrapper looks paranoid
 
 `launchd` does not read a login shell. There is no `~/.zshrc`, no `nvm`, and on this machine
