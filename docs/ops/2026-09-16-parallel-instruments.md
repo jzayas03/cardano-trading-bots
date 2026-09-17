@@ -4,6 +4,17 @@ Date: 2026-09-16. Founder decision: **`MIN_ROUND_TRIPS` stays at 30.** The lever
 `promotion.ts` already names — *"the lever for a promotable answer is more instruments in parallel,
 not a longer wait on one"* — rather than relaxing the gate's sample size.
 
+> **SUPERSEDED 2026-09-17 on the sample-size half, specs/003.** The gate no longer counts round
+> trips at all: it asks whether a resampled interval on their mean excludes zero, so the bar is now
+> a function of the evidence rather than a constant. That is not the relaxation this note refused —
+> thirty mediocre round trips PASS the old count and FAIL the new check.
+>
+> **The instrument half of this note stands unchanged, and matters more than it did.** The existing
+> `bootstrap.ts` had already measured that at n = 30 on heavy tails no bootstrap flavour reaches its
+> nominal 95% — 83-93%, and 79.4% once returns are correlated — and concluded *"the constraint is
+> the trade count, not the estimator."* So replacing the count did not buy more evidence. More
+> instruments still does, which is exactly what this note argued.
+
 This works out what that costs and what it buys.
 
 ## It needs no code

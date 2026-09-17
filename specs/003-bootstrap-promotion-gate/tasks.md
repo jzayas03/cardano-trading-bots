@@ -112,22 +112,22 @@ trips" from "enough trips, and the answer is no".
 
 ### Tests first
 
-- [ ] T024 [P] [US2] Write a FAILING test in `packages/reports/test/promotion.test.ts`: with fewer than 12 trips the check fails, the detail names the count AND the minimum, and **NO interval appears in the detail** — a bound computed below the minimum would read as evidence
-- [ ] T025 [P] [US2] Write FAILING boundary tests in `packages/reports/test/promotion.test.ts` for BOTH sides: 11 trips fails on the minimum branch, 12 trips proceeds to the interval branch
-- [ ] T026 [P] [US2] Write a FAILING test in `packages/reports/test/promotion.test.ts` that the two failure details are DISTINGUISHABLE from each other by their text (FR-007), not merely both false
-- [ ] T027 [P] [US2] Write a test in `packages/reports/test/promotion.test.ts` that a baseline strategy short-circuits BEFORE any interval is computed, keeping today's behaviour that a baseline is never a candidate regardless of returns
-- [ ] T028 [P] [US2] Write NON-REGRESSION tests in `packages/reports/test/promotion.test.ts` asserting the two auditability properties still hold: EVERY check is reported passing or failing, and EVERY blocker is listed rather than only the first
-- [ ] T029 [P] [US2] Write a test in `packages/reports/test/promotion.test.ts` that an empty `roundTripReturnsBps` fails on the minimum branch as absence of evidence, distinct from the field being absent
+- [X] T024 [P] [US2] Write a FAILING test in `packages/reports/test/promotion.test.ts`: with fewer than 12 trips the check fails, the detail names the count AND the minimum, and **NO interval appears in the detail** — a bound computed below the minimum would read as evidence
+- [X] T025 [P] [US2] Write FAILING boundary tests in `packages/reports/test/promotion.test.ts` for BOTH sides: 11 trips fails on the minimum branch, 12 trips proceeds to the interval branch
+- [X] T026 [P] [US2] Write a FAILING test in `packages/reports/test/promotion.test.ts` that the two failure details are DISTINGUISHABLE from each other by their text (FR-007), not merely both false
+- [X] T027 [P] [US2] Write a test in `packages/reports/test/promotion.test.ts` that a baseline strategy short-circuits BEFORE any interval is computed, keeping today's behaviour that a baseline is never a candidate regardless of returns
+- [X] T028 [P] [US2] Write NON-REGRESSION tests in `packages/reports/test/promotion.test.ts` asserting the two auditability properties still hold: EVERY check is reported passing or failing, and EVERY blocker is listed rather than only the first
+- [X] T029 [P] [US2] Write a test in `packages/reports/test/promotion.test.ts` that an empty `roundTripReturnsBps` fails on the minimum branch as absence of evidence, distinct from the field being absent
 
 ### Implementation
 
-- [ ] T030 [US2] Implement the minimum branch and both detail strings in `packages/reports/src/promotion.ts`, reporting the interval only on the interval branch
+- [X] T030 [US2] Implement the minimum branch and both detail strings in `packages/reports/src/promotion.ts`, reporting the interval only on the interval branch
 
 ### The real run — recorded, and checked against a prediction written in advance
 
-- [ ] T031 [US2] Run `npm run report -- --compare 147,149,146,153,151,6` READ-ONLY against the box from a checkout of this branch. Nothing is deployed, the live tree is not touched, runs 150-153 are not disturbed. Capture the output verbatim
-- [ ] T032 [US2] Check the captured output from T031 against the predictions in `specs/003-bootstrap-promotion-gate/research.md` (R9) written in advance: all six fail on the MINIMUM branch, **none reports an interval**, 150 and 152 fail earlier as baselines, nothing promotes. **A result contradicting this is INVESTIGATED, not accepted** — the likely benign explanation is that pairing produced more round trips than the sell count suggested (research R8), and that must be confirmed rather than assumed
-- [ ] T033 [US2] Record the observed output alongside the prediction in `docs/ops/2026-09-17-bootstrap-gate-first-run.md`, including which runs carried additional blockers
+- [X] T031 [US2] Run `npm run report -- --compare 147,149,146,153,151,6` READ-ONLY against the box from a checkout of this branch. Nothing is deployed, the live tree is not touched, runs 150-153 are not disturbed. Capture the output verbatim
+- [X] T032 [US2] Check the captured output from T031 against the predictions in `specs/003-bootstrap-promotion-gate/research.md` (R9) written in advance: all six fail on the MINIMUM branch, **none reports an interval**, 150 and 152 fail earlier as baselines, nothing promotes. **A result contradicting this is INVESTIGATED, not accepted** — the likely benign explanation is that pairing produced more round trips than the sell count suggested (research R8), and that must be confirmed rather than assumed
+- [X] T033 [US2] Record the observed output alongside the prediction in `docs/ops/2026-09-17-bootstrap-gate-first-run.md`, including which runs carried additional blockers
 
 **Checkpoint**: every run in the database is refused, legibly, and the refusal was predicted before it
 was observed.
@@ -138,11 +138,11 @@ was observed.
 
 **Goal**: a verdict that does not move between evaluations, and a guard that keeps it that way.
 
-- [ ] T034 [P] [US3] Write a test in `packages/reports/test/bootstrap.test.ts`: the same input evaluated twice IN ONE PROCESS yields byte-identical bounds
-- [ ] T035 [US3] Write a test in `packages/reports/test/bootstrap.test.ts` that a SEPARATE PROCESS yields the same bounds for the same input — a bootstrap stable only within one process is not deterministic, and **this is the assertion that actually matters**. Spawn a child that prints the bounds and compare, or pin the bounds as literal expected values committed in the test
-- [ ] T036 [P] [US3] Write `packages/reports/test/noAmbientRandom.guard.test.ts`: a raw source-text scan asserting `Math.random` appears nowhere under `packages/reports/src`
-- [ ] T037 [US3] Give that guard a **POSITIVE CONTROL** — a known-bad fixture string the detector must flag — in `packages/reports/test/noAmbientRandom.guard.test.ts`. This repo has already shipped a `shellcheck disable` bound to the wrong command that never worked; a detector nobody proved can detect is decorative
-- [ ] T038 [US3] Write a test in `packages/reports/test/bootstrap.test.ts` asserting the interval's own reported `confidencePct`, `resamples` and `trips` match the pre-registered constants, so SC-004 holds without reading the source
+- [X] T034 [P] [US3] Write a test in `packages/reports/test/bootstrap.test.ts`: the same input evaluated twice IN ONE PROCESS yields byte-identical bounds
+- [X] T035 [US3] Write a test in `packages/reports/test/bootstrap.test.ts` that a SEPARATE PROCESS yields the same bounds for the same input — a bootstrap stable only within one process is not deterministic, and **this is the assertion that actually matters**. Spawn a child that prints the bounds and compare, or pin the bounds as literal expected values committed in the test
+- [X] T036 [P] [US3] Write `packages/reports/test/noAmbientRandom.guard.test.ts`: a raw source-text scan asserting `Math.random` appears nowhere under `packages/reports/src`
+- [X] T037 [US3] Give that guard a **POSITIVE CONTROL** — a known-bad fixture string the detector must flag — in `packages/reports/test/noAmbientRandom.guard.test.ts`. This repo has already shipped a `shellcheck disable` bound to the wrong command that never worked; a detector nobody proved can detect is decorative
+- [X] T038 [US3] Write a test in `packages/reports/test/bootstrap.test.ts` asserting the interval's own reported `confidencePct`, `resamples` and `trips` match the pre-registered constants, so SC-004 holds without reading the source
 
 **Checkpoint**: the verdict is reproducible and the guard that keeps it so has been proven to fire.
 
@@ -150,14 +150,14 @@ was observed.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T039 [P] Delete the private `quantile` duplicate at `packages/reports/src/roundTrips.ts` (~line 107) in favour of the exported one from `opportunity.ts`, taking the repository from four implementations to three. Consolidating the ones OUTSIDE `@ctb/reports` is out of scope
-- [ ] T040 [P] Correct the comment on `MIN_OBSERVATIONS` in `packages/reports/src/costFloor.ts` (~line 69) so it states its OWN reason instead of "matching the promotion gate's MIN_ROUND_TRIPS for internal consistency". **COMMENT ONLY — NO VALUE CHANGE.** Left coupled, this feature would drag the cost floor's sufficiency bar to 12, which is a cost-model change and a founder stop-and-ask, not a side effect (research R7)
-- [ ] T041 **STOP AND ASK** gate over `specs/003-bootstrap-promotion-gate/research.md` R5, `packages/sim-executor/src/costs.ts` and `.specify/memory/constitution.md`: if implementation produces any reason to change a pre-registered parameter, a cost value, or the stated 216 bps, STOP and raise it with the founder. Do not edit. Closed by confirming no such change was made
-- [ ] T042 [P] Update `docs/ops/2026-09-16-parallel-instruments.md` so it no longer asserts the bar stays at thirty, linking the reversal to this feature (FR-012)
-- [ ] T043 [P] Update `docs/ops/RUNBOOK-7day-run.md` (~line 453) so it no longer asserts the bar stays at thirty (FR-012)
-- [ ] T044 Run quickstart scenario 7: `git diff origin/main -- packages/sim-executor/src/costs.ts packages/sim-executor/src/depth.ts packages/reports/src/costFloor.ts .specify/memory/constitution.md` and confirm it is EMPTY except the comment-only `costFloor.ts` hunk. A value change here means the implementation went somewhere the plan did not
-- [ ] T045 Run the full gate set and repair until green: `npm run lint && npm run lint:sh && npm run test:pg`. Report failures with their output; citing `npm test` is citing the wrong suite
-- [ ] T046 Confirm the existing purity guard still passes and that `packages/reports/src/bootstrap.ts` introduced no I/O, no clock and no `node:crypto`
+- [X] T039 [P] Delete the private `quantile` duplicate at `packages/reports/src/roundTrips.ts` (~line 107) in favour of the exported one from `opportunity.ts`, taking the repository from four implementations to three. Consolidating the ones OUTSIDE `@ctb/reports` is out of scope
+- [X] T040 [P] Correct the comment on `MIN_OBSERVATIONS` in `packages/reports/src/costFloor.ts` (~line 69) so it states its OWN reason instead of "matching the promotion gate's MIN_ROUND_TRIPS for internal consistency". **COMMENT ONLY — NO VALUE CHANGE.** Left coupled, this feature would drag the cost floor's sufficiency bar to 12, which is a cost-model change and a founder stop-and-ask, not a side effect (research R7)
+- [X] T041 **STOP AND ASK** gate over `specs/003-bootstrap-promotion-gate/research.md` R5, `packages/sim-executor/src/costs.ts` and `.specify/memory/constitution.md`: if implementation produces any reason to change a pre-registered parameter, a cost value, or the stated 216 bps, STOP and raise it with the founder. Do not edit. Closed by confirming no such change was made
+- [X] T042 [P] Update `docs/ops/2026-09-16-parallel-instruments.md` so it no longer asserts the bar stays at thirty, linking the reversal to this feature (FR-012)
+- [X] T043 [P] Update `docs/ops/RUNBOOK-7day-run.md` (~line 453) so it no longer asserts the bar stays at thirty (FR-012)
+- [X] T044 Run quickstart scenario 7: `git diff origin/main -- packages/sim-executor/src/costs.ts packages/sim-executor/src/depth.ts packages/reports/src/costFloor.ts .specify/memory/constitution.md` and confirm it is EMPTY except the comment-only `costFloor.ts` hunk. A value change here means the implementation went somewhere the plan did not
+- [X] T045 Run the full gate set and repair until green: `npm run lint && npm run lint:sh && npm run test:pg`. Report failures with their output; citing `npm test` is citing the wrong suite
+- [X] T046 Confirm the existing purity guard still passes and that `packages/reports/src/bootstrap.ts` introduced no I/O, no clock and no `node:crypto`
 
 ---
 

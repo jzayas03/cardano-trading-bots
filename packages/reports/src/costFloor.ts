@@ -66,7 +66,20 @@ export const SIZE_BUCKETS_LOVELACE: readonly bigint[] = [
   2_500n * LOVELACE, // impact should dominate the fixed fee here
 ];
 
-/** Default sufficiency bar, matching the promotion gate's MIN_ROUND_TRIPS for internal consistency. */
+/**
+ * Default sufficiency bar: how many observations before a p90 in a bucket is worth quoting.
+ *
+ * **Deliberately DECOUPLED from the promotion gate, which this used to cite** ("matching the
+ * promotion gate's MIN_ROUND_TRIPS for internal consistency", until 2026-09-17). They answer
+ * different questions — the gate asks how many round trips before an edge is distinguishable from
+ * luck, this asks how many price observations before a percentile is trustworthy — and the coupling
+ * was load-bearing in the wrong direction: when specs/003 replaced the gate's count with an
+ * interval at a minimum of 12, "consistency" would have dragged this bar from 30 down to 12 as a
+ * side effect. That is a change to the COST MODEL, and under Constitution Principle I it is a
+ * founder decision, never a consequence of editing something else.
+ *
+ * The value is unchanged.
+ */
 export const MIN_OBSERVATIONS = 30;
 
 export interface SnapshotInput {

@@ -450,8 +450,11 @@ measuring the wrong thing.
 
 ### Add NIGHT as a second instrument, at this cutover
 
-Decided 2026-09-16. `MIN_ROUND_TRIPS` stays at 30 and the lever is more instruments in parallel, per
-`promotion.ts`'s own note. NIGHT costs **152.3 bps** per round trip at 500 ADA against SNEK's
+Decided 2026-09-16, and the instrument half still holds. (The sample-size half was superseded on
+2026-09-17 by specs/003: the gate now asks whether a resampled interval on the round-trip mean
+excludes zero, instead of counting to thirty. That bought a better question, not more evidence —
+`bootstrap.ts` measures 83-93% coverage at n = 30 and concludes the constraint is the trade count,
+not the estimator — so adding an instrument is still the lever.) NIGHT costs **152.3 bps** per round trip at 500 ADA against SNEK's
 **293.3** — SNEK is the twelfth-cheapest of eighteen viable tokens, so every week so far has paid
 about 142 bps of avoidable handicap. Evidence: `docs/ops/2026-09-16-parallel-instruments.md`.
 

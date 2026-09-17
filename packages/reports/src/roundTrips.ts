@@ -1,4 +1,7 @@
 import type { OrderRecord } from '@ctb/engine';
+// The exported one, not a local copy: this module had a fifth implementation of linear-interpolated
+// quantile sitting six lines from the four already in the repository (specs/003 R11).
+import { quantile } from './opportunity.js';
 
 /**
  * Pairs each filled buy to the sell that closes it, FIFO, so a run can be read as a DISTRIBUTION of
@@ -105,13 +108,6 @@ export function roundTrips(orders: readonly OrderRecord[]): RoundTrip[] {
   return trips;
 }
 
-const quantile = (sorted: number[], q: number): number => {
-  const i = (sorted.length - 1) * q;
-  const lo = Math.floor(i);
-  const hi = Math.ceil(i);
-  return lo === hi ? sorted[lo]! : sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (i - lo);
-};
-
 /** `median|X| ≈ 0.6745σ` for a normal distribution — the conversion the n = 30 threshold rests on. */
 const MEDIAN_ABS_TO_SIGMA = 0.6745;
 
@@ -148,11 +144,11 @@ export function roundTripStats(orders: readonly OrderRecord[], trips: readonly R
   const sorted = [...rs].sort((a, b) => a - b);
   const mean = rs.reduce((a, b) => a + b, 0) / n;
   const sortedAbs = rs.map(Math.abs).sort((a, b) => a - b);
-  const medianAbs = quantile(sortedAbs, 0.5);
+  const medianAbs = quantile(sortedAbs, 0.5)!;
   const m2 = rs.reduce((a, r) => a + (r - mean) ** 2, 0) / n;
   return {
     ...base,
-    medianReturnBps: quantile(sorted, 0.5),
+    medianReturnBps: quantile(sorted, 0.5)!,
     meanReturnBps: mean,
     // Sample standard deviation (n - 1): needs two trips, and is null rather than 0 below that.
     stdevBps: n >= 2 ? Math.sqrt(rs.reduce((a, r) => a + (r - mean) ** 2, 0) / (n - 1)) : null,
