@@ -360,6 +360,14 @@ keeps the whole change reversible.
 requires the server powered off, which stops the paper runs. That is precisely what this cutover has
 already done, which is why this step sits here and not on any other day.
 
+> **The measurement this step was sized from has since been corrected, and the resize may no longer
+> be needed.** The 2 GB box was called marginal for eight instances on summed RSS. On Private_Dirty
+> it is not: eight runs is ~530 MB (see the budget table in step 3 of the start-up procedure below),
+> which fits with roughly 600-700 MB to spare. Whether to rescale anyway -- for CPU headroom, or
+> simply for margin -- is a founder call and this procedure stays here either way. If you skip it,
+> skip only the power-off and rescale: **step 5 below is the only free chance to test the firewall's
+> reboot persistence**, so reboot the box deliberately and still run it.
+
 Order:
 
 ```
@@ -415,11 +423,25 @@ ssh root@<ip> 'bash -s' -- --sha <sha> --no-start < infra/vps/deploy.sh
 # 2. Confirm the file's eight instances are enabled and nothing else is.
 ssh root@<ip> "systemctl list-unit-files 'ctb-paper@*' --state=enabled --no-legend --plain"
 
-# 3. Start them ONE AT A TIME, checking memory between each. Each run is now ONE process, not three:
-#    paper-start.sh execs tsx directly instead of going through `npm run paper`, which on 2026-09-16
-#    was measured holding 267 MB of wrappers across four runs -- 28% of the 966 MB the runs used.
-#    Budget ~120 MB per run rather than the ~240 the old tree cost. If `available` drops under
-#    250 MB, STOP and do not start the rest.
+# 3. Start them ONE AT A TIME, checking memory between each. Each run is now ONE process, not the
+#    four it was (`npm run paper` -> `sh -c` -> `tsx` bin -> node): paper-start.sh execs node with
+#    the tsx hooks directly.
+#
+#    BUDGET ~67 MB PER RUN, and read that off `available`, not off summed RSS. RSS counts the
+#    shared node binary once per process, so summing it across ten node processes inflates
+#    everything -- it is how the wrapper saving was first written here as 267 MB when the real
+#    figure was ~74 MB. The honest number is Private_Dirty, measured on the box 2026-09-16:
+#
+#        npm run paper   18.4 MB   removed (#170)
+#        sh -c            0.1 MB   removed (#170)
+#        tsx bin         14.5 MB   removed (this change)
+#        node + app      66.5 MB   what is left
+#
+#    Eight runs is therefore ~530 MB against the ~1,080 MB this box was using with four runs of the
+#    old shape. If `available` drops under 250 MB, STOP and do not start the rest.
+#
+#    To re-measure rather than trust this:
+#      ssh root@<ip> 'for p in $(pgrep -f "main.ts paper"); do awk "/^Private_Dirty:/{print \$2}" /proc/$p/smaps_rollup; done'
 for i in ma-crossover_SNEK rsi-mean-reversion_SNEK buy-and-hold_SNEK scheduled-accumulation_SNEK \
          ma-crossover_NIGHT rsi-mean-reversion_NIGHT buy-and-hold_NIGHT scheduled-accumulation_NIGHT; do
   ssh root@<ip> "systemctl start ctb-paper@$i && sleep 20 && free -m | sed -n 2p"
