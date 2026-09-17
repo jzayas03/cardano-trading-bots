@@ -23,6 +23,11 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   status.** A suppressed alert and a delivered one differ by four characters in `alert.log` --
   `-> /log` vs `-> /1` -- and BOTH read `http 200 OK`, so a drill that proved nothing looks exactly
   like one that passed (2026-09-16, #152: drill 3b ran 10 s inside drill 4b's window).
+- **Never size a box from summed RSS.** RSS counts the shared node binary once per process, so
+  summing it across ten node processes charges the same pages ten times: the `npm` wrapper read as
+  67 MB per run when it really cost 18.4, and that went into a runbook as a 267 MB saving when it
+  was ~74. What one more instance costs is `Private_Dirty` in `/proc/PID/smaps_rollup`
+  (2026-09-16, #171).
 - **The box is not the repo, and repo silence is not evidence.** An audit of `docs/`, commits and
   `infra/` concluded the reboot-persistent firewall rule was unapplied; it had been live on the VPS
   for a week. Check the server before reporting a control missing, and write the result down -- the
