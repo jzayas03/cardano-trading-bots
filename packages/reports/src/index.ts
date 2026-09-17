@@ -16,7 +16,7 @@ export * from './watch.js';
 export * from './alerting.js';
 export * from './leadlag.js';
 export * from './opportunity.js';
-export { BASELINE_STRATEGIES, MAX_CAPITAL_DRIFT, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT, MIN_ROUND_TRIPS, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionCheck, type PromotionInput, type PromotionStatus, type PromotionVerdict, type RunContext } from './promotion.js';
+export { BASELINE_STRATEGIES, MAX_CAPITAL_DRIFT, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT, MIN_ROUND_TRIPS, MIN_TRIPS_FOR_INTERVAL, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionCheck, type PromotionInput, type PromotionStatus, type PromotionVerdict, type RunContext } from './promotion.js';
 export { afterDeployChecks, afterStopChecks, beforeStopChecks, MAX_BACKUP_AGE_HOURS, type AfterDeployFacts, type AfterStopFacts, type BeforeStopFacts } from './cutover.js';
 export { bcaInterval, bcaStability, BOOTSTRAP_RESAMPLES, conservativeBounds, mean, STABILITY_TOLERANCE, type BcaInterval, type BcaOptions, type BcaStability, type Statistic } from './bootstrap.js';
 export { ASSUMED_STAKING_APR_PCT, stakingCredit, withStakingCredit } from './staking.js';
