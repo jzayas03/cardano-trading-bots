@@ -129,6 +129,12 @@ systemd-analyze verify /etc/systemd/system/ctb-*.service /etc/systemd/system/ctb
 # boot, so a reboot would have silently dropped a BASELINE and left the candidates with nothing to be
 # compared against. A list that has to be edited in two places drifts; this one has one place.
 INSTANCES_FILE="$REPO/infra/vps/paper-instances.txt"
+WANTS_DIR=/etc/systemd/system/multi-user.target.wants
+# The only enumeration that can see enabled template INSTANCES. `list-unit-files --state=enabled`
+# lists unit FILES, and a template has exactly one (`ctb-paper@.service`); enabling an instance
+# writes a symlink in the WantedBy target's wants directory instead. On the live box 2026-09-17 that
+# command returned 0 while four instances were enabled. Subshell so `nullglob` cannot leak.
+paper_wants() ( shopt -s nullglob; for f in "$WANTS_DIR"/ctb-paper@*.service; do basename "$f"; done )
 [ -r "$INSTANCES_FILE" ] || die "missing $INSTANCES_FILE"
 UNITS=(ctb-collector.service)
 while read -r inst; do
@@ -151,7 +157,22 @@ while read -r enabled; do
     echo "  disabling for boot (not in paper-instances.txt): $enabled"
     systemctl disable "$enabled" >/dev/null 2>&1 || true
   fi
-done < <(systemctl list-unit-files 'ctb-paper@*.service' --state=enabled --no-legend --plain 2>/dev/null | awk '{print $1}')
+#
+# This loop was fed by `list-unit-files --state=enabled` until 2026-09-17, which meant it had never
+# executed once and the protection described above has never existed. See paper_wants above.
+done < <(paper_wants)
+
+# Assert the outcome rather than trusting the loop. What this guards against is invisible until the
+# NEXT reboot -- the worst place to find it -- and the enumeration feeding the loop was silently
+# wrong for its entire existence, so the deploy now checks what it actually left behind.
+enabled_now="$(paper_wants | sort | tr '\n' ' ')"
+want_now="$(printf '%s\n' "${UNITS[@]}" | grep '^ctb-paper@' | sort | tr '\n' ' ')"
+if [ "$enabled_now" != "$want_now" ]; then
+  echo "  enabled for boot: $enabled_now"
+  echo "  paper-instances.txt: $want_now"
+  die "enabled paper instances do not match paper-instances.txt; a reboot would start the wrong set"
+fi
+echo "  enabled for boot matches paper-instances.txt ($(printf '%s\n' "${UNITS[@]}" | grep -c '^ctb-paper@') instances)"
 TIMERS=(ctb-backup.timer ctb-watch.timer)
 if [ "$NO_START" = "1" ]; then
   # enable (so a reboot brings them up) without starting now. The reboot test still means
