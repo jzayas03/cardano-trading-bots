@@ -61,9 +61,25 @@ inherits the sample's shape instead of assuming one.
 
 ---
 
-## R3 — BCa, not the percentile interval
+## R3 — SUPERSEDED 2026-09-17: `conservativeBounds`, not BCa, and the repo had already measured this
 
-**Decision**: bias-corrected and accelerated (BCa) interval.
+> **This decision was wrong and is corrected in place rather than deleted, because the reasoning
+> below is the reasoning a future reader would repeat.** `packages/reports/src/bootstrap.ts` already
+> existed when this was written, was built for this exact gate, and had already run the coverage
+> simulation that settles the question — in the opposite direction. See R12.
+>
+> **Corrected decision**: use `conservativeBounds(bcaInterval(...))` — the WIDEST of the BCa and
+> percentile intervals, fail-closed — which is what the existing module's own header says the gate
+> should use. Block resampling stays at its default, for the reason in R12.
+>
+> The argument below picked BCa on the textbook grounds that percentile under-covers in small
+> fat-tailed samples. Measured in THIS repo's regime that is false: at n = 30, BCa delivers 83.0%
+> coverage on fat-tailed symmetric data against percentile's 90.2%. BCa wins on lognormal (89.2% vs
+> 88.2%) and is a near no-op on normal, which is what says the implementation is right rather than
+> broken — but the regime that matters here is the one where it loses. Taking the widest of both
+> avoids picking a winner the evidence does not support.
+
+**Superseded decision**: bias-corrected and accelerated (BCa) interval.
 
 **Rationale — the direction of the error decides it.** The percentile bootstrap is simpler, but for a
 skewed statistic at small n its coverage is **anti-conservative**: the interval is too narrow, so it
@@ -118,11 +134,11 @@ code twice would pass forever after someone reintroduced ambient randomness some
 | Parameter | Value | Why this value |
 |---|---|---|
 | Confidence | **95%**, two-sided | Matches the 1.96 the superseded derivation used, so this change alters the METHOD and not simultaneously the strictness. Changing both at once would make the effect of either unreadable. |
-| Resamples | **10,000** | Standard for a 2.5% tail; Monte Carlo error on the bound is small relative to the sampling error the interval is reporting. Deterministic, so it is a cost and not a variance. At n in the tens this is milliseconds. |
+| Resamples | ~~10,000~~ **2,000** | **Corrected 2026-09-17**: the existing module already fixes `BOOTSTRAP_RESAMPLES = 2_000`, with its own stated reason — above the reviewed floor of 1,000, and 2,000 because a BCa tail is estimated from the least stable part of the resample distribution. Adopting the existing constant rather than introducing a second one. |
 | Minimum round trips | **12** | See below. |
 | Statistic | mean `returnBps` | R2. |
-| Interval | BCa | R3. |
-| Seed | one fixed constant | R4. |
+| Interval | ~~BCa~~ **`conservativeBounds`** | R3, superseded. |
+| Seed | ~~one fixed constant~~ **stability across seeds 1, 2, 3** | R4, superseded — see R12. The existing `bcaStability` measures how far the bounds move BETWEEN seeds and flags an interval that is not to be trusted near a decision boundary. That is strictly stronger than pinning one seed, which hides instability rather than detecting it. |
 
 ### The minimum, and an honest account of it
 
@@ -260,6 +276,71 @@ to three. The remaining two are in other packages and consolidating them is **ou
 cross-package move is unrelated churn on a branch that changes the promotion gate.
 
 Adding a fifth is a defect under FR-014 either way.
+
+---
+
+## R12 — The module already existed, and it had already answered R3 and R4
+
+**Found 2026-09-17, during implementation, before any code was written.**
+
+`packages/reports/src/bootstrap.ts` — 335 lines, header line "Built for the promotion gate", exported
+from `index.ts`, and **consumed by nothing**. Two commits built it: `d35c7e1` ("BCa bootstrap
+scaffolding, and why BCa is not the default") and `19eb11f` ("resample blocks, because trades are not
+independent").
+
+It already contains every primitive R3 and R4 specified — mulberry32, Acklam's inverse normal,
+Numerical Recipes `erfc` — and two things this research never considered:
+
+1. **A coverage simulation** that settles R3 in the opposite direction (see R3, superseded).
+2. **Block resampling**, because round-trip returns are not independent. Simulated on AR(1) with a
+   true mean of zero, the iid interval's coverage collapses to **61% at phi = 0.6** — the
+   "misleadingly narrow" failure, which near a promotion boundary is exactly what lets a losing
+   strategy through. Blocking recovers 6 to 22 points. It costs about four points when phi really is
+   zero, and is still the default on the asymmetry: trades cluster by regime, inventory and hour, and
+   a too-wide interval refuses a good strategy while a too-narrow one admits a bad one.
+
+**And `bcaStability`**, which supersedes R4's fixed seed. It runs the interval across seeds 1, 2, 3
+and reports how far the bounds move as a fraction of interval width; `STABILITY_TOLERANCE = 0.05` is
+the point above which an interval "is not to be trusted near a decision boundary". That DETECTS
+small-n instability, where pinning a single seed merely hides it.
+
+**The process failure is mine and is worth recording.** The spec, plan and 46 tasks were written
+without ever listing `packages/reports/src`. `~/.claude/CLAUDE.md` names this exactly — "ask *does
+something already do this?* before adding a mechanism" — and the tasks would have had an implementer
+build a second, worse BCa next to the reviewed one. The check that would have caught it costs one
+`ls`.
+
+---
+
+## R13 — The gate reports the coverage it actually achieves
+
+**Founder decision 2026-09-17**, taken after R12 surfaced the finding below.
+
+The existing module documents, from its own simulation, that **at n = 30 on heavy tails no bootstrap
+flavour reaches 95%** — they deliver 83-93%, and 79.4% at phi = 0.6 even blocked and conservative.
+Its conclusion is blunt: *"The constraint is the trade count, not the estimator."*
+
+Under-coverage means the interval is too narrow, so it excludes zero **more** often than 95% claims —
+it promotes too easily. At the gate's sample sizes the real false-promotion rate is roughly 7-21%,
+not 5%.
+
+**Decision**: wire the gate to `conservativeBounds`, and make the verdict state the coverage regime
+rather than implying a nominal 95%. A gate that silently claims more precision than it has is the
+opening failure of the constitution — "a number that looks right, survives review, and pushes a
+losing strategy through the promotion gate".
+
+**Consequences**:
+
+- `MIN_TRIPS_FOR_INTERVAL` stays **12**. It is not re-tuned now that evidence has arrived; re-picking
+  a pre-registered parameter after seeing evidence is the failure this file exists to prevent.
+- The detail string carries the caveat, so nothing downstream can read a pass as a 95% claim.
+- `bcaStability` is consulted: an interval whose bounds move more than `STABILITY_TOLERANCE` between
+  seeds is refused rather than reported, which is a principled small-n refusal that needs no new
+  constant.
+
+**What this does NOT resolve**: the founder's original goal was a lower bar. The evidence says the
+trade count is the binding constraint, so this feature makes the gate *honest* at low n rather than
+*reliable* at low n. That distinction belongs in the docs this feature updates, not only here.
 
 ---
 

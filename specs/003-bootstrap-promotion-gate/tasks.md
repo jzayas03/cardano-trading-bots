@@ -23,9 +23,10 @@ first. A test written after the code it tests is not a test, it is a description
 
 Read these once; they are not repeated per task.
 
-1. **The pre-registered parameters are frozen** (research R5): 95% two-sided, 10,000 resamples,
-   `MIN_TRIPS_FOR_INTERVAL = 12`, statistic is the arithmetic MEAN of `returnBps`, interval is BCa,
-   one fixed recorded seed. **No task may change any of them.** If implementation suggests a
+1. **The pre-registered parameters are frozen** (research R5, as corrected by R12/R13): 95% two-sided,
+   `BOOTSTRAP_RESAMPLES = 2_000` from the existing module, `MIN_TRIPS_FOR_INTERVAL = 12`, statistic is
+   the arithmetic MEAN of `returnBps`, bounds are `conservativeBounds`, seed stability is checked
+   across seeds 1/2/3 rather than one seed being pinned. **No task may change any of them.** If implementation suggests a
    different value, that is a **STOP AND ASK** (T041), never an edit — changing a parameter after
    seeing which runs pass is precisely the failure this feature exists to prevent.
 2. **`@ctb/reports` stays PURE.** No I/O, no clock, no `node:crypto`, no `Math.random`. The existing
@@ -48,33 +49,31 @@ Read these once; they are not repeated per task.
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: the numerical primitives every user story needs. **No story work begins until this
-phase is green.**
+> **REWRITTEN 2026-09-17 — T003-T015 were "build a BCa module". `packages/reports/src/bootstrap.ts`
+> ALREADY EXISTS**, was built for this gate, is exported from `index.ts`, and is consumed by nothing.
+> It already has mulberry32, Acklam's inverse normal, Numerical Recipes `erfc`, a jackknife, block
+> resampling, a coverage simulation and `bcaStability`. The original tasks would have produced a
+> second, worse implementation beside the reviewed one. See research R12. **The work is to WIRE what
+> exists, not to build it.**
 
-### Tests first
+**Purpose**: confirm the existing module does what the gate needs, and add only what is missing.
 
-- [ ] T003 [P] Write FAILING tests for a mulberry32-style seeded PRNG in `packages/reports/test/bootstrap.test.ts`: same seed yields the same sequence, different seeds yield different sequences, and every value lies in [0, 1)
-- [ ] T004 [P] Write FAILING tests for the standard normal CDF in `packages/reports/test/bootstrap.test.ts` pinned against PUBLISHED values (Φ(0)=0.5, Φ(1.96)≈0.975, Φ(-1.96)≈0.025, Φ(2.576)≈0.995), with an explicit tolerance — **never against the function's own output**
-- [ ] T005 [P] Write FAILING tests for the INVERSE normal CDF in `packages/reports/test/bootstrap.test.ts` pinned against PUBLISHED values (Φ⁻¹(0.975)≈1.959964, Φ⁻¹(0.025)≈-1.959964, Φ⁻¹(0.5)=0). A numerical routine validated by its own output is not validated
-- [ ] T006 [P] Write a FAILING round-trip test asserting `normInv(normCdf(x)) ≈ x` across a spread of x in `packages/reports/test/bootstrap.test.ts` — this catches a sign or tail error that matching single points can miss
-- [ ] T007 Write FAILING tests for the jackknife in `packages/reports/test/bootstrap.test.ts`: n leave-one-out means for n inputs, and the zero-variance case where every leave-one-out mean is identical
-- [ ] T008 Write a FAILING test asserting `bcaMeanInterval` throws for fewer than 2 values in `packages/reports/test/bootstrap.test.ts` — no variance to resample, and guessing is worse than refusing
+- [ ] T003 Read `packages/reports/src/bootstrap.ts` in full, including the header's coverage and AR(1) simulation tables, before touching anything — research R12/R13 depend on what it already establishes
+- [ ] T004 [P] Confirm `packages/reports/test/bootstrap.test.ts` already covers the PRNG, the normal CDF and its inverse against published values, and record in the PR what is already proven rather than re-asserting it
+- [ ] T005 [P] Verify the existing `bcaInterval` returns `null` below n = 2 rather than a fabricated interval, and that `conservativeBounds` takes the WIDEST of the BCa and percentile bounds
+- [ ] T006 Write a FAILING test in `packages/reports/test/bootstrap.test.ts` for the zero-variance case: 12 identical returns at r > 0 must yield finite, equal bounds. **`Number.isFinite` must hold** — a NaN bound compares false against zero and would fail the gate closed for the WRONG reason (research R6)
+- [ ] T007 If T006 fails, fix the zero-variance path in `packages/reports/src/bootstrap.ts`. If it passes, say so in the PR and mark this task skipped rather than inventing work
+- [ ] T008 Export `MIN_TRIPS_FOR_INTERVAL = 12` from `packages/reports/src/promotion.ts` (the GATE's policy, not the module's) with the honest justification from research R5 — a pre-registered judgement, not a derivation, whose defence is that every run in the database has fewer trips than 12
+- [ ] T009 [P] Confirm `packages/reports/src/bootstrap.ts` contains no `Math.random`, no clock and no I/O, so the purity guard stays green with no change
+- [ ] T010 REMOVED — mulberry32 already exists in `packages/reports/src/bootstrap.ts`
+- [ ] T011 REMOVED — the normal CDF and Acklam inverse already exist in `packages/reports/src/bootstrap.ts`
+- [ ] T012 REMOVED — the jackknife and BCa acceleration already exist in `packages/reports/src/bootstrap.ts`
+- [ ] T013 REMOVED — `bcaInterval` already exists; the gate calls it through `conservativeBounds`
+- [ ] T014 REMOVED — folded into T006
+- [ ] T015 REMOVED — folded into T007
 
-### Implementation
-
-- [ ] T009 Create `packages/reports/src/bootstrap.ts` with the seeded PRNG and the fixed seed as a named exported constant, with a comment recording that the seed is pre-registered and why a constant beats a data-derived seed (research R4)
-- [ ] T010 Implement the standard normal CDF and its inverse in `packages/reports/src/bootstrap.ts` from a published rational approximation, citing the source in a comment
-- [ ] T011 Implement the jackknife and the BCa acceleration term in `packages/reports/src/bootstrap.ts`
-- [ ] T012 Implement `bcaMeanInterval(returnsBps, options?)` in `packages/reports/src/bootstrap.ts` returning `{ lowerBps, upperBps, meanBps, trips, confidencePct, resamples }` per `contracts/promotion-evidence.md`; reuse the exported `quantile` from `packages/reports/src/opportunity.ts` and add no new quantile implementation (FR-014)
-- [ ] T013 Export `MIN_TRIPS_FOR_INTERVAL = 12` from `packages/reports/src/bootstrap.ts` with the honest justification from research R5 in the comment — that it is a pre-registered judgement rather than a derivation, and that its defence is that every run in the database has fewer trips than 12, so it cannot have been fitted
-
-### The NaN path — its own task because it fails closed for the wrong reason
-
-- [ ] T014 Write a FAILING test in `packages/reports/test/bootstrap.test.ts` for zero variance: twelve identical returns at r > 0 must yield `lowerBps === upperBps === r`, and **`Number.isFinite` must hold on both bounds**
-- [ ] T015 Implement zero-variance detection in `packages/reports/src/bootstrap.ts` so the acceleration term never divides by a zero jackknife variance; return the degenerate interval `[mean, mean]`. A `NaN` bound compares false against zero and would fail the gate closed for the WRONG reason, which is worse than failing loudly (research R6)
-
-**Checkpoint**: the interval computes, is finite on every path, and its numerics are pinned to
-published values rather than to themselves.
+**Checkpoint**: the existing module is understood, its zero-variance behaviour is proven, and the
+gate's own minimum is declared. **No second bootstrap implementation exists.**
 
 ---
 
@@ -95,9 +94,11 @@ marginal with many trips. The first passes, the second fails, with no other chec
 ### Implementation
 
 - [ ] T019 [US1] Add `roundTripReturnsBps: readonly number[]` to `PromotionInput` in `packages/reports/src/promotion.ts`, KEEPING `filledSells` (the report prints it; removing it is unrelated churn) per research R8
-- [ ] T020 [US1] Rewrite the `round-trips` check in `packages/reports/src/promotion.ts` to compute the interval and pass only when `lowerBps > 0`. Keep the check id `'round-trips'` (research R8) — no type change, no consumer churn. **Exactly three outcomes and no default-bearing fourth**: baseline / below minimum / interval
+- [ ] T020 [US1] Rewrite the `round-trips` check in `packages/reports/src/promotion.ts` to call the EXISTING `conservativeBounds(bcaInterval(returns, mean, ...))` from `packages/reports/src/bootstrap.ts` — the widest of the BCa and percentile bounds, fail-closed, which that module's own header says the gate should use (research R3 superseded, R12) — and pass only when the conservative `lower > 0`. Keep the check id `'round-trips'` (research R8) — no type change, no consumer churn. **Exactly three outcomes and no default-bearing fourth**: baseline / below minimum / interval
 - [ ] T021 [US1] Remove `MIN_ROUND_TRIPS` from the gate's decision in `packages/reports/src/promotion.ts` and replace the long derivation comment with one recording that the constant was retired here, why (its parametric basis was measured unsound), and where the replacement is pre-registered
 - [ ] T022 [US1] Wire the call site in `packages/reports/src/compare.ts` (~line 99) to pair round trips from the `orders` it already destructures and pass their returns in. **Do not invent plumbing and do not add a CLI command** — this is the only non-test caller
+- [ ] T022b [US1] Make the check's detail state the coverage regime rather than implying a nominal 95% (research R13): the existing module measures 83-93% at n = 30 on heavy tails and 79.4% at phi = 0.6, and a gate that silently claims more precision than it has is the constitution's opening failure. Under-coverage means promoting too easily, so the real false-promotion rate is roughly 7-21%, not 5%
+- [ ] T022c [US1] Consult `bcaStability` in `packages/reports/src/promotion.ts` and REFUSE an interval whose bounds move more than `STABILITY_TOLERANCE` between seeds — that constant documents itself as the point above which an interval "is not to be trusted near a decision boundary", which is a principled small-n refusal needing no new constant
 - [ ] T023 [US1] Write a test in `packages/reports/test/promotion.test.ts` asserting `roundTripReturnsBps.length` CAN differ from `filledSells` and that the check uses the former: one sell can close several FIFO lots, and a sell with no open lot closes none, so the current gate has always miscounted in both directions (research R8)
 
 **Checkpoint**: a strong edge clears below thirty, a marginal one does not clear at thirty.
