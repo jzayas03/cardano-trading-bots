@@ -152,12 +152,34 @@ not what the next step needs. **Any FAIL stops the sequence.** Every fact it can
 FAIL, not a pass — a check that could not run is not a verdict, and here the cost of stopping to look
 is minutes while the cost of proceeding on an unknown is the week's data.
 
-**The gate is not on the server.** `npm run cutover` arrived in `dfc1d50`; the VPS runs `0d42901`,
-62 commits behind and deliberately so, because the week's equity curve has to come from one git sha.
-`dfc1d50` is not an ancestor of `0d42901`, so on the live checkout the command does not exist — and
-because the deploy is step 4, the two gates that matter most (`before-stop`, and the load-bearing
-`after-stop`) would both be unrunnable at the moment they are invoked. Only `after-deploy` works as
-written. So bootstrap the gate from a throwaway checkout first:
+**Whether the gate is on the server is a QUESTION, not a constant — ask it every cutover.** The box
+sits deliberately behind `main`, because the week's equity curve has to come from one git sha, so
+whether `npm run cutover` exists there depends on which sha is deployed *this* time. Ask first:
+
+```bash
+ssh ctb@<ip> 'cd cardano-trading-bots && git log --oneline -1 && \
+  (git merge-base --is-ancestor dfc1d50 HEAD && echo "GATE IS ON THE BOX" || echo "NOT ON THE BOX")'
+```
+
+- **On 2026-09-16 the answer was NO.** The VPS ran `0d42901`, 62 commits behind, and `dfc1d50` was
+  not an ancestor of it. Because the deploy is step 4, the two gates that matter most (`before-stop`
+  and the load-bearing `after-stop`) were both unrunnable at the moment they are invoked, and only
+  `after-deploy` worked as written. The sidecar below exists for that case.
+- **On 2026-09-17 the answer is YES.** The box runs `44fa230`, which contains `dfc1d50`. Verified by
+  running it, not by reading git: `--phase before-stop --runs 150,151,152,153` on the live checkout
+  returned OK for backup, runs alive and worktree clean, plus the designed FAIL for a missing
+  `--expect-sha`. **When the answer is yes, skip the whole sidecar** and use the plain form:
+
+```bash
+ssh ctb@<ip> "cd cardano-trading-bots && npm run cutover -- \
+  --phase before-stop --expect-sha OLD_SHA --runs 150,151,152,153"
+```
+
+This section said flatly "the gate is not on the server" until 2026-09-17, by which point it had
+been false for a day. A fact about the deployed sha goes stale at every deploy, which is why it is
+written here as a command to run rather than an answer to trust.
+
+**If and only if the check says NOT ON THE BOX, bootstrap the gate from a throwaway checkout:**
 
 ```bash
 # On the VPS, AS ctb -- not as root. The backup check reads $HOME/ctb-backups; root's $HOME has
@@ -187,7 +209,7 @@ passes, on precisely the two checks whose whole job is to describe the server.
 ```bash
 cd "$LIVE" && "$GATE/node_modules/.bin/tsx" --tsconfig "$GATE/tsconfig.json" \
   "$GATE/packages/cli/src/main.ts" cutover \
-  --phase before-stop --expect-sha OLD_SHA --runs 147,148,149
+  --phase before-stop --expect-sha OLD_SHA --runs 150,151,152,153
 ```
 
 **`--tsconfig` is not optional, and leaving it off does not fail safe.** `tsconfig.json` maps
@@ -203,6 +225,11 @@ back inside `$GATE` while cwd keeps supplying git, `.env` and `$HOME` from the l
 From step 4 the live checkout has the tool, so step 6 is the plain `npm run cutover`. Delete `$GATE`
 when the cutover is done, so that nobody later runs a stale gate against a server that has moved on.
 
+None of the sidecar paragraphs above apply when the check at the top of this section says the gate is
+already on the box — and after a deploy that carries `dfc1d50`, it stays there. They are kept because
+the condition recurs: pin the box far enough behind `main` again and the gate is once more missing at
+exactly the moment it is needed.
+
 The alternatives, written down so they are not re-had under time pressure. Running the gate **from
 the laptop** measures the laptop: `git` reads the local checkout, `$HOME/ctb-backups` is the local
 backup directory, and only `runs alive` reaches the server — three of four checks would be answering
@@ -215,7 +242,7 @@ TypeScript one — and an ad-hoc psql script breaking on first use is not a hypo
 
 **Do the bootstrap and one dry run the day BEFORE**, not on cutover morning. The gate is read-only —
 a few SELECTs and a pool that closes in a `finally` — so a `before-stop` dry run against the live box
-costs nothing, and that day it is `--expect-sha 0d42901` with the runs still up. It should read
+costs nothing, and that day it is `--expect-sha 44fa230` with the runs still up. It should read
 all-OK; if it does not, you have found the problem with a day of slack rather than with the runs
 already stopped. (The 62 commits add no *required* configuration — `COLLECT_MULTI_VENUE_EVERY_N_TICKS`
 and `COLLECT_MULTI_VENUE_MIN_DEPTH_ADA` are both optional with defaults — so the new sha's
@@ -248,7 +275,7 @@ ORDER BY id;`
 the HEAD of the checkout the gate is *run from* — cwd, per above, not where the code lives — so the
 right value depends on when you are asking:
 
-- `before-stop` wants **`OLD_SHA` — `0d42901`**, the sha the week actually ran on. `$LIVE` has not
+- `before-stop` wants **`OLD_SHA` — `44fa230`**, the sha the week actually ran on. `$LIVE` has not
   been deployed yet at that point, and the question the check is asking is "is the server still
   where I left it?". Passing the deploy target here fails the gate at the worst possible moment for
   no reason at all.
@@ -268,12 +295,18 @@ Then, and only if before-stop is all OK:
    See `docs/ops/RUNBOOK-alerting.md`. (A sha older than the alerting feature has no
    `maintenance` command; the `$GATE` checkout does.)
 
-1. **Stop the paper runs and the collector.**
-   `systemctl stop ctb-paper@ma-crossover ctb-paper@rsi-mean-reversion ctb-paper@buy-and-hold ctb-collector`
+1. **Stop the paper runs and the collector.** Derive the list from the box, never from this page:
+   this line named THREE units until 2026-09-17 while four were running, which would have carried
+   run 150 (the scheduled-accumulation baseline) straight through the cutover.
+   ```bash
+   ssh root@<ip> "systemctl stop \$(systemctl list-units 'ctb-paper@*' --no-legend --plain \
+     | awk '{print \$1}' | tr '\\n' ' ') ctb-collector"
+   ```
+   Then confirm nothing survived: `systemctl list-units 'ctb-paper@*' --no-legend --plain` is empty.
 
 2. **Prove the stop was clean.** Same bootstrap invocation, from `$LIVE`, no `--expect-sha` (this
    phase does not check the sha):
-   `cd "$LIVE" && "$GATE/node_modules/.bin/tsx" --tsconfig "$GATE/tsconfig.json" "$GATE/packages/cli/src/main.ts" cutover --phase after-stop --runs 147,148,149`
+   `cd "$LIVE" && "$GATE/node_modules/.bin/tsx" --tsconfig "$GATE/tsconfig.json" "$GATE/packages/cli/src/main.ts" cutover --phase after-stop --runs 150,151,152,153`
    The load-bearing check is **no running rows**. `paper-start.sh` RESUMES a row marked `running`, so
    one row left in that state turns the next start into a silent continuation of the old run — and
    the ids look right either way, which is what makes it dangerous rather than merely wrong.
@@ -421,7 +454,12 @@ Run this **only with the old runs stopped** (the step above), and **in this orde
 ssh root@<ip> 'bash -s' -- --sha <sha> --no-start < infra/vps/deploy.sh
 
 # 2. Confirm the file's eight instances are enabled and nothing else is.
-ssh root@<ip> "systemctl list-unit-files 'ctb-paper@*' --state=enabled --no-legend --plain"
+#    NOT `list-unit-files --state=enabled`: that lists TEMPLATE FILES, and an instance of a template
+#    is enabled by a symlink in the wants directory, so it prints NOTHING no matter how many
+#    instances are enabled. Proven on the live box 2026-09-17 with four instances enabled: it
+#    returned empty. A check that answers "none" whatever the truth cannot catch the leftover
+#    old-named units this step exists to catch.
+ssh root@<ip> "ls -1 /etc/systemd/system/multi-user.target.wants/ | grep '^ctb-paper@' | sed 's/\.service$//'"
 
 # 3. Start them ONE AT A TIME, checking memory between each. Each run is now ONE process, not the
 #    four it was (`npm run paper` -> `sh -c` -> `tsx` bin -> node): paper-start.sh execs node with
