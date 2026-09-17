@@ -68,9 +68,16 @@ within a token — so three processes per token is the floor and four is realist
 So this box supports **two instruments, not four**. That takes the ~2-year problem to roughly one
 year. Better, not solved.
 
-**Four instruments needs either a bigger box** (4 GB Hetzner, a few euro a month) **or a code change**
-so one process runs several tokens. The box is the cheaper of the two by a wide margin, and it is
-also the only one that does not add a new failure mode to the thing currently producing the evidence.
+**Four instruments needs either a bigger box or a code change** so one process runs several tokens.
+
+> **Updated 2026-09-17: the box was SKIPPED, and "a few euro a month" was wrong.** The 4 GB CPX21 is
+> about **$40/month**, not a few euro -- an unchecked figure that should not have been offered as a
+> reason to buy anything. The founder declined it on 2026-09-17. Two further corrections to the
+> arithmetic above: the ~118 MB per process is RSS, which counts the shared node binary once per
+> process, and the real marginal cost is ~67 MB of `Private_Dirty`; and the npm and tsx wrappers
+> removed in #170 and #171 took ~33 MB per run with them. Eight instances therefore fit the 2 GB box
+> with ~600-700 MB spare rather than "tightly". Sixteen still does not fit, so the conclusion of this
+> note stands: **two instruments**, and four needs the code change, not a purchase.
 
 ## Recommendation
 

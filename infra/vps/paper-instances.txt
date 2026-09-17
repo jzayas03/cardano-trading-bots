@@ -12,10 +12,14 @@
 # 152.3 on a 4.7M ADA pool. Every strategy needs BOTH baselines on its OWN token, because the
 # promotion gate compares within a token.
 #
-# MEMORY: ~118 MB resident per paper process against ~855 MB free with four running. Eight is
-# feasible and TIGHT on the 2 GB box; sixteen is not possible there. Check `free -m` between starts.
-# After the CPX21 resize (4 GB) sixteen fits with over a gigabyte to spare -- at which point a third
-# and fourth instrument can be added here. Cheapest next ones by measured round-trip cost at 500 ADA:
+# MEMORY: ~67 MB of Private_Dirty per paper run -- what one MORE instance costs -- after #170 and
+# #171 removed the npm and tsx wrappers. Eight fits the 2 GB box with ~600-700 MB spare. Sixteen does
+# not, and the 4 GB box that would have fitted them was declined on 2026-09-17, so EIGHT IS THE
+# CEILING here: a third and fourth instrument need one process to run several tokens, not more rows
+# in this file. Check `free -m` between starts anyway.
+# (The earlier figure was ~118 MB "resident" per process. That was RSS, which counts the shared node
+# binary once per process; summing it across ten node processes is what made the box look full.)
+# Cheapest next ones by measured round-trip cost at 500 ADA:
 # MIN 151.1, WMTX 174.0, INDY 193.4, HOSKY 206.7. Stablecoins are cheap and pointless: nothing moves.
 
 ma-crossover_SNEK

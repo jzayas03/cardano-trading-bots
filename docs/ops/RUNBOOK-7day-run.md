@@ -390,35 +390,30 @@ Write `docs/ops/<date>-m3-report.md` containing:
 Then open its PR. The run ids in the report are the whole audit trail: anyone can re-derive every
 number in it with `report <id>` and `report --compare`.
 
-### Resize the box to 4 GB, at this cutover, BEFORE starting any units
+### Reboot the box at this cutover, BEFORE starting any units — but do NOT resize
 
-**This is a founder action in the Hetzner console.** No agent has Hetzner API access and none should.
+**FOUNDER DECISION 2026-09-17: the 4 GB box is SKIPPED.** Stay on the CPX11. The resize this section
+originally prescribed was sized from summed RSS, which counts the shared node binary once per
+process; on `Private_Dirty` eight runs is ~530 MB (budget table in step 3 of the start-up procedure
+below), which fits the 2 GB box with roughly 600-700 MB to spare. The upgrade was ~$40/month for
+headroom that measurement says is already there.
 
-The box is a **CPX11**: 2 vCPU AMD EPYC, 1,914 MB RAM, 38 GB disk with 30 G free, Ashburn. The target
-is **CPX21** — 3 vCPU, 4 GB, 80 GB. Check current pricing in the console; the delta has been on the
-order of a few dollars a month.
+**What survives the decision is the REBOOT**, and it is not optional. Step 4 below is the only free
+chance to test the firewall's reboot persistence: the block was written six hours AFTER the kernel
+now running booted, so it has never once replayed from `after.rules`. A cutover is the only window
+where a reboot costs nothing, and skipping the resize must not quietly take the reboot with it.
 
-**Why, in one line:** 2 GB fits eight paper processes tightly and sixteen not at all. At 4 GB, four
-instruments x four strategies (~1,890 MB of paper plus ~590 MB of collector, Postgres and OS) leaves
-well over a gigabyte of headroom. That is the difference between two instruments and four, which is
-the difference between roughly a year and roughly six months to a promotable answer.
+Two consequences of staying at 2 GB, both already handled elsewhere in this file and both worth
+knowing before you start eight units:
 
-**The one irreversible choice.** Hetzner's rescale dialog offers CPU+RAM only, or CPU+RAM+disk.
-**Choose CPU and RAM only.** A disk upgrade cannot be undone — the server can never be rescaled back
-down afterwards — and disk is not the constraint here: 30 G of 38 G is free. Keeping the 40 GB disk
-keeps the whole change reversible.
+- **Eight instances is the ceiling, not a step toward sixteen.** Four instruments x four strategies
+  does not fit here. Two instruments is what this box supports.
+- **Start them ONE AT A TIME watching `free -m`**, per step 3 of the start-up procedure. If
+  `available` drops under 250 MB, stop — the margin is real but it is not unlimited.
 
-**The reboot is the cost, so do it in the window that is already stopped.** A CPU/RAM rescale
-requires the server powered off, which stops the paper runs. That is precisely what this cutover has
-already done, which is why this step sits here and not on any other day.
-
-> **The measurement this step was sized from has since been corrected, and the resize may no longer
-> be needed.** The 2 GB box was called marginal for eight instances on summed RSS. On Private_Dirty
-> it is not: eight runs is ~530 MB (see the budget table in step 3 of the start-up procedure below),
-> which fits with roughly 600-700 MB to spare. Whether to rescale anyway -- for CPU headroom, or
-> simply for margin -- is a founder call and this procedure stays here either way. If you skip it,
-> skip only the power-off and rescale: **step 5 below is the only free chance to test the firewall's
-> reboot persistence**, so reboot the box deliberately and still run it.
+If the decision is ever revisited, the rescale dialog offers CPU+RAM only or CPU+RAM+disk: **choose
+CPU and RAM only.** A disk upgrade cannot be undone, the server can never be rescaled back down
+afterwards, and disk is not the constraint — 30 G of 38 G is free.
 
 Order:
 
@@ -429,28 +424,27 @@ ssh ctb@<ip> "systemctl is-active 'ctb-paper@*' ctb-collector; \
   \"SELECT count(*) FROM runs WHERE status='running'\" </dev/null"
 #    Expect: inactive for every paper unit, and 0 running rows.
 
-# 2. Stop the collector and Postgres cleanly, then power off from the console.
+# 2. Stop the collector and Postgres cleanly, then reboot.
 ssh root@<ip> "systemctl stop ctb-collector ctb-backup.timer ctb-watch.timer; \
-  cd /home/ctb/cardano-trading-bots && sudo -u ctb docker compose stop postgres; poweroff"
+  cd /home/ctb/cardano-trading-bots && sudo -u ctb docker compose stop postgres; reboot"
 
-# 3. In the Hetzner console: Rescale -> CPX21 -> "CPU and RAM only". Then Power on.
-
-# 4. Verify the box came back as expected BEFORE deploying anything:
+# 3. Verify the box came back as expected BEFORE deploying anything:
 ssh ctb@<ip> "nproc; free -m | sed -n 2p; df -h / | tail -1; uptime -p"
-#    Expect: 3 vCPU, ~3,900 MB total, the SAME 38 G disk, and a fresh uptime.
+#    Expect: UNCHANGED 2 vCPU and ~1,914 MB -- this is a reboot, not a rescale -- the same 38 G
+#    disk, and a fresh uptime. A changed core or memory count means someone resized after all.
 
-# 5. The firewall's reboot persistence is now finally testable, and this is the only free chance
+# 4. The firewall's reboot persistence is now finally testable, and this is the only free chance
 #    to test it. From ANOTHER machine, not the box:
 nc -z -w 8 <ip> 5433 ; echo "rc=$?"     # non-zero is the pass
 #    Record the result in docs/ops/RUNBOOK-postgres-exposure.md. Until this line exists, that
 #    control is designed-for and not demonstrated -- the block was written six hours AFTER the
 #    kernel that is running now booted, so it has never actually replayed from after.rules.
 
-# 6. Confirm Postgres and the collector came back, then continue to the NIGHT step below.
+# 5. Confirm Postgres and the collector came back, then continue to the NIGHT step below.
 ssh ctb@<ip> "docker ps --format '{{.Names}} {{.Status}}'; systemctl is-active ctb-collector"
 ```
 
-**If anything about step 4 or 5 surprises you, stop and do not start the paper units.** A cutover that
+**If anything about step 3 or 4 surprises you, stop and do not start the paper units.** A cutover that
 starts eight runs on a box whose firewall or database did not come back correctly is a week spent
 measuring the wrong thing.
 
