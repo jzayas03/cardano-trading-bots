@@ -27,8 +27,27 @@ Every line below is a precondition, not a suggestion. Record each one's output i
    in `.env` silently overriding the 600-second default. Both would have quietly corrupted a week.
    A FAIL here stops the run; a warning gets read and understood before you continue.
 2. **The M1 report is merged** — 24 hours of `collector_runs` with the gaps explained.
-3. **`npm run test:live` is green** on the dependencies you are about to run for a week. It costs
-   about 1,100 Blockfrost calls, so run it when the day's budget allows, not during a discovery tick.
+3. **`npm run test:live` is green** on the dependencies you are about to run for a week.
+
+   **First recorded green 2026-09-17 10:38 UTC**, on the box at `44fa230`: `Test Files 1 passed (1)`,
+   `Tests 2 passed (2)`, 189.24s. Both tests RAN -- read `2 passed`, never the exit code, because the
+   file is `describe.skipIf(!LIVE)` on `RUN_LIVE_TESTS` and `BLOCKFROST_PROJECT_ID`, so a missing
+   credential SKIPS every test and still exits 0. `vitest` does not load `.env`, so the box needs
+   `set -a; . ./.env; set +a` first or it silently proves nothing. Full log: `/var/tmp/testlive.log`.
+
+   **Budget ~2,800 calls, not the ~1,100 this line claimed until 2026-09-17.** Only 570 of that is
+   measured: the first test prints its own cost, 550 discover + 20 refresh. The second prints
+   nothing and deliberately sweeps FOUR times to exercise the retry path, so its ~2,200 is INFERRED
+   from the first test's sweep size. Treat ~2,800 as a ceiling to budget against, not a reading. Check the day before spending it -- a full day is ~38,000 of
+   the 50,000 tier, and the ~5,700-call discovery sweep runs once, at 00:30 UTC:
+
+   ```sql
+   SELECT sum(provider_calls) FROM collector_runs WHERE started_at > current_date;
+   ```
+
+   Run it nice'd so it always loses to the collector, as with the sidecar install:
+   `set -a && . ./.env && set +a && nice -n 19 ionice -c3 npm run test:live`. It cost ~230 MB for
+   189 s on 2026-09-17 and left 600 MB available, so it does not threaten the paper runs.
 4. **Real candles exist.** First built 2026-09-07 — 2,265 across all 20 tokens; see
    `docs/ops/2026-09-07-first-real-candles.md`, which also carries the price-movement table this
    run's token should be chosen from, and the finding that a venue outage splices a token's series
