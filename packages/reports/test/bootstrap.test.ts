@@ -179,4 +179,30 @@ describe('block bootstrap', () => {
     const c = conservativeBounds(r);
     expect(Number.isFinite(c.lower) && Number.isFinite(c.upper)).toBe(true);
   });
+
+  // specs/003 T035: determinism ACROSS PROCESSES, which is the assertion that matters. A bootstrap
+  // stable only within one process is not deterministic, and a test that merely calls the function
+  // twice in one process cannot tell the difference. These literals were produced by a DIFFERENT
+  // node process on 2026-09-17 and committed; if the resampler ever picks up ambient state, they
+  // stop matching here.
+  it('bounds are reproducible across processes, pinned to literals produced by another one', () => {
+    const strong = Array.from({ length: 12 }, (_, i) => 300 + ((i % 5) - 2) * 20);
+    const r = bcaInterval(strong, mean, { seed: 1 })!;
+    expect(r.lower).toBe(280);
+    expect(r.upper).toBeCloseTo(301.6666666666667, 10);
+    expect(r.percentileLower).toBeCloseTo(286.6666666666667, 10);
+    expect(r.percentileUpper).toBeCloseTo(313.3333333333333, 10);
+    const c = conservativeBounds(r);
+    expect(c.lower).toBe(280);
+    expect(c.upper).toBeCloseTo(313.3333333333333, 10);
+  });
+
+  // specs/003 T038 / SC-004: a reader must be able to recover the parameters from the output rather
+  // than from the source, or "95%" is a claim nobody can check.
+  it('reports the parameters that produced it', () => {
+    const r = bcaInterval(Array.from({ length: 20 }, (_, i) => i - 5), mean, { seed: 1 })!;
+    expect(r.level).toBe(0.95);
+    expect(r.resamples).toBe(BOOTSTRAP_RESAMPLES);
+    expect(r.blockLength).toBeGreaterThanOrEqual(1);
+  });
 });
