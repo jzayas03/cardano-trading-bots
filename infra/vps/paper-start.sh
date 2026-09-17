@@ -59,6 +59,18 @@ fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 
+# Run tsx DIRECTLY instead of through `npm run paper`. Measured on the live box 2026-09-16: the four
+# paper runs carried 267 MB of `npm` wrapper processes that do nothing once the child is up -- 28% of
+# the 966 MB the runs consumed in total, on a box with 811 MB free. At eight runs that is over 500 MB
+# of nothing, which is most of the gap between "eight instances fit tightly" and "eight instances
+# fit". `npm run paper` resolves to exactly this command (package.json), nothing in packages/ reads
+# any npm_* variable, and paper-start.sh has already cd-ed to $REPO and sourced .env.
+#
+# No fallback to npm on purpose. A missing tsx means a broken install, and a silent fallback would
+# restore the 267 MB while looking like it worked.
+RUNNER="$REPO/node_modules/.bin/tsx"
+[ -x "$RUNNER" ] || { echo "missing $RUNNER -- run npm ci in $REPO" >&2; exit 1; }
+
 # Split off the `.` so the directive actually covers it: a directive binds to the NEXT command, so
 # on `set -a; . ./.env; set +a` it bound to `set -a` and the source was never exempt at all.
 set -a
@@ -68,7 +80,7 @@ set +a
 
 if [ "${CTB_PAPER_FORCE_NEW:-0}" = "1" ]; then
   echo "CTB_PAPER_FORCE_NEW=1: starting a new run for $STRATEGY/$TICKER without looking for one to resume"
-  exec npm run paper -- "$STRATEGY" "$TICKER" "$@"
+  exec "$RUNNER" packages/cli/src/main.ts paper "$STRATEGY" "$TICKER" "$@"
 fi
 
 # Matched on strategy AND token. Matching on strategy alone was a latent bug: change the unit's
@@ -91,8 +103,8 @@ EOF
   else
     echo "resuming run $RUN_ID ($STRATEGY): ${RUN_STATUS}/${STOP_REASON} ${STOPPED_AGO}s ago, inside the ${RESUME_WINDOW_SECONDS}s restart window"
   fi
-  exec npm run paper -- "$STRATEGY" "$TICKER" --resume "$RUN_ID" "$@"
+  exec "$RUNNER" packages/cli/src/main.ts paper "$STRATEGY" "$TICKER" --resume "$RUN_ID" "$@"
 fi
 
 echo "nothing to resume for $STRATEGY/$TICKER (no running row, none signalled within ${RESUME_WINDOW_SECONDS}s); starting a new run"
-exec npm run paper -- "$STRATEGY" "$TICKER" "$@"
+exec "$RUNNER" packages/cli/src/main.ts paper "$STRATEGY" "$TICKER" "$@"
