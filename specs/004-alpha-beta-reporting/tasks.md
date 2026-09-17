@@ -47,29 +47,34 @@ Read once; not repeated per task.
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: the collapse from research R1, and the investigation that determines what the report is
-allowed to claim. **No story work begins until this phase is green.**
+**Purpose**: the return pairs, and the investigation that determines what the report is allowed to
+claim — an investigation that changed the design rather than confirming it. **No story work begins until this phase is green.**
 
 ### The investigation — it changes what the output may say
 
-- [ ] T004 Determine WHY the benchmark price repeats across ticks, reading `packages/collector/src/tick.ts` and the candle builder: the candidates are the collector's refresh rotation (deepest venue every tick, others every Nth) and the builder carrying the last close forward when no fresh snapshot landed. Record the answer in `specs/004-alpha-beta-reporting/research.md` under R1
-- [ ] T005 Record the consequence of T004 in `specs/004-alpha-beta-reporting/research.md` under R1: **if the repetition is a collector cadence rather than an absence of trading, the collapsed interval measures what the COLLECTOR saw, not what the market did**, and the report must say which. **Do NOT change collector behaviour** — that is a different feature with its own Blockfrost quota arithmetic
+- [X] T004 DONE 2026-09-17 — determined WHY the benchmark price repeats, recorded in `specs/004-alpha-beta-reporting/research.md` under R1: the candle close is `reserveQuote/reserveBase` from the last snapshot in the bucket, the pool is sampled every ~5 minutes against a 900 s tick, and in all 55 same-reserve pairs measured the BLOCK HEIGHT ADVANCED. The chain moved and the pool was not traded. **The zeros are real, which falsified the design this task was meant to confirm**
+- [X] T005 DONE 2026-09-17 — consequence recorded in `specs/004-alpha-beta-reporting/research.md` under R1, and it was the opposite of what this task anticipated: **if the repetition is a collector cadence rather than an absence of trading, the collapsed interval measures what the COLLECTOR saw, not what the market did**, and the report must say which. **Do NOT change collector behaviour** — that is a different feature with its own Blockfrost quota arithmetic
 
-### Tests first — the collapse
+### Tests first — the return pairs
 
-- [ ] T006 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: consecutive observations carrying an identical benchmark price collapse into ONE interval spanning the whole stale stretch
-- [ ] T007 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: `sum(ticksSpanned)` equals the raw observation count — nothing dropped, repetition merged
-- [ ] T008 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: **no collapsed interval has a zero benchmark return**. One that does means the collapse did not run
-- [ ] T009 Write a FAILING test in `packages/reports/test/exposure.test.ts` that strategy and benchmark returns are measured over the **SAME spans**. This is its own task because measuring one per tick and the other per price change is the most likely way to get this silently wrong, and it would fail none of T006-T008
+> **REWRITTEN 2026-09-17.** T006-T008 were collapse assertions. Research R1's correction removed the
+> collapse: the zeros are REAL (the chain advanced in all 55 same-reserve pairs measured), so there is
+> no measurement error to correct and varying-duration intervals would have stopped alpha being a
+> rate. T009 survives unchanged and is now the most important of the four.
+
+- [ ] T006 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a zero benchmark return is KEPT as valid data, not dropped or merged. Roughly two thirds of real pairs are zero because the pool went untraded
+- [ ] T007 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: `observations` equals the number of consecutive tick pairs, and `zeroBenchmarkPairs` counts how many had a zero benchmark return
+- [ ] T008 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: the cash charge is pro-rated to each pair's REAL duration, so a gap in the tick series is charged for its actual length rather than a nominal one
+- [ ] T009 Write a FAILING test in `packages/reports/test/exposure.test.ts` that strategy and benchmark returns are measured over the **SAME interval**. This is its own task because measuring them over different spans is the most likely way to get this silently wrong, and it would fail none of T006-T008
 
 ### Implementation
 
-- [ ] T010 Create `packages/reports/src/exposure.ts` with the collapse to price-change intervals, producing `fromTs`, `toTs`, `ticksSpanned` per `specs/004-alpha-beta-reporting/data-model.md`
-- [ ] T011 Implement excess returns in `packages/reports/src/exposure.ts`: benchmark and strategy ADA returns over each collapsed span, each less the cash charge for that span, **pro-rated to the interval's REAL duration and not to a nominal tick length**
+- [ ] T010 Create `packages/reports/src/exposure.ts` producing `ReturnPair` records from consecutive equity observations per `specs/004-alpha-beta-reporting/data-model.md` — **no collapse**
+- [ ] T011 Implement excess returns in `packages/reports/src/exposure.ts`: benchmark and strategy ADA returns over each tick pair, each less the cash charge, **pro-rated to the pair's REAL duration and not to a nominal tick length**
 - [ ] T012 Implement the cash charge in `packages/reports/src/exposure.ts` using `ASSUMED_STAKING_APR_PCT` from `packages/reports/src/staking.ts` — the existing constant, never a second one
 
-**Checkpoint**: observations collapse correctly, both series share spans, and the repetition's cause
-is written down.
+**Checkpoint**: return pairs are built correctly, both series share intervals, and the repetition's
+cause is written down and turned out to change the design.
 
 ---
 
@@ -83,7 +88,7 @@ beta and alpha.
 ### Tests first
 
 - [ ] T013 [P] [US1] **THE KNOWN-ANSWER CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a synthetic run whose equity tracks the token one-for-one MUST report beta within a stated tolerance of 1 and alpha within a stated tolerance of 0 after the cash charge. **A measurement that cannot recover beta = 1 from a pure holder is broken and every other number it prints is meaningless. DO NOT TUNE THE TOLERANCE TO MAKE IT PASS** — if it fails, the estimator is wrong
-- [ ] T014 [P] [US1] **THE ATTENUATION DEMONSTRATION** — write a FAILING test in `packages/reports/test/exposure.test.ts`: regressing the UNCOLLAPSED series produces a **smaller beta and a larger alpha** than the collapsed one. This is what justifies the whole design; the measured 67.6% zero-return fraction biases beta toward zero and pushes unattributed exposure into the intercept, manufacturing alpha. A design nobody demonstrated is decorative
+- [ ] T014 [P] [US1] **REPLACES THE ATTENUATION DEMONSTRATION, which tested for a bias that does not exist.** Research R1's correction established the zeros are real, so there is no errors-in-variables attenuation to demonstrate. Instead write a FAILING test in `packages/reports/test/exposure.test.ts` that a series which is mostly zero-benchmark pairs still recovers the right beta when the non-zero pairs are informative — the estimator must not be defeated by the sparsity that is genuinely there
 - [ ] T015 [P] [US1] **THE CASH-CHARGE CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a cash-only run reports alpha about zero, NOT a positive alpha equal to the token's decline
 - [ ] T016 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that spent half the window in cash reports beta materially below 1, and the reported `exposedFraction` matches
 - [ ] T017 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: two runs with equal headline returns and different exposure report different alphas, in the direction the exposure difference implies
@@ -101,7 +106,7 @@ beta and alpha.
 - [ ] T023 [P] [US1] Write a test in `packages/reports/test/exposure.test.ts` asserting every reported figure states its unit: **alpha and its bounds are ADA, beta is unitless**
 - [ ] T024 [US1] Assert in `packages/cli/test/` that the rendered block labels the ADA alpha distinctly from the gate's existing **token**-denominated return, and that the two are never summed. A token return and an ADA alpha printed side by side unlabelled is exactly how the earlier units error survived review
 
-**Checkpoint**: a pure holder returns beta ≈ 1, and the collapse is demonstrably why.
+**Checkpoint**: a pure holder returns beta ≈ 1, and sparsity does not defeat the estimator.
 
 ---
 
@@ -111,7 +116,7 @@ beta and alpha.
 
 ### Tests first — effective observations
 
-- [ ] T025 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for `n_eff = n * (1 - rho) / (1 + rho)`, floored at 1 and capped at n, with `rho` the lag-1 autocorrelation of the **COLLAPSED** series
+- [ ] T025 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for `n_eff = n * (1 - rho) / (1 + rho)`, floored at 1 and capped at n, with `rho` the lag-1 autocorrelation of the **TICK** series. With the collapse gone this carries the ENTIRE honesty burden: it is the only thing between a raw ~700-tick count and a reader's impression of the evidence
 - [ ] T026 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for SC-004: `effectiveObservations` is **strictly below** `observations` whenever `rho > 0`
 - [ ] T027 [P] [US2] Write a test in `packages/reports/test/exposure.test.ts` that `lag1Autocorrelation` is reported alongside, so the input to `n_eff` is visible rather than assumed
 
@@ -121,12 +126,12 @@ beta and alpha.
 - [ ] T029 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run still in progress returns `window-open` — a partial window presented as a result is a finding that changes tomorrow
 - [ ] T030 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a benchmark that did not move across the whole window returns `benchmark-did-not-move`, because beta is undefined and any alpha is the whole return mislabelled
 - [ ] T031 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that never held a position returns `no-position-taken` with beta 0 labelled **DEFINITIONAL**, not a measurement of skill
-- [ ] T032 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: fewer than 2 collapsed intervals returns `too-few-observations`
+- [ ] T032 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: fewer than 2 return pairs returns `too-few-observations`
 - [ ] T033 [US2] Write a test in `packages/reports/test/exposure.test.ts` that the five outcomes are exhaustive and mutually exclusive — exactly one per input, **no default-bearing fallthrough**
 
 ### The NaN path — its own task because it fails for the wrong reason
 
-- [ ] T034 [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` that **no path produces NaN**, including a single collapsed interval and a zero-variance benchmark. A NaN bound compares false against zero and would read as "cannot distinguish alpha from zero" for entirely the wrong reason
+- [ ] T034 [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` that **no path produces NaN**, including a single return pair and a zero-variance benchmark. A NaN bound compares false against zero and would read as "cannot distinguish alpha from zero" for entirely the wrong reason
 - [ ] T035 [US2] Implement finite-guarantee handling in `packages/reports/src/exposure.ts` for every path T034 covers
 
 ### Split-window beta, and keeping the two stabilities apart
@@ -136,13 +141,13 @@ beta and alpha.
 
 ### Implementation and wording
 
-- [ ] T038 [US2] Implement `n_eff`, the refusals and the split-window betas in `packages/reports/src/exposure.ts`. Note: collapsing already removed the zero-inflation, so computing `n_eff` on the UNCOLLAPSED series would double-count the problem
+- [ ] T038 [US2] Implement `n_eff`, the refusals and the split-window betas in `packages/reports/src/exposure.ts`. `n_eff` is computed on the tick series; a series that is two thirds zeros is strongly dependent, so if `n_eff` does not come out far below `n` the formula is on the wrong series
 - [ ] T039 [US2] Implement the FR-010 wording in `packages/reports/src/exposure.ts` or its renderer: when the interval spans zero, say the window **cannot distinguish alpha from zero** rather than presenting the point estimate as a finding
 
 ### The real run — recorded, against a prediction written in advance
 
 - [ ] T040 [US2] Export the equity rows for runs 150-153 from `run_equity` with ONE read-only psql query and run `packages/reports/src/exposure.ts` against them locally. **Nothing deployed, live tree untouched, runs 150-153 undisturbed** — a measurement week is in flight and the box runs a sha 35 commits behind. Capture the output verbatim
-- [ ] T041 [US2] Check the T040 output against `specs/004-alpha-beta-reporting/research.md` R9: interval on alpha too wide to exclude zero on all four, `n_eff` materially below the ~45 collapsed observations, **150 and 152 showing beta near one**, 151 and 153 well below one, split-window betas overlapping widely. **PREDICTION 3 IS THE ONE THAT MATTERS** — 150 and 152 are essentially always long, so a beta far from one there means the ESTIMATOR is wrong rather than the strategy. **A contradicting result is INVESTIGATED, not accepted**
+- [ ] T041 [US2] Check the T040 output against `specs/004-alpha-beta-reporting/research.md` R9: interval on alpha too wide to exclude zero on all four, `n_eff` materially below the ~137 tick observations, **150 and 152 showing beta near one**, 151 and 153 well below one, split-window betas overlapping widely. **PREDICTION 3 IS THE ONE THAT MATTERS** — 150 and 152 are essentially always long, so a beta far from one there means the ESTIMATOR is wrong rather than the strategy. **A contradicting result is INVESTIGATED, not accepted**
 - [ ] T042 [US2] Record the observed output beside the prediction in `docs/ops/2026-09-XX-exposure-first-run.md`, including which runs refused and why
 
 **Checkpoint**: the report distinguishes "about zero" from "cannot tell", and the first real reading is
@@ -176,7 +181,7 @@ recorded against what was predicted.
 ## Dependencies & Execution Order
 
 - **Phase 1 (Setup)**: no dependencies.
-- **Phase 2 (Foundational)**: blocks ALL stories — every story needs the collapse. T004/T005 also block
+- **Phase 2 (Foundational)**: blocks ALL stories — every story needs the return pairs. T004/T005 also block
   T022's wording, because what the report may claim depends on what the repetition turns out to be.
 - **Phase 3 (US1)**: depends on Phase 2. **This is the MVP.**
 - **Phase 4 (US2)**: depends on Phase 2; several tasks touch `exposure.ts` alongside US1 and follow it.
@@ -189,7 +194,7 @@ Tests are written and MUST FAIL before the implementation that satisfies them.
 
 ### Parallel opportunities
 
-- T006-T008 in parallel: independent assertions on the collapse.
+- T006-T008 in parallel: independent assertions on the return pairs.
 - T013-T017 in parallel: five independent fixtures.
 - T025-T032 in parallel: eight independent assertions.
 - **Not parallel**: T010-T012, T018-T020, T035, T038, T039 all touch `exposure.ts` and are sequential.
@@ -201,14 +206,14 @@ Tests are written and MUST FAIL before the implementation that satisfies them.
 ### MVP (US1 only)
 
 1. Phase 1 → Phase 2 → Phase 3.
-2. **STOP and VALIDATE**: T013 recovers beta ≈ 1 from a pure holder, and T014 shows the uncollapsed
-   series would have understated it.
+2. **STOP and VALIDATE**: T013 recovers beta ≈ 1 from a pure holder, and T014 shows sparsity does not
+   defeat the estimator.
 3. That is a shippable increment: the report can distinguish skill from exposure, with the design's
    justification demonstrated rather than asserted.
 
 ### Incremental delivery
 
-1. Setup + Foundational → observations collapse and the repetition's cause is known.
+1. Setup + Foundational → return pairs build and the repetition's cause is known.
 2. + US1 → alpha and beta are reported and the known-answer control passes. **MVP.**
 3. + US2 → the report says when it cannot answer, and the first real reading is recorded.
 4. + US3 → the gate is provably unchanged.

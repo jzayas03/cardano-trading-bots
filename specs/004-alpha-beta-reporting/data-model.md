@@ -11,7 +11,7 @@ One recorded point in a paper run's life.
 
 | Field | Used for |
 |---|---|
-| `tickTs` | ordering, and the span a collapsed interval covers |
+| `tickTs` | ordering, and the duration each return pair spans |
 | `cashLovelace` | the idle-cash charge (R8) |
 | `positionBase` | whether the run held exposure at all (R6 refusal) |
 | `equityLovelace` | the strategy's ADA value — the regressand's source |
@@ -21,35 +21,35 @@ One recorded point in a paper run's life.
 
 - **Paper runs only.** Backtests persist orders but no equity observations; the report states the
   measurement does not apply rather than printing an empty column.
-- Observations must be ordered by `tickTs` and that order must be **stable**, or the collapse in R1
-  and the block resampling both become non-deterministic.
+- Observations must be ordered by `tickTs` and that order must be **stable**, or the pairing and the
+  block resampling both become non-deterministic.
 - `price` is the run's OWN recorded ADA price. Externally sourced history is USD and is forbidden
   (FR-003).
 
 ---
 
-## CollapsedInterval (new)
+## ReturnPair (new)
 
-The unit of evidence after research R1. Consecutive observations carrying an identical benchmark
-price are merged into one interval spanning the whole stale stretch.
+The unit of evidence: one consecutive pair of tick observations.
+
+> **REVISED 2026-09-17.** This was `CollapsedInterval`, merging consecutive observations that shared a
+> benchmark price. Research R1's correction removed the collapse — the zeros are real, so there is
+> nothing to merge and varying-duration intervals would have stopped alpha being a rate.
 
 | Field | Notes |
 |---|---|
-| `fromTs` / `toTs` | the span; a collapsed interval can cover several ticks |
-| `ticksSpanned` | how many raw observations were merged — the visible cost of the repetition |
-| `benchmarkExcessBps` | the token's ADA return over the span, less the cash charge for that span |
-| `strategyExcessBps` | the run's ADA equity return over the SAME span, less the cash charge |
+| `fromTs` / `toTs` | one tick interval |
+| `benchmarkExcessBps` | the token's ADA return over the tick, less the cash charge |
+| `strategyExcessBps` | the run's ADA equity return over the SAME tick, less the cash charge |
 
 **Validation rules**
 
-- **Both series are measured over the same span.** Measuring the strategy per tick and the benchmark
-  per price change would compare different windows and is the most likely way to get this silently
-  wrong.
-- A collapsed interval's benchmark return is **non-zero by construction** — that is the point. An
-  interval with a zero benchmark return means the collapse did not run.
-- `sum(ticksSpanned)` must equal the raw observation count. Nothing is dropped; repetition is merged.
-- The cash charge is derived from `ASSUMED_STAKING_APR_PCT`, pro-rated to the interval's real
-  duration, not to a nominal tick length.
+- **Both series are measured over the same interval.** Measuring them over different spans is the
+  most likely way to get this silently wrong, and it would fail no other assertion.
+- A zero benchmark return is **valid data**, not an error. Roughly two thirds of them are zero
+  because the pool went untraded, confirmed by the chain advancing while reserves held still.
+- The cash charge is derived from `ASSUMED_STAKING_APR_PCT`, pro-rated to the tick's real duration —
+  ticks can be missing, so a nominal length is not safe to assume.
 
 ---
 
@@ -63,8 +63,8 @@ What the report prints. Carries its own provenance so a reader never has to assu
 | `alphaLowerBps` / `alphaUpperBps` | conservative bounds from the blocked pairs bootstrap |
 | `beta` | fitted slope; unitless |
 | `betaFirstHalf` / `betaSecondHalf` | split-window (R5), for FR-009 |
-| `observations` | collapsed intervals used |
-| `rawTicks` | raw observations before collapse — the two together show the repetition |
+| `observations` | return pairs used |
+| `zeroBenchmarkPairs` | how many pairs had a zero benchmark return — the visible measure of how little the pool traded |
 | `effectiveObservations` | `n_eff` per R4; **must be < `observations`** whenever `ρ > 0` (SC-004) |
 | `lag1Autocorrelation` | `ρ`, reported so the `n_eff` input is visible |
 | `assumedStakingAprPct` | the cash-charge rate, shown not folded (FR-006) |
@@ -89,7 +89,7 @@ Not every run yields a result, and the reason is part of the output.
 | Reason | When |
 |---|---|
 | `not-applicable` | run type records no equity observations |
-| `too-few-observations` | fewer than 2 collapsed intervals |
+| `too-few-observations` | fewer than 2 return pairs |
 | `benchmark-did-not-move` | no price change across the whole window |
 | `no-position-taken` | beta is 0 **by construction**; labelled definitional, not a measurement of skill |
 | `window-open` | run still in progress; a partial window is not a result |
@@ -101,7 +101,7 @@ no equity observations   -> not-applicable
 run still running        -> window-open
 zero price change        -> benchmark-did-not-move
 never held a position    -> no-position-taken (beta 0, definitional)
-< 2 collapsed intervals  -> too-few-observations
+< 2 return pairs         -> too-few-observations
 otherwise                -> ExposureResult
 ```
 

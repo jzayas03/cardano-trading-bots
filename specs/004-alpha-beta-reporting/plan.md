@@ -9,16 +9,21 @@
 Report alpha, beta and an interval on alpha for each paper run, against holding the token, **without
 changing what promotes**.
 
-The plan's central finding is empirical and was measured before anything was designed: **67.6% of
-consecutive benchmark returns are exactly zero**, because prices are carried forward across ticks
-(research R1). That is not a nuisance — a benchmark measured with error attenuates the slope, so beta
-is biased toward zero and the unattributed exposure lands in the intercept. **The bias manufactures
-alpha**, the same direction as the idle-cash problem FR-005 exists to prevent, arriving by a
-different route and larger.
+The plan's central finding is empirical: **67.6% of consecutive benchmark returns are exactly zero**
+— and, **corrected 2026-09-17 before any code was written, those zeros are REAL** (research R1). In
+all 55 same-reserve snapshot pairs measured the block height advanced: the chain moved and the pool
+was not traded. The collector samples it about every 5 minutes, three times more often than the run
+ticks, so staleness is not the collector failing to look.
 
-So returns are computed over **price-change intervals** rather than tick intervals, the estimator is
-an excess-return OLS with alpha as the fitted intercept, and the interval comes from a **blocked
-pairs bootstrap** reusing the module that already exists.
+An earlier draft of this plan called them a stale carry-forward, argued errors-in-variables
+attenuation, and collapsed the series to price-change intervals to fix it. **That premise was false
+and the collapse is gone.** It also carried an unweighed cost: collapsed intervals have varying
+durations, so the intercept stops being a per-unit-time rate.
+
+So returns are computed at the run's own **tick interval**, the estimator is an excess-return OLS with
+alpha as the fitted intercept, the interval comes from a **blocked pairs bootstrap** reusing the
+module that already exists, and the overstated sample is carried entirely by the effective-observation
+count.
 
 ## Technical Context
 
@@ -44,8 +49,8 @@ perceptible; no target beyond that.
 forbids `Math.random` anywhere under `packages/reports/src`. Both must stay green.
 
 **Scale/Scope**: one new pure module, one addition to the report rendering, no change to the gate.
-Currently 137 observations per run collapsing to roughly 45 real ones; about 700 raw by week's end,
-with real observations growing far more slowly.
+Currently 137 tick observations per run, about 700 by week's end, of which roughly a third carry a
+non-zero benchmark return. `n_eff` is what makes that visible.
 
 ## Constitution Check
 
@@ -55,7 +60,7 @@ with real observations growing far more slowly.
 |---|---|---|
 | **I. Cost model measured, never asserted** | **PASS** | This feature never reads the cost model. Quickstart carries a git-diff assertion over the cost files as an executable check. |
 | **II. Units are part of the number** | **PASS, and it is the principle this feature is closest to** | The regression is in ADA on the run's own recorded price; external history is USD and is forbidden (FR-003). The gate's comparison stays token-denominated and the two are never mixed. Research R7 requires every reported figure to state its denomination **in the output**, because a token return and an ADA alpha printed side by side unlabelled is exactly how the earlier unit error survived review. |
-| **III. A quoted price is not a market / prove a filter both ways** | **PASS** | R1 is this principle applied to the benchmark itself: a repeated price is not a market that stood still. The known-answer control in R9 prediction 3 — a token holder must show beta ≈ 1 — is the both-directions test. |
+| **III. A quoted price is not a market / prove a filter both ways** | **PASS** | R1 is this principle applied to the benchmark and then to the plan's own first answer: a repeated price WAS assumed stale, and checking block height against reserves showed the market really had stood still. The known-answer control in R9 prediction 3 — a token holder must show beta ≈ 1 — is the both-directions test. |
 | **IV. `npm test` is not the gate** | **PASS** | `test:pg`, `lint`, `lint:sh`, all three green or it is not implemented. |
 | **V. The gate exists in order not to be gamed** | **PASS — by construction** | The feature changes what the report SAYS and nothing about what the gate DECIDES. FR-012 requires the verdict's status, checks and blockers be unchanged for every input, enforced by test. Wiring alpha in later is a separate founder stop-and-ask, stated in the spec and restated here. |
 
@@ -88,8 +93,8 @@ specs/004-alpha-beta-reporting/
 
 ```text
 packages/reports/src/
-├── exposure.ts           # NEW — pure: collapse to price-change intervals, excess returns,
-│                         #        OLS alpha/beta, n_eff, split-window betas
+├── exposure.ts           # NEW — pure: tick-interval excess returns, OLS alpha/beta,
+│                         #        n_eff, split-window betas (no collapse — research R1 corrected)
 ├── bootstrap.ts          # UNCHANGED — reused for the blocked pairs interval
 ├── staking.ts            # UNCHANGED — ASSUMED_STAKING_APR_PCT is the cash charge rate
 ├── compare.ts            # equity is already in scope at the call site; adds the reported fields
@@ -97,7 +102,7 @@ packages/reports/src/
 └── opportunity.ts        # UNCHANGED — source of the reused `quantile`
 
 packages/reports/test/
-├── exposure.test.ts      # NEW — known-answer controls, collapse, refusals, determinism
+├── exposure.test.ts      # NEW — known-answer control, refusals, n_eff, determinism
 └── promotion.test.ts     # gains the FR-012 invariance test; no existing case changes
 
 packages/cli/src/commands/
