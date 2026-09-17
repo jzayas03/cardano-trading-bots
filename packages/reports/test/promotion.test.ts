@@ -2,8 +2,24 @@ import { describe, expect, it } from 'vitest';
 import type { RunCoverage } from '@ctb/engine';
 import {
   BASELINE_STRATEGIES, MAX_CAPITAL_DRIFT, MAX_GAPS_OVER_BOUND_PCT, MIN_COVERAGE_PCT,
-  MIN_ROUND_TRIPS, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionInput, type RunContext,
+  MIN_TRIPS_FOR_INTERVAL, MIN_WINDOW_OVERLAP, promotionVerdict, type PromotionInput, type RunContext,
 } from '../src/index.js';
+
+/** Twelve trips, every one strongly positive after costs. Unambiguous evidence at a small n. */
+const STRONG_EDGE = Array.from({ length: 12 }, (_, i) => 300 + ((i % 5) - 2) * 20);
+/** Thirty trips averaging barely positive with a wide spread: the interval must span zero.
+ * This input PASSES the count check this gate used to apply.
+ *
+ * Written out rather than generated from `i % k`: a periodic fixture interacts with the block
+ * resampler's `n^(1/3)` block length and lands on the stability boundary, which refuses the input
+ * for the wrong reason. Found by this test on 2026-09-17. */
+const MEDIOCRE_30 = [
+  -180, 240, -95, 60, 15, -220, 130, -40, 75, -160,
+  200, -55, 20, 95, -130, 45, -75, 165, -210, 110,
+  -30, 85, -145, 55, 35, -100, 190, -65, 25, 70,
+];
+/** Eleven losses and one huge win. Mean is positive; the evidence is one draw. */
+const ONE_WINNER = [...Array.from({ length: 11 }, () => -50), 900];
 
 const coverage = (over: Partial<RunCoverage> = {}): RunCoverage => ({
   candles: 100, first: null, last: null, expectedBuckets: 100, maxGapMs: 0, gapsOverBound: 0, ...over,
@@ -17,7 +33,7 @@ const ctx = (over: Partial<RunContext> = {}): RunContext => ({
 const input = (over: Partial<PromotionInput> = {}): PromotionInput => ({
   strategyId: 'ma-crossover',
   context: ctx(),
-  filledSells: 30, returnBasePct: 5,
+  filledSells: 30, roundTripReturnsBps: STRONG_EDGE, returnBasePct: 5,
   coverage: coverage(),
   baselines: [
     { strategyId: 'scheduled-accumulation', returnBasePct: 1, context: ctx() },
@@ -37,27 +53,29 @@ describe('promotion gate', () => {
     expect(v.checks.every((c) => c.passed)).toBe(true);
   });
 
-  it('bars on one round trip short of the threshold, and says the count', () => {
-    expect(MIN_ROUND_TRIPS).toBe(30);
-    const v = promotionVerdict(input({ filledSells: 29 }));
+  it('bars one trip short of the minimum, says the count, and reports NO interval', () => {
+    expect(MIN_TRIPS_FOR_INTERVAL).toBe(12);
+    const v = promotionVerdict(input({ roundTripReturnsBps: STRONG_EDGE.slice(0, 11) }));
     expect(v.status).toBe('experimental');
-    expect(v.blockers[0]).toMatch(/29 of 30 round trips/);
+    expect(v.blockers[0]).toMatch(/11 of 12 round trips/);
+    // An interval computed below the minimum would read as evidence. Absence is the signal.
+    expect(v.blockers[0]).not.toMatch(/\[/);
   });
 
   it('names a baseline strategy as such rather than as a failed candidate', () => {
     // The baselines never sell, so they have no round trips BY DESIGN. "0 of 30" would read as a
     // strategy falling far short of a bar it is not standing at.
-    const v = promotionVerdict(input({ strategyId: 'scheduled-accumulation', filledSells: 0 }));
+    const v = promotionVerdict(input({ strategyId: 'scheduled-accumulation', roundTripReturnsBps: [] }));
     expect(v.status).toBe('experimental');
     expect(v.blockers[0]).toMatch(/is a baseline, not a promotion candidate/);
-    expect(v.blockers[0]).not.toMatch(/0 of 30/);
+    expect(v.blockers[0]).not.toMatch(/0 of 12/);
   });
 
   it('identifies a baseline by strategy, never by whether THIS run happened to sell', () => {
     // A ma-crossover run that has not sold yet is a candidate with zero round trips, not a baseline.
     // Keying on behaviour turned one run's luck into a claim about the strategy.
-    const v = promotionVerdict(input({ strategyId: 'ma-crossover', filledSells: 0 }));
-    expect(v.blockers[0]).toBe('0 of 30 round trips');
+    const v = promotionVerdict(input({ strategyId: 'ma-crossover', roundTripReturnsBps: [] }));
+    expect(v.blockers[0]).toMatch(/^0 of 12 round trips/);
   });
 
   it('bars a run that did not see its own window', () => {
@@ -157,7 +175,80 @@ describe('promotion gate', () => {
   });
 
   it('reports every blocker, not just the first, so one fix does not reveal another', () => {
-    const v = promotionVerdict(input({ filledSells: 2, returnBasePct: 0, coverage: coverage({ candles: 10 }) }));
+    const v = promotionVerdict(input({ roundTripReturnsBps: [1, 2], returnBasePct: 0, coverage: coverage({ candles: 10 }) }));
     expect(v.blockers.length).toBeGreaterThanOrEqual(3);
+  });
+
+  // ---- specs/003: the gate measures evidence instead of counting -------------------------------
+
+  it('POSITIVE CONTROL: a large consistent edge passes on TWELVE trips, far short of the old thirty', () => {
+    const v = promotionVerdict(input({ roundTripReturnsBps: STRONG_EDGE }));
+    const check = v.checks.find((c) => c.id === 'round-trips')!;
+    expect(check.passed).toBe(true);
+    expect(check.detail).toMatch(/12 round trips/);
+    expect(check.detail).toMatch(/\[/); // the interval is reported
+  });
+
+  it('NEGATIVE CONTROL: thirty mediocre trips FAIL, and that same input PASSES a count of thirty', () => {
+    // This is the load-bearing test of specs/003. The old check was `filledSells >= 30`, which this
+    // input satisfies exactly. If this ever goes green by PASSING, the gate has been relaxed rather
+    // than re-specified, which is the failure the constitution names as most damaging.
+    expect(MEDIOCRE_30).toHaveLength(30);
+    const v = promotionVerdict(input({ roundTripReturnsBps: MEDIOCRE_30 }));
+    const check = v.checks.find((c) => c.id === 'round-trips')!;
+    expect(check.passed).toBe(false);
+    // It must NOT be refused for having too few trips -- it has thirty. Which of the two
+    // "enough trips" refusals fires is an implementation detail; that it refuses is the contract.
+    expect(check.detail).not.toMatch(/too few/);
+  });
+
+  it('a STABLE interval that spans zero fails on the interval, not on stability', () => {
+    // The mediocre-30 series above is refused as a seed artefact, which is correct but leaves the
+    // interval branch untested. Reaching a STABLE interval that still straddles zero took n = 60:
+    // at n = 30 a near-zero mean with any real spread moves more than 5% of its width between
+    // seeds, which is `bootstrap.ts`'s own finding about this sample size arriving from the other
+    // direction. Sixty mirrored observations, mean exactly zero, shift 1.6%.
+    const half = [-15, 8, 2, -7, 17, -12, 1, 6, -10, 11, -4, 4, -18, 7, 0, 9, -9, 3, -3, 12, -13, 5, -1, -6, 15, -11, 10, -5, 6, -2];
+    const spansZero = [...half, ...half.map((v) => -v)];
+    const check = promotionVerdict(input({ roundTripReturnsBps: spansZero })).checks.find((c) => c.id === 'round-trips')!;
+    expect(check.passed).toBe(false);
+    expect(check.detail).toMatch(/\[/);              // the interval IS reported
+    expect(check.detail).not.toMatch(/between seeds/); // and it was stable
+  });
+
+  it('refuses an interval that moves between seeds, as an artefact rather than a result', () => {
+    // A periodic series interacts with the block resampler's n^(1/3) blocks and produces bounds that
+    // shift between seeds. STABILITY_TOLERANCE exists for exactly that, and the refusal must name it
+    // rather than reporting a bound the next seed would move.
+    const periodic = Array.from({ length: 30 }, (_, i) => ((i % 7) - 3) * 120 + 5);
+    const check = promotionVerdict(input({ roundTripReturnsBps: periodic })).checks.find((c) => c.id === 'round-trips')!;
+    expect(check.passed).toBe(false);
+    expect(check.detail).toMatch(/between seeds/);
+  });
+
+  it('one huge winner among losses does not promote, however positive the mean', () => {
+    const v = promotionVerdict(input({ roundTripReturnsBps: ONE_WINNER }));
+    expect(v.checks.find((c) => c.id === 'round-trips')!.passed).toBe(false);
+  });
+
+  it('states the coverage it actually achieves instead of implying a nominal 95%', () => {
+    // bootstrap.ts measured 83-93% at n = 30 on heavy tails, and 79.4% at phi = 0.6. Under-coverage
+    // means the interval is too NARROW, so it promotes too easily. A gate that quietly claims more
+    // precision than it has is the constitution's opening failure.
+    const detail = promotionVerdict(input()).checks.find((c) => c.id === 'round-trips')!.detail;
+    expect(detail).toMatch(/coverage/i);
+  });
+
+  it('uses PAIRED round trips, not the count of filled sells', () => {
+    // One sell can close several FIFO lots and a sell with no open lot closes none, so the two
+    // numbers differ in both directions. The old check read `filledSells` and called it round trips.
+    const v = promotionVerdict(input({ filledSells: 99, roundTripReturnsBps: STRONG_EDGE.slice(0, 4) }));
+    expect(v.blockers[0]).toMatch(/^4 of 12 round trips/);
+  });
+
+  it('is deterministic: the same input twice gives the identical detail', () => {
+    const a = promotionVerdict(input()).checks.find((c) => c.id === 'round-trips')!.detail;
+    const b = promotionVerdict(input()).checks.find((c) => c.id === 'round-trips')!.detail;
+    expect(a).toBe(b);
   });
 });

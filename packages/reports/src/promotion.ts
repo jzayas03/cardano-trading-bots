@@ -45,6 +45,23 @@ export type PromotionStatus = 'experimental' | 'candidate';
  */
 export const MIN_ROUND_TRIPS = 30;
 
+/**
+ * The gate's own minimum before an interval is computed at all. **Twelve, and it is a
+ * pre-registered judgement rather than a derivation** (specs/003 research R5) — saying otherwise
+ * would manufacture rigour, which is the failure this replacement exists to correct.
+ *
+ * What bounds it: below roughly n = 10 a BCa acceleration is estimated from too few leave-one-out
+ * replicates to describe the skew, and this project's corpora sit at the severe end of skew
+ * (excess kurtosis 8.38, 13.06, 2.54). What makes it defensible despite not being derived: EVERY
+ * run in the database has fewer than twelve round trips, the largest being eight, so the value
+ * cannot have been fitted to let anything through.
+ *
+ * It is deliberately NOT coupled to `costFloor.ts`'s `MIN_OBSERVATIONS`, which keeps 30 for its own
+ * reason. Coupling them would drag the cost floor's sufficiency bar down with this change, which is
+ * a cost-model change and a founder decision, not a side effect.
+ */
+export const MIN_TRIPS_FOR_INTERVAL = 12;
+
 /** A run that did not see its window did not measure it. Percent of expected buckets. */
 export const MIN_COVERAGE_PCT = 80;
 
@@ -83,8 +100,19 @@ export interface PromotionInput {
   strategyId: string;
   /** Undefined bars: a comparison whose conditions cannot be read is not a comparison. */
   context?: RunContext;
-  /** Completed round trips: a round trip closes when the position is sold. */
+  /**
+   * Filled SELL ORDERS. Kept because the report prints it, and deliberately NOT used to decide the
+   * round-trip check: one sell can close several FIFO lots and a sell with no open lot closes none,
+   * so this differs from the paired round-trip count in both directions (specs/003 research R8).
+   */
   filledSells: number;
+  /**
+   * Paired round-trip returns in bps, ALREADY NET of pool fee, price impact, batcher fee and
+   * network fee — the pairing subtracts both legs' fees and the fill is priced through the pool.
+   * Zero is therefore the correct comparand and subtracting a cost floor again would charge costs
+   * twice (specs/003 research R1).
+   */
+  roundTripReturnsBps: readonly number[];
   /** Token-denominated return — the mandate's denominator, not ADA. Null when unmeasurable. */
   returnBasePct: number | null;
   coverage: RunCoverage | undefined;
@@ -98,6 +126,8 @@ export interface PromotionInput {
    */
   requiredBaselines?: readonly string[];
 }
+
+import { bcaStability, conservativeBounds, mean, STABILITY_TOLERANCE } from './bootstrap.js';
 
 export interface PromotionCheck {
   id: 'round-trips' | 'coverage' | 'comparable' | 'measurable' | 'beats-baselines';
@@ -115,6 +145,57 @@ export interface PromotionVerdict {
 
 const pct = (part: number, whole: number): number => (whole === 0 ? 0 : (part / whole) * 100);
 
+/**
+ * Whether a run's round trips are evidence of an edge, rather than how many there are.
+ *
+ * The count this replaces had no significance test behind it, and its n = 30 came from a
+ * normal-theory conversion that `roundTrips.ts` then measured as unsound. A count cannot express
+ * the property the gate actually needs: a large obvious edge should clear on few trips while a
+ * marginal one clears on none.
+ *
+ * **`conservativeBounds`, not BCa alone.** `bootstrap.ts` simulated coverage in THIS repo's regime
+ * and found BCa loses badly on fat-tailed symmetric data (83.0% against percentile's 90.2% at
+ * n = 30), while winning on lognormal. Taking the WIDEST of the two bounds is fail-closed and does
+ * not rest on picking a winner the evidence does not support.
+ *
+ * **Seed stability is consulted, not assumed.** An interval whose bounds move between seeds is a
+ * resampling artefact, and near a promotion boundary that artefact IS the decision.
+ *
+ * Exactly three outcomes and no default-bearing fourth: too few trips, unstable interval, or an
+ * interval compared against zero.
+ */
+function roundTripEvidence(returnsBps: readonly number[]): PromotionCheck {
+  const n = returnsBps.length;
+  // No interval below the minimum. A bound computed from too few trips reads as evidence, and the
+  // absence of one is the honest signal.
+  if (n < MIN_TRIPS_FOR_INTERVAL) {
+    return { id: 'round-trips', passed: false, detail: `${n} of ${MIN_TRIPS_FOR_INTERVAL} round trips: too few to interval` };
+  }
+  const stability = bcaStability(returnsBps, mean);
+  if (stability === null) {
+    return { id: 'round-trips', passed: false, detail: `${n} round trips produced no interval` };
+  }
+  if (!stability.stable) {
+    return {
+      id: 'round-trips',
+      passed: false,
+      detail: `${n} round trips, but the interval moves ${(stability.maxBoundShiftFraction * 100).toFixed(1)}% of its width between seeds (max ${(STABILITY_TOLERANCE * 100).toFixed(0)}%): a resampling artefact, not a result`,
+    };
+  }
+  const first = stability.intervals[0]!;
+  const { lower, upper } = conservativeBounds(first);
+  return {
+    id: 'round-trips',
+    passed: lower > 0,
+    // COVERAGE IS STATED, not implied. bootstrap.ts measures 83-93% at n = 30 on heavy tails and
+    // 79.4% at phi = 0.6 even blocked and conservative — so a pass here is NOT a 95% claim, and
+    // under-coverage means the interval is too narrow, i.e. it promotes too easily. A gate that
+    // quietly claims more precision than it has is the failure this repository opens its
+    // constitution with.
+    detail: `${n} round trips, mean ${first.estimate.toFixed(1)} bps, conservative interval [${lower.toFixed(1)}, ${upper.toFixed(1)}] bps vs zero (nominal ${(first.level * 100).toFixed(0)}%; measured coverage at this sample size is 79-93%, not 95%)`,
+  };
+}
+
 export function promotionVerdict(input: PromotionInput): PromotionVerdict {
   const checks: PromotionCheck[] = [];
 
@@ -124,15 +205,9 @@ export function promotionVerdict(input: PromotionInput): PromotionVerdict {
   // that "never sells" — a claim about the strategy drawn from one run's luck.
   const required = input.requiredBaselines ?? BASELINE_STRATEGIES;
   const isBaseline = (required as readonly string[]).includes(input.strategyId);
-  checks.push(
-    isBaseline
-      ? { id: 'round-trips', passed: false, detail: `${input.strategyId} is a baseline, not a promotion candidate` }
-      : {
-          id: 'round-trips',
-          passed: input.filledSells >= MIN_ROUND_TRIPS,
-          detail: `${input.filledSells} of ${MIN_ROUND_TRIPS} round trips`,
-        },
-  );
+  checks.push(isBaseline
+    ? { id: 'round-trips', passed: false, detail: `${input.strategyId} is a baseline, not a promotion candidate` }
+    : roundTripEvidence(input.roundTripReturnsBps));
 
   // --- coverage ----------------------------------------------------------
   if (input.coverage === undefined) {

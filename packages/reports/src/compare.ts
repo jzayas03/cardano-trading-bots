@@ -2,6 +2,7 @@ import type { EquityPoint, OrderRecord, RunRow, RunSummaryStats } from '@ctb/eng
 import { adaStr } from './format.js';
 import { promotionVerdict, type PromotionStatus, type RunContext } from './promotion.js';
 import { withStakingCredit } from './staking.js';
+import { roundTrips } from './roundTrips.js';
 import { summarizeRun } from './summary.js';
 import { heartbeatAgeCell } from './heartbeat.js';
 
@@ -100,6 +101,10 @@ export function compareRunRows(inputs: CompareRunInput[], now: Date, stakingAprP
       strategyId: run.strategyId,
       context: contexts.get(run.id),
       filledSells: summaries.get(run.id)!.filledSells,
+      // PAIRED round trips, not the sell count. One sell can close several FIFO lots and a sell
+      // with no open lot closes none, so the two differ in both directions (specs/003 R8). The
+      // orders are already in scope here, so this needs no new plumbing.
+      roundTripReturnsBps: roundTrips(orders).map((t) => t.returnBps),
       returnBasePct: summaries.get(run.id)!.returnBasePct,
       coverage: run.summary?.coverage,
       baselines: inputs

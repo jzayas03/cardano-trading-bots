@@ -163,4 +163,20 @@ describe('block bootstrap', () => {
     const b = bcaInterval(correlated, mean, { seed: 9 })!;
     expect([a.lower, a.upper]).toEqual([b.lower, b.upper]);
   });
+
+  // specs/003 T006: the gate calls this with round-trip returns, and a run whose trips are all
+  // identical is not hypothetical. The BCa acceleration divides by the jackknife variance, which is
+  // ZERO here. A NaN bound compares false against zero, so the gate would fail CLOSED for the wrong
+  // reason -- worse than throwing, because it looks like a verdict.
+  it('zero variance yields finite, equal bounds rather than NaN', () => {
+    const identical = Array.from({ length: 12 }, () => 150);
+    const r = bcaInterval(identical, mean, { seed: 1 })!;
+    expect(r).not.toBeNull();
+    expect(Number.isFinite(r.lower)).toBe(true);
+    expect(Number.isFinite(r.upper)).toBe(true);
+    expect(r.lower).toBe(150);
+    expect(r.upper).toBe(150);
+    const c = conservativeBounds(r);
+    expect(Number.isFinite(c.lower) && Number.isFinite(c.upper)).toBe(true);
+  });
 });
