@@ -28,6 +28,12 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   67 MB per run when it really cost 18.4, and that went into a runbook as a 267 MB saving when it
   was ~74. What one more instance costs is `Private_Dirty` in `/proc/PID/smaps_rollup`
   (2026-09-16, #171).
+- **An "effective sample size" discounts repetition, not blankness.** A zero-inflated series has
+  `rho` near zero, so the AR(1) adjustment `n(1-rho)/(1+rho)` reports FULL evidence over a
+  mostly-empty window: `n_eff` said 148 of 148 where only 49 pairs had seen the pool trade. Report
+  the informative-observation count beside it, and when a pre-registered statistic stops discounting,
+  correct the CLAIM about what it carries -- never quietly reparameterise it (2026-09-18, #189).
+
 - **The box is not the repo, and repo silence is not evidence.** An audit of `docs/`, commits and
   `infra/` concluded the reboot-persistent firewall rule was unapplied; it had been live on the VPS
   for a week. Check the server before reporting a control missing, and write the result down -- the
