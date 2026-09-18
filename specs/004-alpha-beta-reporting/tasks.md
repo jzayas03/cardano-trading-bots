@@ -159,9 +159,9 @@ recorded against what was predicted.
 
 **Goal**: the founder's condition for this feature existing, enforced by something other than intent.
 
-- [ ] T043 [US3] Write a test in `packages/reports/test/promotion.test.ts` asserting `promotionVerdict`'s **status, checks and blockers are IDENTICAL** for every existing case — the feature is additive and must be provably so (FR-012)
-- [ ] T044 [US3] Write a test in `packages/reports/test/promotion.test.ts` that a run with a strongly positive alpha is still barred when its other checks fail — **a strong alpha promotes nothing on its own**
-- [ ] T045 [US3] Assert via `git diff origin/main -- packages/reports/src/promotion.ts` that the file is untouched apart from nothing — the only promotion-related change in this feature is a TEST
+- [X] T043 [US3] Write a test in `packages/reports/test/promotion.test.ts` asserting `promotionVerdict`'s **status, checks and blockers are IDENTICAL** for every existing case — the feature is additive and must be provably so (FR-012)
+- [X] T044 [US3] Write a test in `packages/reports/test/promotion.test.ts` that a run with a strongly positive alpha is still barred when its other checks fail — **a strong alpha promotes nothing on its own**
+- [X] T045 [US3] Assert via `git diff origin/main -- packages/reports/src/promotion.ts` that the file is untouched apart from nothing — the only promotion-related change in this feature is a TEST
 
 **Checkpoint**: the gate decides exactly what it decided before.
 
