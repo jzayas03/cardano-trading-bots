@@ -1,6 +1,6 @@
 import type { RunRow } from '@ctb/engine';
 import { describe, expect, it, vi } from 'vitest';
-import { adaStr, coverageLine, printReport } from '../src/commands/report.js';
+import { adaStr, coverageLine, printReport, renderExposure } from '../src/commands/report.js';
 
 /**
  * Finding M10: `adaStr` went through `Number(BigInt(x)) / 1e6`, which stops being exact above 2^53
@@ -90,3 +90,39 @@ describe('printReport REHEARSAL header', () => {
     }
   });
 });
+
+describe('renderExposure (specs/004 T024)', () => {
+  const pt = (i: number, price: number, equity: number, position: bigint) => ({
+    tickTs: new Date(Date.UTC(2026, 8, 17) + i * 15 * 60_000),
+    cashLovelace: 0n, positionBase: position, equityLovelace: BigInt(equity),
+    equityExecutableLovelace: null, price: price.toFixed(18),
+  });
+  const prices = [0.002, 0.00205, 0.00203, 0.0021, 0.00208, 0.00215, 0.00212, 0.0022];
+  const equity = prices.map((p) => Math.round(1_000_000_000 * (p / prices[0]!)));
+
+  it('labels the ADA alpha distinctly from the token-denominated return, and never sums them', () => {
+    // This is where a units error would hide. The gate reports a TOKEN return; alpha is in ADA
+    // against the token's ADA price. Printing them side by side unlabelled is exactly how three
+    // months of USD rows once got read against an ADA cost floor and looked entirely normal.
+    const lines = renderExposure(prices.map((p, i) => pt(i, p, equity[i]!, 1_000_000n)));
+    const text = lines.join('\n');
+    expect(text).toMatch(/ADA-denominated/);
+    expect(text).toMatch(/in TOKENS and is not summed/);
+    expect(text).toMatch(/alpha .* bps ADA/);
+    expect(text).toMatch(/beta .*\(unitless\)/);
+  });
+
+  it('says when the window cannot distinguish alpha from zero, and shows the assumed rate', () => {
+    const noisy = prices.map((p, i) => pt(i, p, Math.round(equity[i]! * (1 + ((i % 3) - 1) * 0.004)), 1_000_000n));
+    const text = renderExposure(noisy).join('\n');
+    expect(text).toMatch(/CANNOT distinguish alpha from zero/);
+    expect(text).toMatch(/assumed 3% APR/);
+  });
+
+  it('says the measurement does not apply rather than printing an empty block', () => {
+    const text = renderExposure([]).join('\n');
+    expect(text).toMatch(/not measured/);
+    expect(text).toMatch(/records no equity observations/);
+  });
+});
+

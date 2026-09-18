@@ -1,6 +1,6 @@
 import { createPool } from '@ctb/db';
 import { PgRunRepo, type EquityPoint, type OrderRecord, type RunRow } from '@ctb/engine';
-import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, roundTrips, roundTripStats, stakingCredit, summarizeDay, summarizeRun, withStakingCredit, ASSUMED_STAKING_APR_PCT, type DaySummary } from '@ctb/reports';
+import { adaStr, coverageLine, COMPARE_REHEARSAL_BANNER, exposureAdjusted, feedCountersLine, MIXED_TOKENS_WARNING, resumesOf, roundTrips, roundTripStats, stakingCredit, summarizeDay, summarizeRun, withStakingCredit, ASSUMED_STAKING_APR_PCT, type DaySummary } from '@ctb/reports';
 import { assumedVenuesTouched } from '@ctb/sim-executor';
 import { loadUniverse } from '@ctb/universe';
 import type { Logger } from 'pino';
@@ -54,6 +54,7 @@ export function printReport(
   // the only corpus with enough completed round trips to say anything about their DISTRIBUTION.
   for (const line of renderRoundTrips(orders)) console.log(line);
   for (const line of renderStaking(persistedEquity)) console.log(line);
+  for (const line of renderExposure(persistedEquity)) console.log(line);
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
   console.log(coverageLine(s.coverage));
@@ -96,6 +97,32 @@ export function printReport(
  * number stops being questioned. It is printed because the opportunity cost of holding ADA is not
  * zero, and every baseline that ignores it understates the alternative.
  */
+/**
+ * Whether the run's return came from judgement or from being long while the token rose.
+ *
+ * **It decides nothing.** The promotion gate is unchanged by this block; wiring alpha into it is a
+ * separate founder decision (specs/004).
+ *
+ * Denominations are stated because this is exactly where a units error would hide: alpha is in ADA
+ * against the token's ADA price, while the gate's own return is in TOKENS. The two are never summed,
+ * and printing them side by side unlabelled is how the earlier units error survived review.
+ */
+export function renderExposure(equity: readonly EquityPoint[]): string[] {
+  const r = exposureAdjusted(equity);
+  if (r.kind === 'refused') return ['', `exposure vs holding the token: not measured — ${r.detail}`];
+  const spansZero = r.alphaLowerBps <= 0 && r.alphaUpperBps >= 0;
+  return [
+    '',
+    'exposure vs holding the token (ADA-denominated; the gate\'s own return is in TOKENS and is not summed with this):',
+    `  beta ${r.beta.toFixed(3)} (unitless) over ${r.observations} tick pairs, ${r.zeroBenchmarkPairs} of which the pool did not trade`,
+    `  alpha ${r.alphaBps.toFixed(2)} bps ADA per tick, interval [${r.alphaLowerBps.toFixed(2)}, ${r.alphaUpperBps.toFixed(2)}]`,
+    spansZero
+      ? '  the interval spans zero: this window CANNOT distinguish alpha from zero'
+      : '  the interval excludes zero',
+    `  ${(r.exposedFraction * 100).toFixed(0)}% of observations held a position; idle ADA charged at an assumed ${r.assumedStakingAprPct}% APR`,
+  ];
+}
+
 export function renderStaking(equity: readonly EquityPoint[], aprPct = ASSUMED_STAKING_APR_PCT): string[] {
   if (equity.length < 2) return [];
   const credit = stakingCredit(equity, aprPct);

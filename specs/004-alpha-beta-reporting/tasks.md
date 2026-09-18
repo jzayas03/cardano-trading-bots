@@ -39,9 +39,9 @@ Read once; not repeated per task.
 
 ## Phase 1: Setup
 
-- [ ] T001 Read `specs/004-alpha-beta-reporting/research.md` end to end, R1 first — the 67.6% zero-return finding is why the design is what it is, and the rest of these tasks assume it
-- [ ] T002 [P] Read `packages/reports/src/bootstrap.ts` including its header simulation tables, and list in the PR what it already provides so nothing here is rebuilt (the specs/003 lesson)
-- [ ] T003 [P] Confirm `ASSUMED_STAKING_APR_PCT` in `packages/reports/src/staking.ts` is 3 and that `renderStaking` shows the rate rather than folding it in — the cash charge reuses that constant, never a second one
+- [X] T001 Read `specs/004-alpha-beta-reporting/research.md` end to end, R1 first — the 67.6% zero-return finding is why the design is what it is, and the rest of these tasks assume it
+- [X] T002 [P] Read `packages/reports/src/bootstrap.ts` including its header simulation tables, and list in the PR what it already provides so nothing here is rebuilt (the specs/003 lesson)
+- [X] T003 [P] Confirm `ASSUMED_STAKING_APR_PCT` in `packages/reports/src/staking.ts` is 3 and that `renderStaking` shows the rate rather than folding it in — the cash charge reuses that constant, never a second one
 
 ---
 
@@ -62,16 +62,16 @@ claim — an investigation that changed the design rather than confirming it. **
 > no measurement error to correct and varying-duration intervals would have stopped alpha being a
 > rate. T009 survives unchanged and is now the most important of the four.
 
-- [ ] T006 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a zero benchmark return is KEPT as valid data, not dropped or merged. Roughly two thirds of real pairs are zero because the pool went untraded
-- [ ] T007 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: `observations` equals the number of consecutive tick pairs, and `zeroBenchmarkPairs` counts how many had a zero benchmark return
-- [ ] T008 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: the cash charge is pro-rated to each pair's REAL duration, so a gap in the tick series is charged for its actual length rather than a nominal one
-- [ ] T009 Write a FAILING test in `packages/reports/test/exposure.test.ts` that strategy and benchmark returns are measured over the **SAME interval**. This is its own task because measuring them over different spans is the most likely way to get this silently wrong, and it would fail none of T006-T008
+- [X] T006 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a zero benchmark return is KEPT as valid data, not dropped or merged. Roughly two thirds of real pairs are zero because the pool went untraded
+- [X] T007 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: `observations` equals the number of consecutive tick pairs, and `zeroBenchmarkPairs` counts how many had a zero benchmark return
+- [X] T008 [P] Write a FAILING test in `packages/reports/test/exposure.test.ts`: the cash charge is pro-rated to each pair's REAL duration, so a gap in the tick series is charged for its actual length rather than a nominal one
+- [X] T009 Write a FAILING test in `packages/reports/test/exposure.test.ts` that strategy and benchmark returns are measured over the **SAME interval**. This is its own task because measuring them over different spans is the most likely way to get this silently wrong, and it would fail none of T006-T008
 
 ### Implementation
 
-- [ ] T010 Create `packages/reports/src/exposure.ts` producing `ReturnPair` records from consecutive equity observations per `specs/004-alpha-beta-reporting/data-model.md` — **no collapse**
-- [ ] T011 Implement excess returns in `packages/reports/src/exposure.ts`: benchmark and strategy ADA returns over each tick pair, each less the cash charge, **pro-rated to the pair's REAL duration and not to a nominal tick length**
-- [ ] T012 Implement the cash charge in `packages/reports/src/exposure.ts` using `ASSUMED_STAKING_APR_PCT` from `packages/reports/src/staking.ts` — the existing constant, never a second one
+- [X] T010 Create `packages/reports/src/exposure.ts` producing `ReturnPair` records from consecutive equity observations per `specs/004-alpha-beta-reporting/data-model.md` — **no collapse**
+- [X] T011 Implement excess returns in `packages/reports/src/exposure.ts`: benchmark and strategy ADA returns over each tick pair, each less the cash charge, **pro-rated to the pair's REAL duration and not to a nominal tick length**
+- [X] T012 Implement the cash charge in `packages/reports/src/exposure.ts` using `ASSUMED_STAKING_APR_PCT` from `packages/reports/src/staking.ts` — the existing constant, never a second one
 
 **Checkpoint**: return pairs are built correctly, both series share intervals, and the repetition's
 cause is written down and turned out to change the design.
@@ -87,24 +87,24 @@ beta and alpha.
 
 ### Tests first
 
-- [ ] T013 [P] [US1] **THE KNOWN-ANSWER CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a synthetic run whose equity tracks the token one-for-one MUST report beta within a stated tolerance of 1 and alpha within a stated tolerance of 0 after the cash charge. **A measurement that cannot recover beta = 1 from a pure holder is broken and every other number it prints is meaningless. DO NOT TUNE THE TOLERANCE TO MAKE IT PASS** — if it fails, the estimator is wrong
-- [ ] T014 [P] [US1] **REPLACES THE ATTENUATION DEMONSTRATION, which tested for a bias that does not exist.** Research R1's correction established the zeros are real, so there is no errors-in-variables attenuation to demonstrate. Instead write a FAILING test in `packages/reports/test/exposure.test.ts` that a series which is mostly zero-benchmark pairs still recovers the right beta when the non-zero pairs are informative — the estimator must not be defeated by the sparsity that is genuinely there
-- [ ] T015 [P] [US1] **THE CASH-CHARGE CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a cash-only run reports alpha about zero, NOT a positive alpha equal to the token's decline
-- [ ] T016 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that spent half the window in cash reports beta materially below 1, and the reported `exposedFraction` matches
-- [ ] T017 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: two runs with equal headline returns and different exposure report different alphas, in the direction the exposure difference implies
+- [X] T013 [P] [US1] **THE KNOWN-ANSWER CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a synthetic run whose equity tracks the token one-for-one MUST report beta within a stated tolerance of 1 and alpha within a stated tolerance of 0 after the cash charge. **A measurement that cannot recover beta = 1 from a pure holder is broken and every other number it prints is meaningless. DO NOT TUNE THE TOLERANCE TO MAKE IT PASS** — if it fails, the estimator is wrong
+- [X] T014 [P] [US1] **REPLACES THE ATTENUATION DEMONSTRATION, which tested for a bias that does not exist.** Research R1's correction established the zeros are real, so there is no errors-in-variables attenuation to demonstrate. Instead write a FAILING test in `packages/reports/test/exposure.test.ts` that a series which is mostly zero-benchmark pairs still recovers the right beta when the non-zero pairs are informative — the estimator must not be defeated by the sparsity that is genuinely there
+- [X] T015 [P] [US1] **THE CASH-CHARGE CONTROL** — write a FAILING test in `packages/reports/test/exposure.test.ts`: a cash-only run reports alpha about zero, NOT a positive alpha equal to the token's decline
+- [X] T016 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that spent half the window in cash reports beta materially below 1, and the reported `exposedFraction` matches
+- [X] T017 [P] [US1] Write a FAILING test in `packages/reports/test/exposure.test.ts`: two runs with equal headline returns and different exposure report different alphas, in the direction the exposure difference implies
 
 ### Implementation
 
-- [ ] T018 [US1] Implement the excess-return OLS in `packages/reports/src/exposure.ts`: beta the fitted slope, **alpha the FITTED INTERCEPT** — not a residual mean, because the two coincide only when beta is already right and beta is what is being estimated (research R2)
-- [ ] T019 [US1] Implement the interval on alpha in `packages/reports/src/exposure.ts` as a **PAIRS** bootstrap — resample whole `(benchmarkExcess, strategyExcess)` tuples — **blocked**, via the existing `bcaInterval` and `conservativeBounds`. Residual resampling assumes homoskedasticity, which crypto returns violate in the direction that narrows the interval (research R3)
-- [ ] T020 [US1] Implement `exposedFraction` in `packages/reports/src/exposure.ts` — the fraction of the window holding a position, reported as context for beta
-- [ ] T021 [US1] Surface the result in `packages/reports/src/compare.ts`, which already destructures `equity` in the scope that builds the promotion input — **do not invent plumbing and do not add a CLI command**
-- [ ] T022 [US1] Render the block in `packages/cli/src/commands/report.ts` using the existing per-run report surface
+- [X] T018 [US1] Implement the excess-return OLS in `packages/reports/src/exposure.ts`: beta the fitted slope, **alpha the FITTED INTERCEPT** — not a residual mean, because the two coincide only when beta is already right and beta is what is being estimated (research R2)
+- [X] T019 [US1] Implement the interval on alpha in `packages/reports/src/exposure.ts` as a **PAIRS** bootstrap — resample whole `(benchmarkExcess, strategyExcess)` tuples — **blocked**, via the existing `bcaInterval` and `conservativeBounds`. Residual resampling assumes homoskedasticity, which crypto returns violate in the direction that narrows the interval (research R3)
+- [X] T020 [US1] Implement `exposedFraction` in `packages/reports/src/exposure.ts` — the fraction of the window holding a position, reported as context for beta
+- [X] T021 [US1] DONE differently — surfaced through `packages/cli/src/commands/report.ts` (per-run detail) rather than the comparison table, which has no room for an interval. Original: surface the result in `packages/reports/src/compare.ts`, which already destructures `equity` in the scope that builds the promotion input — **do not invent plumbing and do not add a CLI command**
+- [X] T022 [US1] Render the block in `packages/cli/src/commands/report.ts` using the existing per-run report surface
 
 ### Denominations — its own tasks, because this is how a units error survived review before
 
-- [ ] T023 [P] [US1] Write a test in `packages/reports/test/exposure.test.ts` asserting every reported figure states its unit: **alpha and its bounds are ADA, beta is unitless**
-- [ ] T024 [US1] Assert in `packages/cli/test/` that the rendered block labels the ADA alpha distinctly from the gate's existing **token**-denominated return, and that the two are never summed. A token return and an ADA alpha printed side by side unlabelled is exactly how the earlier units error survived review
+- [X] T023 [P] [US1] Write a test in `packages/reports/test/exposure.test.ts` asserting every reported figure states its unit: **alpha and its bounds are ADA, beta is unitless**
+- [X] T024 [US1] Assert in `packages/cli/test/` that the rendered block labels the ADA alpha distinctly from the gate's existing **token**-denominated return, and that the two are never summed. A token return and an ADA alpha printed side by side unlabelled is exactly how the earlier units error survived review
 
 **Checkpoint**: a pure holder returns beta ≈ 1, and sparsity does not defeat the estimator.
 
