@@ -116,39 +116,39 @@ beta and alpha.
 
 ### Tests first — effective observations
 
-- [ ] T025 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for `n_eff = n * (1 - rho) / (1 + rho)`, floored at 1 and capped at n, with `rho` the lag-1 autocorrelation of the **TICK** series. With the collapse gone this carries the ENTIRE honesty burden: it is the only thing between a raw ~700-tick count and a reader's impression of the evidence
-- [ ] T026 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for SC-004: `effectiveObservations` is **strictly below** `observations` whenever `rho > 0`
-- [ ] T027 [P] [US2] Write a test in `packages/reports/test/exposure.test.ts` that `lag1Autocorrelation` is reported alongside, so the input to `n_eff` is visible rather than assumed
+- [X] T025 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for `n_eff = n * (1 - rho) / (1 + rho)`, floored at 1 and capped at n, with `rho` the lag-1 autocorrelation of the **TICK** series. With the collapse gone this carries the ENTIRE honesty burden: it is the only thing between a raw ~700-tick count and a reader's impression of the evidence
+- [X] T026 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` for SC-004: `effectiveObservations` is **strictly below** `observations` whenever `rho > 0`
+- [X] T027 [P] [US2] Write a test in `packages/reports/test/exposure.test.ts` that `lag1Autocorrelation` is reported alongside, so the input to `n_eff` is visible rather than assumed
 
 ### Tests first — the refusals, five, no fallthrough
 
-- [ ] T028 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run recording no equity observations returns `not-applicable`, and the report SAYS so rather than printing an empty column or zeros
-- [ ] T029 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run still in progress returns `window-open` — a partial window presented as a result is a finding that changes tomorrow
-- [ ] T030 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a benchmark that did not move across the whole window returns `benchmark-did-not-move`, because beta is undefined and any alpha is the whole return mislabelled
-- [ ] T031 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that never held a position returns `no-position-taken` with beta 0 labelled **DEFINITIONAL**, not a measurement of skill
-- [ ] T032 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: fewer than 2 return pairs returns `too-few-observations`
-- [ ] T033 [US2] Write a test in `packages/reports/test/exposure.test.ts` that the five outcomes are exhaustive and mutually exclusive — exactly one per input, **no default-bearing fallthrough**
+- [X] T028 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run recording no equity observations returns `not-applicable`, and the report SAYS so rather than printing an empty column or zeros
+- [X] T029 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run still in progress returns `window-open` — a partial window presented as a result is a finding that changes tomorrow
+- [X] T030 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a benchmark that did not move across the whole window returns `benchmark-did-not-move`, because beta is undefined and any alpha is the whole return mislabelled
+- [X] T031 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: a run that never held a position returns `no-position-taken` with beta 0 labelled **DEFINITIONAL**, not a measurement of skill
+- [X] T032 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: fewer than 2 return pairs returns `too-few-observations`
+- [X] T033 [US2] Write a test in `packages/reports/test/exposure.test.ts` that the five outcomes are exhaustive and mutually exclusive — exactly one per input, **no default-bearing fallthrough**
 
 ### The NaN path — its own task because it fails for the wrong reason
 
-- [ ] T034 [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` that **no path produces NaN**, including a single return pair and a zero-variance benchmark. A NaN bound compares false against zero and would read as "cannot distinguish alpha from zero" for entirely the wrong reason
-- [ ] T035 [US2] Implement finite-guarantee handling in `packages/reports/src/exposure.ts` for every path T034 covers
+- [X] T034 [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts` that **no path produces NaN**, including a single return pair and a zero-variance benchmark. A NaN bound compares false against zero and would read as "cannot distinguish alpha from zero" for entirely the wrong reason
+- [X] T035 [US2] Implement finite-guarantee handling in `packages/reports/src/exposure.ts` for every path T034 covers
 
 ### Split-window beta, and keeping the two stabilities apart
 
-- [ ] T036 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: beta is fitted on the first and second halves separately and both are reported, plus whether their intervals overlap (FR-009, research R5)
-- [ ] T037 [US2] Write a test in `packages/reports/test/exposure.test.ts` that **split-window beta and `bcaStability` are labelled DISTINCTLY** in the output. They answer different questions — did the exposure drift, versus is the interval a numerical artefact — and conflating them would let a stable-seed reading be quoted as a stable-exposure claim
+- [X] T036 [P] [US2] Write a FAILING test in `packages/reports/test/exposure.test.ts`: beta is fitted on the first and second halves separately and both are reported, plus whether their intervals overlap (FR-009, research R5)
+- [X] T037 [US2] Write a test in `packages/reports/test/exposure.test.ts` that **split-window beta and `bcaStability` are labelled DISTINCTLY** in the output. They answer different questions — did the exposure drift, versus is the interval a numerical artefact — and conflating them would let a stable-seed reading be quoted as a stable-exposure claim
 
 ### Implementation and wording
 
-- [ ] T038 [US2] Implement `n_eff`, the refusals and the split-window betas in `packages/reports/src/exposure.ts`. `n_eff` is computed on the tick series; a series that is two thirds zeros is strongly dependent, so if `n_eff` does not come out far below `n` the formula is on the wrong series
-- [ ] T039 [US2] Implement the FR-010 wording in `packages/reports/src/exposure.ts` or its renderer: when the interval spans zero, say the window **cannot distinguish alpha from zero** rather than presenting the point estimate as a finding
+- [X] T038 [US2] Implement `n_eff`, the refusals and the split-window betas in `packages/reports/src/exposure.ts`. `n_eff` is computed on the regression residuals. **The rest of this task's original text was FALSIFIED by T040 (2026-09-18)**: it said a two-thirds-zero series is strongly dependent, so `n_eff` failing to come out far below `n` would mean the formula was on the wrong series. Measured `rho` is NEGATIVE on all three candidate series and `n_eff` came out at 148.0/125.2/147.9/145.8 of 148. Zero-inflation is not autocorrelation. `n_eff` stays as pre-registered; `informativePairs` carries the identification burden it was wrongly assigned
+- [X] T039 [US2] Implement the FR-010 wording in `packages/reports/src/exposure.ts` or its renderer: when the interval spans zero, say the window **cannot distinguish alpha from zero** rather than presenting the point estimate as a finding
 
 ### The real run — recorded, against a prediction written in advance
 
-- [ ] T040 [US2] Export the equity rows for runs 150-153 from `run_equity` with ONE read-only psql query and run `packages/reports/src/exposure.ts` against them locally. **Nothing deployed, live tree untouched, runs 150-153 undisturbed** — a measurement week is in flight and the box runs a sha 35 commits behind. Capture the output verbatim
-- [ ] T041 [US2] Check the T040 output against `specs/004-alpha-beta-reporting/research.md` R9: interval on alpha too wide to exclude zero on all four, `n_eff` materially below the ~137 tick observations, **150 and 152 showing beta near one**, 151 and 153 well below one, split-window betas overlapping widely. **PREDICTION 3 IS THE ONE THAT MATTERS** — 150 and 152 are essentially always long, so a beta far from one there means the ESTIMATOR is wrong rather than the strategy. **A contradicting result is INVESTIGATED, not accepted**
-- [ ] T042 [US2] Record the observed output beside the prediction in `docs/ops/2026-09-XX-exposure-first-run.md`, including which runs refused and why
+- [X] T040 [US2] Export the equity rows for runs 150-153 from `run_equity` with ONE read-only psql query and run `packages/reports/src/exposure.ts` against them locally. **Nothing deployed, live tree untouched, runs 150-153 undisturbed** — a measurement week is in flight and the box runs a sha 35 commits behind. Capture the output verbatim
+- [X] T041 [US2] Check the T040 output against `specs/004-alpha-beta-reporting/research.md` R9: interval on alpha too wide to exclude zero on all four, `n_eff` materially below the ~137 tick observations, **150 and 152 showing beta near one**, 151 and 153 well below one, split-window betas overlapping widely. **PREDICTION 3 IS THE ONE THAT MATTERS** — 150 and 152 are essentially always long, so a beta far from one there means the ESTIMATOR is wrong rather than the strategy. **A contradicting result is INVESTIGATED, not accepted**
+- [X] T042 [US2] Record the observed output beside the prediction in `docs/ops/2026-09-XX-exposure-first-run.md`, including which runs refused and why
 
 **Checkpoint**: the report distinguishes "about zero" from "cannot tell", and the first real reading is
 recorded against what was predicted.

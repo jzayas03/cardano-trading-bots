@@ -124,5 +124,30 @@ describe('renderExposure (specs/004 T024)', () => {
     expect(text).toMatch(/not measured/);
     expect(text).toMatch(/records no equity observations/);
   });
+
+  it('says the window is still open rather than reporting a partial one (T029)', () => {
+    const text = renderExposure(prices.map((p, i) => pt(i, p, equity[i]!, 1_000_000n)), false).join('\n');
+    expect(text).toMatch(/not measured/);
+    expect(text).toMatch(/still in progress/);
+  });
+
+  it('prints the TWO EVIDENCE COUNTS apart, because neither substitutes for the other (T038)', () => {
+    // Effective observations discount repetition. Informative pairs say how much of the window was
+    // informative at all. A two-thirds-zero series scores full marks on the first and fails the
+    // second, so a report showing only one of them overstates the evidence.
+    const text = renderExposure(prices.map((p, i) => pt(i, p, equity[i]!, 1_000_000n))).join('\n');
+    expect(text).toMatch(/saw the pool trade/);
+    expect(text).toMatch(/effective observations \d+ of \d+/);
+    expect(text).toMatch(/discounts repetition only, NOT the untraded pairs/);
+  });
+
+  it('keeps SEED STABILITY and EXPOSURE DRIFT labelled apart (T037)', () => {
+    // Conflating them would let a stable-seed reading be quoted as a stable-exposure claim -- a
+    // statement about the strategy that nobody measured.
+    const text = renderExposure(prices.map((p, i) => pt(i, p, equity[i]!, 1_000_000n))).join('\n');
+    expect(text).toMatch(/exposure drift: beta first half .*second half/);
+    expect(text).toMatch(/seed stability: alpha's interval/);
+    expect(text).toMatch(/a numerical property, not a statement about the strategy/);
+  });
 });
 

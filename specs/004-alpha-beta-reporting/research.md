@@ -174,10 +174,28 @@ already present; this feature adds an estimator, not a resampler.
 (R1 as corrected — there is no collapse) and `ρ` their lag-1 autocorrelation, floored at 1 and capped
 at `n`.
 
-**This now carries the entire honesty burden.** With the collapse gone, `n_eff` is the only thing
-standing between a raw count of ~700 ticks a week and a reader's impression of how much independent
-evidence exists. A series that is 67.6% zeros is strongly dependent, so `n_eff` should come out far
-below `n` — and if it does not, the formula is being applied to the wrong series.
+> **CORRECTED 2026-09-18, after the first real run (T040).** The paragraph struck through below was
+> wrong, and it was wrong about the premise rather than the formula. **Zero-inflation is not
+> autocorrelation.** Measured on runs 150-153 and on a 700-tick synthetic at the same 67.6% zero
+> fraction, the lag-1 autocorrelation is −0.02 on benchmark returns, −0.06 on strategy returns and
+> −0.53 on residuals — negative on all three, so `n_eff` came out at 148.0, 125.2, 147.9 and 145.8 of
+> 148 and discounts essentially nothing. No choice of series rescues the claim: zeros sit at the
+> series mean and carry no information about their neighbour.
+>
+> `n_eff` is **kept exactly as pre-registered**. It is the right correction for dependence, which is
+> a real defect; it is simply not an instrument for the defect the live data actually has, which is
+> **identification** — 49 of 148 pairs saw the pool trade at all. That burden moves to
+> `informativePairs`, reported beside `n_eff` and labelled apart, with the informative count first.
+> See `docs/ops/2026-09-18-exposure-first-run.md`.
+>
+> ~~**This now carries the entire honesty burden.** With the collapse gone, `n_eff` is the only thing
+> standing between a raw count of ~700 ticks a week and a reader's impression of how much independent
+> evidence exists. A series that is 67.6% zeros is strongly dependent, so `n_eff` should come out far
+> below `n` — and if it does not, the formula is being applied to the wrong series.~~
+
+**`rho` is computed on the regression RESIDUALS**, the series whose dependence inflates the variance
+of alpha. The raw benchmark series would measure how much the market repeats itself, which is a fact
+about Cardano rather than about what this run's evidence is worth.
 
 **Rationale**: it is the standard AR(1) variance-inflation adjustment, it is one line, and **its
 assumption is nameable** — that the dependence is approximately first-order. A method whose
