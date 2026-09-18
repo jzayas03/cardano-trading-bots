@@ -162,17 +162,6 @@ while read -r enabled; do
 # executed once and the protection described above has never existed. See paper_wants above.
 done < <(paper_wants)
 
-# Assert the outcome rather than trusting the loop. What this guards against is invisible until the
-# NEXT reboot -- the worst place to find it -- and the enumeration feeding the loop was silently
-# wrong for its entire existence, so the deploy now checks what it actually left behind.
-enabled_now="$(paper_wants | sort | tr '\n' ' ')"
-want_now="$(printf '%s\n' "${UNITS[@]}" | grep '^ctb-paper@' | sort | tr '\n' ' ')"
-if [ "$enabled_now" != "$want_now" ]; then
-  echo "  enabled for boot: $enabled_now"
-  echo "  paper-instances.txt: $want_now"
-  die "enabled paper instances do not match paper-instances.txt; a reboot would start the wrong set"
-fi
-echo "  enabled for boot matches paper-instances.txt ($(printf '%s\n' "${UNITS[@]}" | grep -c '^ctb-paper@') instances)"
 TIMERS=(ctb-backup.timer ctb-watch.timer)
 if [ "$NO_START" = "1" ]; then
   # enable (so a reboot brings them up) without starting now. The reboot test still means
@@ -182,6 +171,25 @@ if [ "$NO_START" = "1" ]; then
 else
   systemctl enable --now "${UNITS[@]}" "${TIMERS[@]}"
 fi
+# Assert the outcome rather than trusting the loop. What this guards against is invisible until the
+# NEXT reboot -- the worst place to find it -- and the enumeration feeding the loop was silently
+# wrong for its entire existence, so the deploy now checks what it actually left behind.
+#
+# AFTER the enable, not before it. Until 2026-09-18 this sat between the disable loop and
+# `systemctl enable`, so the new instances could not exist yet when it looked: it passed whenever
+# the enabled set already matched the file and DIED whenever it had work to do. A cutover that
+# renames instances is the only time it has work, so the first real rename would have disabled the
+# old four, died, and left nothing enabled for boot -- with a message that reads as "the rename
+# failed" when the rename had succeeded. infra/vps/test-deploy-enabled-instances.sh step 5 runs this
+# block in script order against the real transition, and failed on the old placement.
+enabled_now="$(paper_wants | sort | tr '\n' ' ')"
+want_now="$(printf '%s\n' "${UNITS[@]}" | grep '^ctb-paper@' | sort | tr '\n' ' ')"
+if [ "$enabled_now" != "$want_now" ]; then
+  echo "  enabled for boot: $enabled_now"
+  echo "  paper-instances.txt: $want_now"
+  die "enabled paper instances do not match paper-instances.txt; a reboot would start the wrong set"
+fi
+echo "  enabled for boot matches paper-instances.txt ($(printf '%s\n' "${UNITS[@]}" | grep -c '^ctb-paper@') instances)"
 
 say "state"
 systemctl --no-pager --plain is-active "${UNITS[@]}" || true

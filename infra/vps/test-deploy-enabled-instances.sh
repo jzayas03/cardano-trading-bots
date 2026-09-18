@@ -77,5 +77,71 @@ check ctb-paper@ma-crossover_SNEK.service ctb-paper@rsi-mean-reversion_SNEK.serv
   || fail "4: a matching set was rejected"
 pass "matching set accepted"
 
+# Steps 1-4 test paper_wants() and the comparison IN ISOLATION, and every one of them passed while
+# deploy.sh was broken: step 4 removes the leftover by hand and then checks, so it never runs the
+# script's real sequence. The post-check sat BETWEEN the disable loop and `systemctl enable`, so it
+# could only pass when the desired set already existed -- it passed when there was nothing to do and
+# died whenever there was, and a cutover is the only time there is. Found 2026-09-18 by rehearsing
+# the real transition; this step is that rehearsal, kept.
+#
+# It lifts the whole block out of deploy.sh at run time and runs it IN SCRIPT ORDER against a stub
+# systemctl that really creates and removes the wants symlinks, so the post-check sees what the
+# script actually left behind rather than what a test arranged.
+echo "5. the REAL cutover transition, in script order: four old names enabled -> the file's eight"
+ROOT5="$(mktemp -d)"; W5="$ROOT5/wants"; mkdir -p "$W5" "$ROOT5/repo/infra"
+ln -s /vps "$ROOT5/repo/infra/vps"
+# The box's enabled set as read off it on 2026-09-18: four instances under the pre-rename names.
+for u in ma-crossover rsi-mean-reversion buy-and-hold scheduled-accumulation; do
+  ln -s /dev/null "$W5/ctb-paper@$u.service"
+done
+ln -s /dev/null "$W5/ctb-collector.service"
+
+start="$(grep -n '^INSTANCES_FILE=' /vps/deploy.sh | head -1 | cut -d: -f1)"
+end="$(grep -n 'enabled for boot matches paper-instances.txt' /vps/deploy.sh | head -1 | cut -d: -f1)"
+[ -n "$start" ] && [ -n "$end" ] || fail "5: could not locate the instances block in deploy.sh"
+BLOCK5="$(sed -n "${start},${end}p" /vps/deploy.sh | sed "s|^WANTS_DIR=.*|WANTS_DIR=$W5|")"
+
+# Run it as its OWN bash process, the way deploy.sh runs, rather than eval'ing it here: the stubs
+# live in a quoted heredoc, so the block cannot see or clobber anything in this harness.
+{
+  printf 'REPO=%q\nNO_START=1\nW5=%q\n' "$ROOT5/repo" "$W5"
+  cat <<'STUBS'
+die() { echo "DIE: $*"; exit 9; }
+# Changes the wants directory exactly as systemd would, so the post-check sees what the script
+# actually left behind rather than what a test arranged.
+systemctl() {
+  local verb="${1:-}"; shift || true
+  case "$verb" in
+    disable) for u in "$@"; do rm -f "$W5/$u"; done ;;
+    enable)  for u in "$@"; do case "$u" in ctb-paper@*|ctb-collector.service) ln -sf /dev/null "$W5/$u" ;; esac; done ;;
+  esac
+  return 0
+}
+STUBS
+  printf '%s\n' "$BLOCK5"
+  echo 'echo BLOCK-COMPLETED'
+} > "$ROOT5/run.sh"
+
+set +e
+out5="$(bash "$ROOT5/run.sh" 2>&1)"
+rc5=$?
+set -e
+
+if [ "$rc5" != "0" ] || ! echo "$out5" | grep -q BLOCK-COMPLETED; then
+  fail "5: deploy.sh's instances block did not complete (exit $rc5) -- $(echo "$out5" | grep DIE || echo "$out5" | tail -1)"
+fi
+disabled5="$(echo "$out5" | grep -c 'disabling for boot' || true)"
+[ "$disabled5" = "4" ] || fail "5: expected the four old-named instances disabled, got $disabled5"
+after5="$( (shopt -s nullglob; for f in "$W5"/ctb-paper@*.service; do basename "$f"; done) | sort | tr '\n' ' ')"
+want5="$(grep -v '^#' /vps/paper-instances.txt | sed 's/[[:space:]]//g' | grep -v '^$' | sed 's/.*/ctb-paper@&.service/' | sort | tr '\n' ' ')"
+[ "$after5" = "$want5" ] || fail "5: enabled after deploy is '$after5', want '$want5'"
+# Every current name carries a _TICKER suffix; an unsuffixed one is a pre-rename survivor. A `case`
+# rather than a regex: CI's shellcheck is older and misreads some patterns inside [[ =~ ]].
+for f in "$W5"/ctb-paper@*.service; do
+  n="$(basename "$f")"
+  case "$n" in *_*) ;; *) fail "5: an OLD unsuffixed instance survived the deploy: $n" ;; esac
+done
+pass "four old names disabled, the file's eight enabled, no survivor, and the post-check accepted it"
+
 echo
-echo "PASS: all four steps held."
+echo "PASS: all five steps held."
