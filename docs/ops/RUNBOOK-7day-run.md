@@ -166,6 +166,67 @@ the laptop, which is the M5 candidate in `docs/specs/2026-09-07-m4-dashboard.md`
 
 ### The cutover, in order
 
+**The whole sequence, and what no gate checks.** The `cutover` command gates steps 2, 4 and 7.
+The other nine are unguarded, so it is written down: an unguarded step that lives only
+in someone's head is the one that gets skipped at 03:00. Each numbered item links to its own section
+below where it has one.
+
+```
+ 0. [ ] Take a MANUAL backup, immediately before stopping           <- no gate, margin is thin
+ 1. [ ] Confirm the gate is on the box (command below)
+ 2. [ ] cutover --phase before-stop --expect-sha OLD --runs ...     <- gated
+ 3. [ ] DRILL 2, while the runs are stopped                         <- no gate, only chance
+ 4. [ ] cutover --phase after-stop                                  <- gated, load-bearing
+ 5. [ ] Reboot, then the off-host firewall test                     <- "Reboot the box", below
+ 6. [ ] Deploy: pull, npm ci, deploy.sh (does the instance RENAME)  <- rehearse it first, step 6a
+ 7. [ ] cutover --phase after-deploy --expect-sha NEW               <- gated
+ 8. [ ] Start the eight ONE AT A TIME, reading `available` between  <- "Add NIGHT", below
+ 9. [ ] report --compare on the box                                 <- no gate, NEVER RUN THERE
+10. [ ] Enable multi-venue sampling                                 <- own section, below
+11. [ ] Rotate the Postgres passwords                               <- own section, below
+```
+
+**0 — the backup margin is thinner than it looks.** `MAX_BACKUP_AGE_HOURS` is 26 and `ctb-backup.timer`
+fires at 03:30 UTC, so a cutover starting near 03:00 begins at ~23.5 h and keeps ageing while you work
+through the stop and drill 2. Do not discover that mid-cutover: `systemctl start ctb-backup.service`
+first, confirm a new file in `~ctb/ctb-backups` and `ExecMainStatus=0`, then proceed.
+
+**3 — drill 2 has been deferred since 2026-09-16 and this is the window it was deferred TO.** It stops
+a paper unit, and a stop forks the run, so it cannot be done while a measurement week is live. Once
+the new runs start it gets deferred again, for the same reason, for another week. Row 2 of the table
+in `RUNBOOK-alerting.md` has the procedure and the expected page text.
+
+**6a — the rename has never executed, and getting it wrong is an OOM found by reboot.** The box has
+four instances enabled as `ctb-paper@<strategy>`; `paper-instances.txt` names eight as
+`<strategy>_<TICKER>`. `deploy.sh` disables the ones the file does not name — and that loop was fed by
+a command that returns nothing for template instances, so **it had never run once** (proven on the
+live box 2026-09-17, four enabled, zero reported). If it fails to disable the old four, twelve paper
+processes come up on a box that fits eight. Rehearse it on the laptop before you touch the box, and
+read the list `deploy.sh` prints as it disables:
+
+```bash
+infra/vps/test-deploy-enabled-instances.sh   # any machine with Docker; lifts the function out of
+                                             # deploy.sh at run time so it cannot drift
+```
+
+**9 — neither the promotion gate nor the exposure block has ever executed on the box.** As of
+2026-09-18 the box is 44 commits behind, so the specs/003 interval gate and the whole of specs/004
+(`packages/reports/src/exposure.ts` does not exist there) will run against real rows for the first
+time. Run `report --compare` after the deploy and read the output rather than assuming it worked;
+a gate that has never executed in its deployment environment is untested there, whatever CI says.
+
+**Two things that are NOT cutover steps but come due with it.** `ctb_dashboard_local_only` is still
+public and unrotated (`RUNBOOK-postgres-exposure.md`), and the alpha/beta measurement must be re-run
+once the OLD windows close — all four runs report `window-open` while they are live, so every figure
+in `docs/ops/2026-09-18-exposure-first-run.md` was taken with that refusal deliberately bypassed and
+is not a result.
+
+**NIGHT starts its evidence clock at zero.** The cutover adds a second instrument, the gate compares
+within a token, and NIGHT has no history. Nothing about NIGHT can promote for at least a full window,
+and `MIXED_TOKENS_WARNING` in `compare.ts` exists so that a cross-token read is not made by accident.
+
+---
+
 Every step is gated by the `cutover` command, which performs nothing and refuses when the state is
 not what the next step needs. **Any FAIL stops the sequence.** Every fact it cannot read comes back as a
 FAIL, not a pass — a check that could not run is not a verdict, and here the cost of stopping to look
