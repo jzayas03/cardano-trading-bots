@@ -17,13 +17,17 @@ Alpha, beta and an interval on alpha for one paper run, against holding the toke
    input that yields `undefined`, a thrown error the caller must catch, or a silently empty field.
 3. **Finite.** Every numeric field is a finite number. `NaN` is a defect: it compares false against
    zero and would read as "cannot distinguish alpha from zero" for entirely the wrong reason.
-4. **Self-describing.** The result carries `assumedStakingAprPct`, `observations`, `rawTicks`,
-   `effectiveObservations` and `lag1Autocorrelation`, so no parameter has to be assumed by a reader.
+4. **Self-describing.** The result carries `assumedStakingAprPct`, `observations`,
+   `zeroBenchmarkPairs`, `informativePairs`, `effectiveObservations` and `lag1Autocorrelation`, so no
+   parameter has to be assumed by a reader. (`rawTicks` was a field of the collapsed design removed
+   by the R1 correction; `zeroBenchmarkPairs` is what makes the price repetition visible now.)
 5. **Pure.** No `Math.random`, no clock, no I/O. Two source-text guards already enforce this.
 
 **Pre-registered parameters**: 95% two-sided and `BOOTSTRAP_RESAMPLES` from the existing module;
 blocked resampling at its `n^(1/3)` default; cash charged at `ASSUMED_STAKING_APR_PCT`. `options`
-exists for tests to pin smaller resample counts. **The report never passes options.**
+carries `resamples` for tests to pin smaller counts, and `runFinished`, which **the report does
+pass**: whether the window is closed is a fact the caller holds and the module cannot derive without
+a clock. (Corrected 2026-09-18 — this said the report never passes options.)
 
 **Refuses rather than guessing** on all five conditions in the data model, each with its own reason.
 
@@ -48,8 +52,9 @@ consulting the source:
 - **which numbers are ADA** (alpha and its bounds) **and which are unitless** (beta), alongside the
   gate's existing **token**-denominated return, which is NOT part of this measurement and is never
   summed with it;
-- **the gap between raw ticks and collapsed observations**, which is the visible cost of the price
-  repetition measured in research R1;
+- **how many pairs saw the pool trade at all**, the visible cost of the price repetition measured in
+  R1, reported beside and ahead of `n_eff` — the two answer different questions and the 2026-09-18
+  run showed `n_eff` discounting nothing while two thirds of the pairs were blank;
 - **whether the window can distinguish alpha from zero at all** — when the interval spans zero the
   report says so instead of presenting the estimate as a finding.
 

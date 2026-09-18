@@ -54,7 +54,7 @@ export function printReport(
   // the only corpus with enough completed round trips to say anything about their DISTRIBUTION.
   for (const line of renderRoundTrips(orders)) console.log(line);
   for (const line of renderStaking(persistedEquity)) console.log(line);
-  for (const line of renderExposure(persistedEquity)) console.log(line);
+  for (const line of renderExposure(persistedEquity, run.finishedAt !== null)) console.log(line);
   if (!run.summary) { console.log('run has no summary (unfinished)'); return; }
   const s = run.summary;
   console.log(coverageLine(s.coverage));
@@ -107,18 +107,35 @@ export function printReport(
  * against the token's ADA price, while the gate's own return is in TOKENS. The two are never summed,
  * and printing them side by side unlabelled is how the earlier units error survived review.
  */
-export function renderExposure(equity: readonly EquityPoint[]): string[] {
-  const r = exposureAdjusted(equity);
+export function renderExposure(equity: readonly EquityPoint[], runFinished = true): string[] {
+  const r = exposureAdjusted(equity, { runFinished });
   if (r.kind === 'refused') return ['', `exposure vs holding the token: not measured — ${r.detail}`];
   const spansZero = r.alphaLowerBps <= 0 && r.alphaUpperBps >= 0;
+  const half = (h: typeof r.betaFirstHalf): string =>
+    h === null ? 'no slope (benchmark flat)'
+      : `${h.beta.toFixed(3)} ${h.degenerate ? '(interval degenerate)' : `[${h.lower.toFixed(3)}, ${h.upper.toFixed(3)}]`}`;
   return [
     '',
     'exposure vs holding the token (ADA-denominated; the gate\'s own return is in TOKENS and is not summed with this):',
-    `  beta ${r.beta.toFixed(3)} (unitless) over ${r.observations} tick pairs, ${r.zeroBenchmarkPairs} of which the pool did not trade`,
+    `  beta ${r.beta.toFixed(3)} (unitless) over ${r.observations} tick pairs`,
     `  alpha ${r.alphaBps.toFixed(2)} bps ADA per tick, interval [${r.alphaLowerBps.toFixed(2)}, ${r.alphaUpperBps.toFixed(2)}]`,
     spansZero
       ? '  the interval spans zero: this window CANNOT distinguish alpha from zero'
-      : '  the interval excludes zero',
+      // An exclusion drawn from an interval that moves between resampling seeds is not a finding.
+      // Run 153 excluded zero on 2026-09-18 with bounds that shifted 7.5% of their own width across
+      // seeds, and that exclusion is the sentence a reader would carry away and quote.
+      : r.alphaSeedStable
+        ? '  the interval excludes zero'
+        : '  the interval excludes zero, but it MOVES across resampling seeds — not quotable',
+    // The two evidence counts answer different questions and neither substitutes for the other.
+    // n_eff discounts DEPENDENCE; informative pairs is how much of the window was informative at all.
+    `  evidence: ${r.informativePairs} of ${r.observations} pairs saw the pool trade; the other ${r.zeroBenchmarkPairs} left the price untouched`,
+    `  evidence: effective observations ${r.effectiveObservations.toFixed(0)} of ${r.observations} at lag-1 autocorrelation ${r.lag1Autocorrelation.toFixed(3)} (discounts repetition only, NOT the untraded pairs above)`,
+    // Kept apart on purpose: a stable seed is not a stable exposure, and quoting one as the other
+    // would turn a numerical property into an unmeasured claim about the strategy.
+    `  exposure drift: beta first half ${half(r.betaFirstHalf)}, second half ${half(r.betaSecondHalf)} — ${
+      r.betaHalvesOverlap === null ? 'not comparable' : r.betaHalvesOverlap ? 'intervals OVERLAP (no drift shown)' : 'intervals DISJOINT (exposure drifted)'}`,
+    `  seed stability: alpha's interval ${r.alphaSeedStable ? 'holds' : 'MOVES'} across resampling seeds (a numerical property, not a statement about the strategy)`,
     `  ${(r.exposedFraction * 100).toFixed(0)}% of observations held a position; idle ADA charged at an assumed ${r.assumedStakingAprPct}% APR`,
   ];
 }

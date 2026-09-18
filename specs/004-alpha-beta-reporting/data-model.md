@@ -62,11 +62,14 @@ What the report prints. Carries its own provenance so a reader never has to assu
 | `alphaBps` | fitted intercept, **ADA-denominated** |
 | `alphaLowerBps` / `alphaUpperBps` | conservative bounds from the blocked pairs bootstrap |
 | `beta` | fitted slope; unitless |
-| `betaFirstHalf` / `betaSecondHalf` | split-window (R5), for FR-009 |
+| `betaFirstHalf` / `betaSecondHalf` | split-window (R5), for FR-009. Each carries `degenerate`: a fully-invested half's equity tracks the price exactly, every residual vanishes and its interval collapses to a point (run 150, relative width 9.4e-5) |
 | `observations` | return pairs used |
 | `zeroBenchmarkPairs` | how many pairs had a zero benchmark return — the visible measure of how little the pool traded |
-| `effectiveObservations` | `n_eff` per R4; **must be < `observations`** whenever `ρ > 0` (SC-004) |
-| `lag1Autocorrelation` | `ρ`, reported so the `n_eff` input is visible |
+| `effectiveObservations` | `n_eff` per R4; **must be < `observations`** whenever `ρ > 0` (SC-004). Measured 2026-09-18: on live data `ρ ≤ 0`, so this discounts nothing — see `informativePairs` |
+| `lag1Autocorrelation` | `ρ` of the regression RESIDUALS, reported so the `n_eff` input is visible |
+| `informativePairs` | pairs in which the benchmark moved. **Added 2026-09-18**: the count that actually falls (49 of 148 live), carrying the identification burden R4 had wrongly assigned to `n_eff` |
+| `betaHalvesOverlap` | whether the half intervals overlap; **null** when either half is degenerate |
+| `alphaSeedStable` | `bcaStability`: does alpha's interval hold across seeds. A numerical property, never a statement about the strategy |
 | `assumedStakingAprPct` | the cash-charge rate, shown not folded (FR-006) |
 | `exposedFraction` | fraction of the window holding a position — context for beta |
 
@@ -99,11 +102,17 @@ Not every run yields a result, and the reason is part of the output.
 ```
 no equity observations   -> not-applicable
 run still running        -> window-open
-zero price change        -> benchmark-did-not-move
 never held a position    -> no-position-taken (beta 0, definitional)
 < 2 return pairs         -> too-few-observations
+zero price change        -> benchmark-did-not-move
 otherwise                -> ExposureResult
 ```
+
+> **ORDER CORRECTED 2026-09-18.** `benchmark-did-not-move` was drafted above `too-few-observations`.
+> A single observation has no price change either, so that order reports an undefined slope where the
+> honest answer is that there is nothing to fit yet. `window-open` is driven by a fact the CALLER
+> passes (`runs.finished_at`) — the module cannot derive it from observations, and reading a clock
+> would break the purity guard.
 
 **The promotion verdict consumes none of this.** FR-012 requires its status, checks and blockers be
 unchanged for every input, enforced by test.
