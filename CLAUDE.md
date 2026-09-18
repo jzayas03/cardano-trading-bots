@@ -41,3 +41,8 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   `infra/` concluded the reboot-persistent firewall rule was unapplied; it had been live on the VPS
   for a week. Check the server before reporting a control missing, and write the result down -- the
   gap was the record, not the control (2026-09-16, #151).
+
+- **A documented fee is an unverified input.** Measure each venue's charge on chain at the size you
+  actually trade, store it per pool rather than as one flat number, and date the measurement; withdraw
+  any earlier claim it contradicts. All three documented venues were wrong against the chain, and the
+  guard that was supposed to catch it had the sign backwards (2026-09-16, #162 and #163).
