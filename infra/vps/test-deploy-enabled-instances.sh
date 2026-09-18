@@ -96,9 +96,12 @@ for u in ma-crossover rsi-mean-reversion buy-and-hold scheduled-accumulation; do
 done
 ln -s /dev/null "$W5/ctb-collector.service"
 
-start="$(grep -n '^INSTANCES_FILE=' /vps/deploy.sh | head -1 | cut -d: -f1)"
-end="$(grep -n 'enabled for boot matches paper-instances.txt' /vps/deploy.sh | head -1 | cut -d: -f1)"
-[ -n "$start" ] && [ -n "$end" ] || fail "5: could not locate the instances block in deploy.sh"
+# `|| true` so a missing anchor yields an EMPTY value the guard below can report. Without it,
+# `set -euo pipefail` kills the script on grep's no-match exit before the guard runs: the harness still
+# fails closed, but silently, with no reason printed. Found by breaking the anchor on purpose.
+start="$(grep -n '^INSTANCES_FILE=' /vps/deploy.sh | head -1 | cut -d: -f1 || true)"
+end="$(grep -n 'enabled for boot matches paper-instances.txt' /vps/deploy.sh | head -1 | cut -d: -f1 || true)"
+if [ -z "$start" ] || [ -z "$end" ]; then fail "5: could not locate the instances block in deploy.sh"; fi
 BLOCK5="$(sed -n "${start},${end}p" /vps/deploy.sh | sed "s|^WANTS_DIR=.*|WANTS_DIR=$W5|")"
 
 # Run it as its OWN bash process, the way deploy.sh runs, rather than eval'ing it here: the stubs
