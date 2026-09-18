@@ -15,6 +15,9 @@ Write back at every session end. Memory data stays in the harness dir; no secret
 - **CI's shellcheck is older than the local one.** A `}` inside `[[ =~ ]]` (any `{n}` quantifier)
   is read as a command-group close and fails only in CI (SC1046/SC1047 at a later `if`). Write shell
   regexes brace-free: `^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$`, not `([0-9]+\.){3}` (2026-09-16, #128).
+  Knowing this is not enough -- **verify with CI's version, not the local one**:
+  `docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.9.0 <files>`. Local 0.11.0 exempts
+  `[ a ] && [ b ] || cmd` from SC2015 and 0.9.0 does not; #194 failed CI on exactly that.
 - **GitHub's "Update branch" can keep both sides of a conflict** and it still looks like an ordinary
   merge commit. Before pushing to a branch that was updated from `main` in the UI, `git fetch` and
   diff the remote branch against your last verified tree; fix forward, never force-push over the
