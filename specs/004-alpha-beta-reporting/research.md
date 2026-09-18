@@ -5,7 +5,46 @@ shapes everything else, and it arrived by checking rather than assuming.**
 
 ---
 
-## R1 — 67.6% of benchmark returns are exactly zero, and they are an artefact
+## R1 — 67.6% of benchmark returns are exactly zero, and they are REAL
+
+> **CORRECTED 2026-09-17, before any code was written. The original R1 called these zeros an
+> ARTEFACT of a stale price carried forward, and built the whole design on that. It is FALSE.**
+>
+> Measured: over 6 hours, 55 of 77 consecutive snapshot pairs carried identical reserves, and in
+> **all 55 the block height ADVANCED**. The chain moved; the pool did not. Over 12 hours the pool was
+> sampled 144 times — about every 5 minutes, three times more often than the run's 900 s tick — and
+> showed 32 distinct reserve values. The collector looked, repeatedly, and there was nothing new to
+> see. **These are accurate observations of a pool nobody traded.**
+>
+> **What that invalidates.** The original argument was: stale price -> errors-in-variables -> beta
+> attenuated toward zero -> exposure leaks into the intercept -> collapse to price-change intervals
+> to fix it. **The first link is wrong, so the chain does not hold.** There is no measurement error
+> here to attenuate anything.
+>
+> **And the collapse carried a cost that was never weighed**, because it was adopted to fix a problem
+> that did not exist: collapsed intervals have VARYING DURATIONS, so the fitted intercept becomes
+> "excess return per interval" rather than per unit time. Alpha stops being a rate and stops being
+> comparable across runs that trade at different densities.
+>
+> **CORRECTED DECISION (founder, 2026-09-17): regress at the run's own tick interval. No collapse.**
+> A flat market is data. Including a genuine zero is correct rather than biased, OLS conditions on
+> the regressor in any case, durations stay equal, and the overstated sample is carried entirely by
+> the effective-observation count in R4 — which is where that burden belonged all along.
+>
+> **A fixed coarser grid** (R1's second rejected alternative) was rejected on the grounds that the
+> repetition "will change with the collector's refresh behaviour". That reason is void too: the
+> repetition is trading activity. A grid remains available as a later sensitivity check and is out of
+> scope here.
+>
+> **The lesson, recorded because it is the second time this session.** The mechanism was assumed from
+> a plausible story — first "tick/bucket interval mismatch", which was wrong, then "stale
+> carry-forward", which was also wrong. The query that settled it, comparing block height against
+> reserves, cost one command. **Measuring the symptom is not the same as knowing the cause, and a
+> design built on an unverified cause inherits its errors.**
+
+### Superseded reasoning, kept because it is what a reader would otherwise reconstruct
+
+**Original heading: "they are an artefact"**
 
 **Measured**, runs 150-153, day 1-2 of the current week:
 
@@ -56,7 +95,37 @@ every real price move and discards only the repetition.
   error's variance that this data cannot supply, and it would replace a visible problem with an
   invisible assumption.
 
-**What the plan must still confirm**: WHY the price repeats. The likely cause is the collector's
+**CONFIRMED 2026-09-17 (T004/T005), and the answer is the favourable one.** The repetition is a real
+absence of trading, NOT a collector cadence artefact.
+
+The candle's close is `reserveQuote / reserveBase` taken from the LAST snapshot in the bucket, so a
+repeated price means the pool's reserves did not move. Measured over 12 hours on the token these runs
+trade:
+
+| | |
+|---|---|
+| snapshots | 156 |
+| distinct ticks sampled | 144 (about one every 5 minutes) |
+| distinct reserve values | **32** |
+| paper run tick interval | 900 s |
+
+**The pool is sampled about three times more often than the run ticks.** Staleness therefore cannot
+be the collector failing to look — it looked, repeatedly, and the reserves were the same. Reserves
+change roughly 32 times in 12 hours, which is the pool genuinely going untraded for stretches of
+twenty minutes and more.
+
+**What this licenses the report to say**: the collapsed interval measures what the MARKET did. Had
+the answer gone the other way — a refresh rotation leaving the pool unsampled — the collapsed
+interval would have measured what the collector saw, and the report would have had to say so. It does
+not, and that is recorded here so the claim is traceable rather than assumed.
+
+**Not changed, deliberately**: collector cadence. Sampling more often would not help, because the
+limit is trading activity rather than observation, and changing it is a different feature with its
+own Blockfrost quota arithmetic.
+
+---
+
+**Superseded note — what the plan asked to confirm**: WHY the price repeats. The likely cause is the collector's
 refresh set — it prices the deepest venue every tick and others every Nth — or the candle builder
 carrying the last close forward when no fresh snapshot landed. **It matters because if the repetition
 is a collector cadence rather than a real absence of trading, the collapsed interval is measuring
@@ -101,16 +170,23 @@ already present; this feature adds an estimator, not a resampler.
 
 ## R4 — Effective observations: a stated formula, not a hand-wave
 
-**Decision**: report `n_eff = n × (1 − ρ) / (1 + ρ)`, where `n` is the number of collapsed
-observations and `ρ` their lag-1 autocorrelation, floored at 1 and capped at `n`.
+**Decision**: report `n_eff = n × (1 − ρ) / (1 + ρ)`, where `n` is the number of **tick** observations
+(R1 as corrected — there is no collapse) and `ρ` their lag-1 autocorrelation, floored at 1 and capped
+at `n`.
+
+**This now carries the entire honesty burden.** With the collapse gone, `n_eff` is the only thing
+standing between a raw count of ~700 ticks a week and a reader's impression of how much independent
+evidence exists. A series that is 67.6% zeros is strongly dependent, so `n_eff` should come out far
+below `n` — and if it does not, the formula is being applied to the wrong series.
 
 **Rationale**: it is the standard AR(1) variance-inflation adjustment, it is one line, and **its
 assumption is nameable** — that the dependence is approximately first-order. A method whose
 assumption cannot be stated is not better than this one, it is only harder to check.
 
-Note the interaction with R1: collapsing already removes the zero-inflation, so `n_eff` measures
-dependence among **real** price moves rather than the repetition. Reporting `n_eff` on the
-uncollapsed series would have double-counted the problem.
+**Superseded note**: this previously said collapsing removed the zero-inflation so `n_eff` measured
+dependence among real price moves, and that computing it on the uncollapsed series would
+double-count. With no collapse there is nothing to double-count — the zeros are real observations and
+their dependence is exactly what `n_eff` should register.
 
 **SC-004 requires `n_eff < n` whenever observations are correlated**, which this satisfies for any
 `ρ > 0`. The lag-1 autocorrelation is reported alongside, so a reader can see the input.
