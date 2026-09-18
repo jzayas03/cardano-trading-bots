@@ -392,3 +392,76 @@ describe('what the real run against 150-153 found (T040-T042)', () => {
     expect(r.betaSecondHalf).not.toBeNull();
   });
 });
+
+describe('determinism (specs/004 Polish, T046-T047)', () => {
+  /**
+   * Explicit literals, no generator. The same two arrays live in the script that produced the pinned
+   * values below, so any drift between what was pinned and what is asserted shows up as a diff
+   * rather than as a silent pass. 11 of 19 pairs leave the price untouched, close to the 67% the
+   * live runs show, so this is not a fixture the estimator finds unusually easy.
+   */
+  const PIN_PRICES = [
+    0.00200, 0.00200, 0.00203, 0.00203, 0.00203, 0.00199, 0.00199, 0.00206,
+    0.00206, 0.00206, 0.00206, 0.00201, 0.00201, 0.00209, 0.00209, 0.00204,
+    0.00204, 0.00204, 0.00211, 0.00207,
+  ];
+  const PIN_EQUITY = [
+    1000000000, 1000400000, 1014200000, 1013100000, 1015700000, 995300000, 996900000, 1031400000,
+    1029800000, 1032600000, 1030100000, 1006700000, 1005200000, 1046300000, 1043900000, 1020800000,
+    1022400000, 1019700000, 1056100000, 1035500000,
+  ];
+  const pinned = (): EquityPoint[] => obs(PIN_PRICES.map((p, i) => ({ price: p, equity: PIN_EQUITY[i]! })));
+
+  /**
+   * **Produced by a SEPARATE node process on 2026-09-18**, not by this suite, and committed. That is
+   * the whole point: a bootstrap stable only inside one process — ambient module state, a shared
+   * PRNG advanced by whatever ran first, a memoised table — passes T046 and is still not
+   * deterministic. Only a value carried in from outside catches it.
+   *
+   * Do not regenerate these to make a failure go away. A mismatch means the estimator's output
+   * moved, and what moved it is the question.
+   */
+  const PINNED = {
+    beta: 0.9981560836113038,
+    alphaBps: 0.2973046582724237,
+    alphaLowerBps: -5.274166431333545,
+    alphaUpperBps: 5.183009427806489,
+    lag1Autocorrelation: -0.646994478722051,
+    effectiveObservations: 19,
+    observations: 19,
+    zeroBenchmarkPairs: 11,
+    informativePairs: 8,
+    betaFirstHalfBeta: 0.9776446431780403,
+    betaSecondHalfBeta: 1.0050946806852155,
+  } as const;
+
+  it('T046: identical observations yield BYTE-IDENTICAL output twice in one process', () => {
+    // The whole result, not a chosen field: a determinism test that checks only the bounds would
+    // miss a drifting n_eff, a drifting half-beta, or a flipped overlap flag.
+    const json = (r: unknown): string => JSON.stringify(r, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    expect(json(exposureAdjusted(pinned()))).toBe(json(exposureAdjusted(pinned())));
+  });
+
+  it('T047: matches bounds produced by a SEPARATE process, to the last bit', () => {
+    const r = measured(pinned());
+    expect(r.beta).toBe(PINNED.beta);
+    expect(r.alphaBps).toBe(PINNED.alphaBps);
+    expect(r.alphaLowerBps).toBe(PINNED.alphaLowerBps);
+    expect(r.alphaUpperBps).toBe(PINNED.alphaUpperBps);
+    expect(r.lag1Autocorrelation).toBe(PINNED.lag1Autocorrelation);
+    expect(r.effectiveObservations).toBe(PINNED.effectiveObservations);
+    expect(r.observations).toBe(PINNED.observations);
+    expect(r.zeroBenchmarkPairs).toBe(PINNED.zeroBenchmarkPairs);
+    expect(r.informativePairs).toBe(PINNED.informativePairs);
+    expect(r.betaFirstHalf?.beta).toBe(PINNED.betaFirstHalfBeta);
+    expect(r.betaSecondHalf?.beta).toBe(PINNED.betaSecondHalfBeta);
+  });
+
+  it('the pinned interval is NOT degenerate, so it actually exercises the resampling', () => {
+    // The US1 known-answer control passes with the bootstrap entirely broken, because a holder's
+    // residuals are all zero. A pin taken on a fixture like that would inherit the same blindness.
+    const r = measured(pinned());
+    expect(r.alphaUpperBps - r.alphaLowerBps).toBeGreaterThan(1);
+    expect(r.zeroBenchmarkPairs / r.observations).toBeGreaterThan(0.5);
+  });
+});

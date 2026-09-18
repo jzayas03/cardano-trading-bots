@@ -169,12 +169,12 @@ recorded against what was predicted.
 
 ## Phase 6: Polish & Cross-Cutting Concerns
 
-- [ ] T046 [P] Write a test in `packages/reports/test/exposure.test.ts` that identical observations yield byte-identical output twice in one process
-- [ ] T047 Write a test in `packages/reports/test/exposure.test.ts` pinning bounds as **literals produced by a SEPARATE node process** and committed — a bootstrap stable only within one process is not deterministic, and this is the assertion that catches ambient state
-- [ ] T048 [P] Confirm both purity guards still pass and that `packages/reports/src/exposure.ts` added no I/O, no clock and no `node:crypto`
-- [ ] T049 **STOP AND ASK** gate over `packages/sim-executor/src/costs.ts`, `packages/reports/src/costFloor.ts` and `.specify/memory/constitution.md`: if implementation produces any reason to change a cost value, a threshold, or the 216 bps floor, STOP and raise it with the founder. Do not edit. Closed by confirming no such change was made
-- [ ] T050 Run quickstart scenario 8: `git diff origin/main -- packages/reports/src/promotion.ts packages/sim-executor/src/costs.ts packages/sim-executor/src/depth.ts packages/reports/src/costFloor.ts .specify/memory/constitution.md` and confirm it is EMPTY. Nothing that DECIDES anything changed
-- [ ] T051 Run the full gate set and repair until green: `npm run lint && npm run lint:sh && npm run test:pg`. Report failures with their output; citing `npm test` is citing the wrong suite
+- [X] T046 [P] Write a test in `packages/reports/test/exposure.test.ts` that identical observations yield byte-identical output twice in one process
+- [X] T047 Write a test in `packages/reports/test/exposure.test.ts` pinning bounds as **literals produced by a SEPARATE node process** and committed — a bootstrap stable only within one process is not deterministic, and this is the assertion that catches ambient state
+- [X] T048 [P] Confirm both purity guards still pass and that `packages/reports/src/exposure.ts` added no I/O, no clock and no `node:crypto`
+- [X] T049 **STOP AND ASK** gate over `packages/sim-executor/src/costs.ts`, `packages/reports/src/costFloor.ts` and `.specify/memory/constitution.md`: if implementation produces any reason to change a cost value, a threshold, or the 216 bps floor, STOP and raise it with the founder. Do not edit. Closed by confirming no such change was made
+- [X] T050 Run quickstart scenario 8: `git diff origin/main -- packages/reports/src/promotion.ts packages/sim-executor/src/costs.ts packages/sim-executor/src/depth.ts packages/reports/src/costFloor.ts .specify/memory/constitution.md` and confirm it is EMPTY. Nothing that DECIDES anything changed
+- [X] T051 Run the full gate set and repair until green: `npm run lint && npm run lint:sh && npm run test:pg`. Report failures with their output; citing `npm test` is citing the wrong suite
 
 ---
 
