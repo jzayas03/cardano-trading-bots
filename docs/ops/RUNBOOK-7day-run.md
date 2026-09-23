@@ -166,6 +166,14 @@ the laptop, which is the M5 candidate in `docs/specs/2026-09-07-m4-dashboard.md`
 
 ### The cutover, in order
 
+> **For the 2026-09-23 cutover, read `docs/ops/2026-09-23-cutover-preflight.md` alongside this
+> section.** It carries that day's resolved shas and run ids, the preconditions asked rather than
+> assumed, and three corrections to the order below: drill 2 must run BEFORE the maintenance window
+> (inside it the page is suppressed to `/log`), `systemctl stop` cannot produce the failure drill 2
+> is testing (`KillSignal=SIGINT` → the row is marked `finished`), and the password rotation belongs
+> where this file's own body section puts it — before the deploy, with nothing connected — not at
+> step 11.
+
 **The whole sequence, and what no gate checks.** The `cutover` command gates steps 2, 4 and 7.
 The other nine are unguarded, so it is written down: an unguarded step that lives only
 in someone's head is the one that gets skipped at 03:00. Each numbered item links to its own section
