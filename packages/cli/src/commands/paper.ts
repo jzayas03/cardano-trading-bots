@@ -7,7 +7,7 @@ import {
 import { SimExecutor } from '@ctb/sim-executor';
 import { retryWithBackoff } from '@ctb/collector/pure';
 import type { Logger } from 'pino';
-import { processFor } from '@ctb/reports';
+import { processFor, type RunningProcess } from '@ctb/reports';
 import { listProcessesWithAge, ownPids } from '../ps.js';
 import { loadConfig } from '../config.js';
 import { ensureTokens } from '../ensureTokens.js';
@@ -119,7 +119,7 @@ export function parsePaperArgs(args: string[]): PaperArgs {
  * `running` row resumes; a live one is still refused.
  */
 export type ResumeLiveness =
-  /** `ps` was read and this many wrapper processes are running this run's strategy. */
+  /** `ps` was read and this many wrapper processes are running this run's strategy on its token. */
   | { kind: 'counted'; processes: number }
   /** `ps` could not be read, or the answer would be ambiguous. Treated as "someone might be there". */
   | { kind: 'unknown' };
@@ -160,18 +160,25 @@ export function resumeStatusError(
 }
 
 /**
- * Reads `ps` and counts the processes running this strategy, excluding this invocation's own.
+ * Reads `ps` and counts the processes running this strategy ON THIS TOKEN, excluding this invocation's
+ * own. Every strategy runs on more than one token, so a strategy-only match counts the sibling
+ * instance as a writer and refuses an orphaned run's resume on every restart.
  *
  * Injectable through `RunPaperDeps.resumeLiveness` so the refusal can be tested without a process
  * table. An unreadable `ps` returns `unknown`, never an empty count: the difference decides whether
  * a fresh-heartbeat run is resumable, and reading "I could not look" as "nobody is there" is how a
  * second writer joins a live run.
  */
-export function defaultResumeLiveness(strategyId: string): ResumeLiveness {
-  const procs = listProcessesWithAge();
+export function defaultResumeLiveness(
+  strategyId: string,
+  ticker: string,
+  list: () => RunningProcess[] | null = listProcessesWithAge,
+  self: () => ReadonlySet<number> = ownPids,
+): ResumeLiveness {
+  const procs = list();
   if (procs === null) return { kind: 'unknown' };
-  const own = ownPids();
-  return { kind: 'counted', processes: processFor(strategyId, procs.filter((p) => !own.has(p.pid))).length };
+  const own = self();
+  return { kind: 'counted', processes: processFor(strategyId, procs.filter((p) => !own.has(p.pid)), ticker).length };
 }
 
 /** Seconds since the last heartbeat, or null when the run never wrote one. Used only for the
@@ -390,7 +397,7 @@ export interface RunPaperDeps {
   signal: AbortSignal;
   /** How the resume refusal learns whether a process is already running this strategy.
    * Defaults to reading `ps`; injected in tests. */
-  resumeLiveness?: (strategyId: string) => ResumeLiveness;
+  resumeLiveness?: (strategyId: string, ticker: string) => ResumeLiveness;
   /** Replaces the live feed. A test scripts candles through the same `onTick` contract instead of
    * sleeping to real interval boundaries. */
   feedFactory?: (deps: LiveFeedDeps) => AsyncIterable<Candle>;
@@ -446,7 +453,7 @@ export async function runPaper(d: RunPaperDeps): Promise<RunPaperResult> {
       const resumeCheckedAt = d.now();
       // Measured, not inferred: the heartbeat only goes stale after 2*interval + grace (31 minutes
       // at 900 s), so a run killed a minute ago is provably dead and yet unresumable without this.
-      const liveness = (d.resumeLiveness ?? defaultResumeLiveness)(strategy.id);
+      const liveness = (d.resumeLiveness ?? defaultResumeLiveness)(strategy.id, token.ticker);
       const statusError = resumeStatusError(prior, resumeCheckedAt, liveness);
       if (statusError) throw new Error(`run ${a.resume} ${statusError}`);
       // Finding C2: resuming a row still marked `running` is the recovery path for a process that

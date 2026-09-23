@@ -1,6 +1,7 @@
 import type { CandleRepo, CandleRow, SnapshotForCandle } from '@ctb/candles';
 import { describe, expect, it } from 'vitest';
-import { readPrimeHistory } from '../src/commands/paper.js';
+import type { RunningProcess } from '@ctb/reports';
+import { defaultResumeLiveness, readPrimeHistory } from '../src/commands/paper.js';
 
 const UNIT = 'testunit';
 const t = (m: number): Date => new Date(Date.UTC(2026, 8, 6, 12, m));
@@ -64,5 +65,34 @@ describe('readPrimeHistory', () => {
       tickTs: t(10), open: '1.0', high: '1.1', low: '0.9', close: '1.1', volumeQuote: null,
       poolId: 'pool1', poolType: 'cpmm', feeBps: 30, closeReserveBase: 1_000n, closeReserveQuote: 1_000n, tvlLovelace: 2_000n,
     });
+  });
+});
+
+/** The node child tsx spawns: the one process per run that `processFor` counts. */
+const paperProc = (pid: number, strategy: string, ticker: string): RunningProcess => ({ pid, elapsedSec: 100,
+  command: `/usr/bin/node --require /r/node_modules/tsx/dist/preflight.cjs --import file:///r/node_modules/tsx/dist/loader.mjs packages/cli/src/main.ts paper ${strategy} ${ticker} --max-gap-min 20` });
+
+/**
+ * The resume guard counts processes for this strategy AND token. Every strategy runs on SNEK and
+ * NIGHT (infra/vps/paper-instances.txt), so matching on strategy alone read the live NIGHT sibling
+ * as a writer of an orphaned SNEK run and refused its resume on every restart until systemd gave up.
+ */
+describe('defaultResumeLiveness', () => {
+  const none = (): ReadonlySet<number> => new Set();
+
+  it('does not count a sibling on another token as a writer of this run', () => {
+    const procs = [paperProc(1, 'ma-crossover', 'NIGHT')];
+    expect(defaultResumeLiveness('ma-crossover', 'SNEK', () => procs, none)).toEqual({ kind: 'counted', processes: 0 });
+  });
+
+  it('still counts a process on the same strategy and token', () => {
+    const procs = [paperProc(1, 'ma-crossover', 'NIGHT'), paperProc(2, 'ma-crossover', 'SNEK')];
+    expect(defaultResumeLiveness('ma-crossover', 'SNEK', () => procs, none)).toEqual({ kind: 'counted', processes: 1 });
+  });
+
+  it('excludes its own pids, and reports unknown when ps cannot be read', () => {
+    const procs = [paperProc(7, 'ma-crossover', 'SNEK')];
+    expect(defaultResumeLiveness('ma-crossover', 'SNEK', () => procs, () => new Set([7]))).toEqual({ kind: 'counted', processes: 0 });
+    expect(defaultResumeLiveness('ma-crossover', 'SNEK', () => null, none)).toEqual({ kind: 'unknown' });
   });
 });
