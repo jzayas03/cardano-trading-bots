@@ -8,14 +8,24 @@ disagree, this file is the newer measurement and says why.
 Everything below marked *verified* was run on 2026-09-23 between 17:47Z and 18:05Z. Nothing on the
 box was changed: every probe was a read.
 
+> **Updated 2026-09-25: `NEW_SHA` moved to `c5ce700`**, the last CODE change on `main` (#199), so
+> the resume fix ships with the cutover (see *Why #199 goes in this deploy*). Everything merged after
+> it is docs-only; confirm that still holds on the day, or re-resolve `NEW_SHA`:
+> `git diff --stat c5ce700 origin/main -- packages infra scripts package.json package-lock.json` must
+> print nothing. The repo-side checks below
+> were re-run against the new sha. The **box-side** rows (run ids, backup age, open window, memory,
+> checkout clean) are the 2026-09-23 read and were NOT re-read: if the cutover runs on a later day,
+> re-read each of them first. The backup row has already expired on its own terms (2026-09-24 05:30Z);
+> step 0 takes a fresh one regardless.
+
 ## Resolved values
 
 | name | value | how it was resolved |
 |---|---|---|
 | `OLD_SHA` | `44fa230fd0ae5a74d45a9d02c7d3139c7ec30269` | `git rev-parse HEAD` in the live checkout |
-| `NEW_SHA` | `6c55beb3ac2dd7b818324f563620f56c6b276a3e` | `origin/main` tip, resolved locally (founder decision 2026-09-23: deploy main tip) |
+| `NEW_SHA` | `c5ce7002c6d52925dbf03a8c7fbfa412fa1f53d9` | last code change on `main`, #199 (founder decision 2026-09-23: deploy main tip; 2026-09-25: merge #199 first). Was `6c55beb` |
 | `--runs` | `150,151,152,153` | the four rows `status='running'`, re-read today, not copied forward |
-| distance | 48 commits | `git rev-list --count 44fa230..origin/main` |
+| distance | 49 commits | `git rev-list --count 44fa230..c5ce700`, re-counted 2026-09-25 (48 + #199) |
 | week | started 2026-09-16 12:34:33Z, **7 days elapsed 2026-09-23 12:34:33Z** | `runs.created_at` |
 
 The four runs are still writing past the seven-day mark (last tick 17:45Z, heartbeats 1 min old).
@@ -27,14 +37,26 @@ at a stated boundary, or each run's window is "however long the cutover took" an
 | check | result | evidence |
 |---|---|---|
 | gate on the box | **YES** | `git merge-base --is-ancestor dfc1d50 HEAD` → `GATE IS ON THE BOX`. The whole `$GATE` sidecar in the runbook does not apply tonight — use the plain `npm run cutover` form |
-| cutover tool identical at both shas | **YES** | `git diff 44fa230 origin/main -- packages/cli/src/commands/cutover.ts packages/reports/src/cutover.ts` is empty. Steps 2, 4 and 7 run as written; `--phase`, `--expect-sha` and `--runs` all parse at `44fa230` (`cutover.ts:56-62`) |
+| cutover tool identical at both shas | **YES** | `git diff 44fa230 c5ce700 -- packages/cli/src/commands/cutover.ts packages/reports/src/cutover.ts` is empty (re-run 2026-09-25). Steps 2, 4 and 7 run as written; `--phase`, `--expect-sha` and `--runs` all parse at `44fa230` (`cutover.ts:56-62`) |
 | live checkout clean | **YES** | `git status --porcelain` empty |
 | backup fresh | **YES, with 11 h of margin** | newest dump `2026-09-23T03:30:04Z`, 14.3 h old at 17:47Z; `MAX_BACKUP_AGE_HOURS=26` expires it 2026-09-24 05:30Z. Step 0 still takes a manual one |
 | no maintenance window open | **YES** | `npm run maintenance -- status` → `no maintenance window`. Load-bearing for drill 2, below |
 | the rename rehearsal (step 6a) | **PASS, all five steps** | `infra/vps/test-deploy-enabled-instances.sh` run locally today, exit 0. Step 5 is the real transition in script order: four old names disabled, the file's eight enabled, no survivor |
-| migrations to apply | **none** | `0001`–`0009` byte-identical across the 48 commits |
-| new required env keys | **none** | no `.env.example` additions across the 48 commits |
+| migrations to apply | **none** | `0001`–`0009` byte-identical across the 49 commits |
+| new required env keys | **none** | no `.env.example` additions across the 49 commits (#199 touches only `paper.ts` and its test) |
 | memory headroom | 804 MB available with the four old runs up | `free -m` |
+
+## Why #199 goes in this deploy
+
+Before #199, `defaultResumeLiveness` counted live paper processes by **strategy only**. The eight new
+instances (`infra/vps/paper-instances.txt`) run every strategy on both SNEK and NIGHT, so an instance
+that dies without recording a stop (SIGKILL, OOM) would count its live sibling on the other token,
+refuse `--resume` as "already running", and after `StartLimitBurst=5` stay `failed` until someone
+steps in. At `6c55beb` the new week would have been one OOM away from that. #199 passes the ticker.
+
+It does **not** change drill 2 (step 3). The drill runs on the OLD sha, where `44fa230` still carries
+the strategy-only count, but the four old instances are one per strategy, all SNEK, so there is no
+sibling to miscount and the recovery half resumes run 153 as written.
 
 ## Defect 1 — drill 2, as written, cannot fire
 
@@ -43,7 +65,7 @@ That command cannot produce the failure it is meant to prove.
 
 - `ctb-paper@.service` sets **`KillSignal=SIGINT`**, deliberately, so that `systemctl stop` runs the
   clean path.
-- `paper.ts:359-360` handles it and the signal path "always records `status: 'finished'`".
+- `paper.ts:366-367` (at `c5ce700`; `359-360` at `6c55beb`) handles it and the signal path "always records `status: 'finished'`".
 - `checkPaperRuns` (`watch.ts:109`) filters to `status === 'running'` first, and with none returns
   **`ok: no run is marked running`**.
 
@@ -133,12 +155,12 @@ Values filled in; `<ip>` per repo convention. Any FAIL stops the sequence.
         (non-zero is the pass; record it in RUNBOOK-postgres-exposure.md — this is the only
         free chance to prove the firewall replays from after.rules)
  9. [ ] Deploy pinned, starting nothing:
-        ssh root@<ip> 'bash -s' -- --sha 6c55beb3ac2dd7b818324f563620f56c6b276a3e --no-start \
+        ssh root@<ip> 'bash -s' -- --sha c5ce7002c6d52925dbf03a8c7fbfa412fa1f53d9 --no-start \
           < infra/vps/deploy.sh
         READ the list of instances it disables — the four old names must appear
 10. [ ] Multi-venue sampling into .env (EVERY_N_TICKS=4, MIN_DEPTH_ADA=50000), start collector,
         wait one tick
-11. [ ] npm run cutover -- --phase after-deploy --expect-sha 6c55beb3ac2dd7b818324f563620f56c6b276a3e
+11. [ ] npm run cutover -- --phase after-deploy --expect-sha c5ce7002c6d52925dbf03a8c7fbfa412fa1f53d9
 12. [ ] Start the eight ONE AT A TIME with CTB_PAPER_FORCE_NEW=1, scheduled-accumulation first,
         reading `available` between each; STOP if it drops under 250 MB
 13. [ ] Eight running rows, four SNEK and four NIGHT, each strategy once per token
