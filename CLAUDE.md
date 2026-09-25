@@ -46,3 +46,11 @@ Write back at every session end. Memory data stays in the harness dir; no secret
   actually trade, store it per pool rather than as one flat number, and date the measurement; withdraw
   any earlier claim it contradicts. All three documented venues were wrong against the chain, and the
   guard that was supposed to catch it had the sign backwards (2026-09-16, #162 and #163).
+
+- **A drill whose command cannot produce the failure state is not a drill.** `ctb-paper@.service` sets
+  `KillSignal=SIGINT`, so `systemctl stop` takes the clean path and records `status='finished'`, and
+  `checkPaperRuns` filters to `running` before it looks at anything else -- so drill 2, written as
+  `systemctl stop`, would have read `ok: no run is marked running` and been recorded as a pass after
+  being deferred for a week. Check the kill path against the shutdown handler, create the state the
+  check actually reads and CONFIRM it before timing the alert, and remember the suppression twin: a
+  drill inside a maintenance window proves nothing either (2026-09-23, #197).
